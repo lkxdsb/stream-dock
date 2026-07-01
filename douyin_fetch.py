@@ -157,8 +157,9 @@ def choose_media_capture(
 
 
 def validate_output_request(*, media_kind: str, output_type: str) -> None:
-    if output_type == "mp4" and media_kind != "video":
-        raise ValueError("Only audio stream found; cannot export a real mp4 video")
+    spec = get_output_format_spec(output_type)
+    if spec.kind == 'video' and media_kind != 'video':
+        raise ValueError(f'Only audio stream found; cannot export a real {output_type} video')
 
 
 def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int = 10_000) -> dict[str, Any]:
@@ -299,6 +300,23 @@ def merge_streams_to_mp4(video_file: Path, audio_file: Path, final_path: Path) -
     return final_path
 
 
+def mux_streams(video_file: Path, audio_file: Path | None, final_path: Path) -> Path:
+    if audio_file is None:
+        shutil.copyfile(video_file, final_path)
+        return final_path
+    run_ffmpeg(
+        [
+            'ffmpeg', '-y',
+            '-i', str(video_file),
+            '-i', str(audio_file),
+            '-c:v', 'copy',
+            '-c:a', 'copy',
+            str(final_path),
+        ]
+    )
+    return final_path
+
+
 def transcode_audio(source_path: Path, final_path: Path, output_type: str) -> Path:
     command_map = {
         'mp3': ['ffmpeg', '-y', '-i', str(source_path), '-vn', '-acodec', 'libmp3lame', '-q:a', '2', str(final_path)],
@@ -332,7 +350,35 @@ def export_media(
     final_path = output_dir / f'{base_name}.{spec.extension}'
     if spec.kind == 'audio':
         return export_audio(source_video, source_audio, final_path, output_type)
-    raise ValueError(f'Video export not implemented yet for: {output_type}')
+    return export_video(source_video, source_audio, final_path, output_type)
+
+
+def transcode_to_webm(video_file: Path, audio_file: Path | None, final_path: Path) -> Path:
+    command = ['ffmpeg', '-y', '-i', str(video_file)]
+    if audio_file is not None:
+        command.extend(['-i', str(audio_file)])
+    command.extend(
+        [
+            '-c:v', 'libvpx-vp9',
+            '-b:v', '0',
+            '-crf', '32',
+            '-c:a', 'libopus',
+            '-b:a', '160k',
+            str(final_path),
+        ]
+    )
+    run_ffmpeg(command)
+    return final_path
+
+
+def export_video(source_video: Path | None, source_audio: Path | None, final_path: Path, output_type: str) -> Path:
+    if source_video is None:
+        raise ValueError(f'No video stream available for {output_type} export')
+    if output_type in {'mp4', 'mkv', 'mov'}:
+        return mux_streams(source_video, source_audio, final_path)
+    if output_type == 'webm':
+        return transcode_to_webm(source_video, source_audio, final_path)
+    raise ValueError(f'Unsupported video output type: {output_type}')
 
 
 def materialize_output(

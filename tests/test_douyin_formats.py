@@ -89,5 +89,60 @@ class AudioExportTests(unittest.TestCase):
             self.assertEqual(final_path.suffix, '.opus')
 
 
+class VideoExportTests(unittest.TestCase):
+    def _make_av_fixture(self, temp_path: Path) -> tuple[Path, Path]:
+        video_file = temp_path / 'video.mp4'
+        audio_file = temp_path / 'audio.m4a'
+        subprocess.run(
+            ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=black:s=320x240:d=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(video_file)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'sine=frequency=1000:duration=1', '-c:a', 'aac', str(audio_file)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return video_file, audio_file
+
+    def test_mkv_export_contains_audio_and_video(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            video_file, audio_file = self._make_av_fixture(temp_path)
+            output_dir = temp_path / 'out'
+            output_dir.mkdir()
+            final_path = export_media(
+                source_video=video_file,
+                source_audio=audio_file,
+                output_dir=output_dir,
+                base_name='demo',
+                output_type='mkv',
+            )
+            probe = subprocess.run(
+                ['ffprobe', '-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', str(final_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual({line.strip() for line in probe.stdout.splitlines() if line.strip()}, {'video', 'audio'})
+
+    def test_webm_export_contains_audio_and_video(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            video_file, audio_file = self._make_av_fixture(temp_path)
+            output_dir = temp_path / 'out'
+            output_dir.mkdir()
+            final_path = export_media(
+                source_video=video_file,
+                source_audio=audio_file,
+                output_dir=output_dir,
+                base_name='demo',
+                output_type='webm',
+            )
+            self.assertEqual(final_path.suffix, '.webm')
+
+
 if __name__ == '__main__':
     unittest.main()
