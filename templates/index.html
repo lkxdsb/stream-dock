@@ -4,9 +4,83 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ title }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}" />
   </head>
   <body>
-    <h1>{{ title }}</h1>
-    <p>页面骨架已就绪。</p>
+    <main class="app-shell">
+      <section class="panel panel-hero">
+        <p class="eyebrow">Local Utility</p>
+        <h1>{{ title }}</h1>
+        <p class="hero-copy">
+          把抖音分享文案或短链接贴进来，填好输出目录，选择输出格式后直接开始解析。
+        </p>
+      </section>
+
+      <section class="panel panel-form">
+        <form id="fetchForm">
+          <div class="field">
+            <label for="link">抖音链接 / 分享文案</label>
+            <textarea
+              id="link"
+              name="link"
+              rows="5"
+              placeholder="把完整分享文案或 https://v.douyin.com/... 链接贴到这里"
+              required
+            ></textarea>
+          </div>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="outputPath">输出目录</label>
+              <input
+                id="outputPath"
+                name="outputPath"
+                type="text"
+                placeholder="/Users/你的名字/Documents/output"
+                required
+              />
+            </div>
+
+            <div class="field">
+              <label for="outputType">输出类型</label>
+              <select id="outputType" name="outputType">
+                <option value="m4a">m4a</option>
+                <option value="mp3">mp3</option>
+                <option value="mp4">mp4</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button id="submitButton" type="submit">开始解析</button>
+            <span class="hint">先建议用一个短链接样例验证输出路径是否正确。</span>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel panel-status">
+        <div class="status-header">
+          <h2>执行状态</h2>
+          <span id="statusBadge" class="status-badge">待执行</span>
+        </div>
+        <p id="statusText" class="status-text">提交任务后，这里会显示执行结果。</p>
+        <div id="resultBox" class="result-box" hidden>
+          <div class="result-row">
+            <span class="result-label">输出文件</span>
+            <code id="resultPath">-</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel panel-log">
+        <div class="status-header">
+          <h2>运行日志</h2>
+          <button id="clearLogButton" type="button" class="ghost-button">清空</button>
+        </div>
+        <pre id="logOutput" class="log-output">等待执行...</pre>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', path='/app.js') }}"></script>
   </body>
 </html>

@@ -28,12 +28,22 @@ class FetchRequest(BaseModel):
     outputType: str = Field(pattern=r'^(m4a|mp3|mp4)$')
 
 
+def extract_output_file(stdout: str) -> str | None:
+    for line in stdout.splitlines():
+        match = OUTPUT_FILE_PATTERN.search(line)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
 @app.get('/', response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse(
-        request=request,
-        name='index.html',
-        context={'title': 'Douyin Local Fetch UI'},
+        'index.html',
+        {
+            'request': request,
+            'title': '抖音本地解析工具',
+        },
     )
 
 
@@ -54,17 +64,14 @@ def fetch(payload: FetchRequest):
     )
     stdout = completed.stdout.strip()
     stderr = completed.stderr.strip()
-    output_file = None
-    for line in stdout.splitlines():
-        match = OUTPUT_FILE_PATTERN.search(line)
-        if match:
-            output_file = match.group(1).strip()
+    output_file = extract_output_file(stdout)
 
     success = completed.returncode == 0
     body = {
         'success': success,
         'stdout': stdout,
         'stderr': stderr,
+        'returncode': completed.returncode,
         'outputPath': output_file,
     }
     if not success:
