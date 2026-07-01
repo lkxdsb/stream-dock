@@ -44,9 +44,21 @@
             <div class="field">
               <label for="outputType">输出类型</label>
               <select id="outputType" name="outputType">
-                <option value="m4a">m4a</option>
-                <option value="mp3">mp3</option>
-                <option value="mp4">mp4</option>
+                <optgroup label="音频">
+                  <option value="m4a">m4a</option>
+                  <option value="mp3">mp3</option>
+                  <option value="wav">wav</option>
+                  <option value="flac">flac</option>
+                  <option value="aac">aac</option>
+                  <option value="ogg">ogg</option>
+                  <option value="opus">opus</option>
+                </optgroup>
+                <optgroup label="视频">
+                  <option value="mp4">mp4</option>
+                  <option value="mkv">mkv</option>
+                  <option value="mov">mov</option>
+                  <option value="webm">webm</option>
+                </optgroup>
               </select>
             </div>
           </div>

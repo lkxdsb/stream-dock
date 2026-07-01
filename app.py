@@ -25,7 +25,7 @@ app.mount('/static', StaticFiles(directory=str(STATIC_DIR)), name='static')
 class FetchRequest(BaseModel):
     link: str = Field(min_length=1)
     outputPath: str = Field(min_length=1)
-    outputType: str = Field(pattern=r'^(m4a|mp3|mp4)$')
+    outputType: str = Field(pattern=r'^(m4a|mp3|mp4|wav|flac|aac|ogg|opus|mkv|mov|webm)$')
 
 
 def extract_output_file(stdout: str) -> str | None:

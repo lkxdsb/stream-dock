@@ -5,7 +5,7 @@ from pathlib import Path
 
 import httpx
 
-from app import app
+from app import FetchRequest, app
 from douyin_fetch import choose_media_capture, merge_streams_to_mp4, validate_output_request
 
 
@@ -90,6 +90,23 @@ class MediaSelectionTests(unittest.TestCase):
             )
             codecs = {line.strip() for line in probe.stdout.splitlines() if line.strip()}
             self.assertEqual(codecs, {'video', 'audio'})
+
+
+class OutputTypeValidationTests(unittest.TestCase):
+    def test_fetch_request_accepts_new_formats(self):
+        for output_type in ['wav', 'flac', 'aac', 'ogg', 'opus', 'mkv', 'mov', 'webm']:
+            payload = FetchRequest(link='https://v.douyin.com/demo/', outputPath='/tmp/demo', outputType=output_type)
+            self.assertEqual(payload.outputType, output_type)
+
+
+class HomePageOptionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_home_page_lists_new_output_options(self):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            response = await client.get('/')
+        text = response.text
+        for marker in ['value="wav"', 'value="flac"', 'value="aac"', 'value="ogg"', 'value="opus"', 'value="mkv"', 'value="mov"', 'value="webm"']:
+            self.assertIn(marker, text)
 
 
 if __name__ == '__main__':
