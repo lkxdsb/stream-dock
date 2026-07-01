@@ -1,7 +1,11 @@
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 from douyin_fetch import (
     OUTPUT_FORMATS,
+    export_media,
     get_output_format_spec,
     is_audio_output,
     is_video_output,
@@ -28,6 +32,61 @@ class OutputFormatRegistryTests(unittest.TestCase):
         self.assertEqual(spec.mode, 'transcode')
         self.assertTrue(spec.needs_video_stream)
         self.assertTrue(spec.needs_audio_stream)
+
+
+class AudioExportTests(unittest.TestCase):
+    def _make_audio_fixture(self, temp_path: Path) -> Path:
+        audio_file = temp_path / 'audio.m4a'
+        subprocess.run(
+            [
+                'ffmpeg', '-y',
+                '-f', 'lavfi',
+                '-i', 'sine=frequency=1000:duration=1',
+                '-c:a', 'aac',
+                str(audio_file),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return audio_file
+
+    def test_wav_export_creates_audio_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            audio_file = self._make_audio_fixture(temp_path)
+            output_dir = temp_path / 'out'
+            output_dir.mkdir()
+            final_path = export_media(
+                source_video=None,
+                source_audio=audio_file,
+                output_dir=output_dir,
+                base_name='demo',
+                output_type='wav',
+            )
+            self.assertEqual(final_path.suffix, '.wav')
+            probe = subprocess.run(
+                ['ffprobe', '-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', str(final_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(probe.stdout.strip(), 'audio')
+
+    def test_opus_export_creates_audio_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            audio_file = self._make_audio_fixture(temp_path)
+            output_dir = temp_path / 'out'
+            output_dir.mkdir()
+            final_path = export_media(
+                source_video=None,
+                source_audio=audio_file,
+                output_dir=output_dir,
+                base_name='demo',
+                output_type='opus',
+            )
+            self.assertEqual(final_path.suffix, '.opus')
 
 
 if __name__ == '__main__':

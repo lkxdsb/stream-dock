@@ -277,6 +277,14 @@ def run_ffmpeg(args: list[str]) -> None:
     )
 
 
+def resolve_audio_source(source_video: Path | None, source_audio: Path | None) -> Path:
+    if source_audio is not None:
+        return source_audio
+    if source_video is not None:
+        return source_video
+    raise ValueError('No source available for audio export')
+
+
 def merge_streams_to_mp4(video_file: Path, audio_file: Path, final_path: Path) -> Path:
     run_ffmpeg(
         [
@@ -289,6 +297,42 @@ def merge_streams_to_mp4(video_file: Path, audio_file: Path, final_path: Path) -
         ]
     )
     return final_path
+
+
+def transcode_audio(source_path: Path, final_path: Path, output_type: str) -> Path:
+    command_map = {
+        'mp3': ['ffmpeg', '-y', '-i', str(source_path), '-vn', '-acodec', 'libmp3lame', '-q:a', '2', str(final_path)],
+        'wav': ['ffmpeg', '-y', '-i', str(source_path), '-vn', '-acodec', 'pcm_s16le', str(final_path)],
+        'flac': ['ffmpeg', '-y', '-i', str(source_path), '-vn', '-acodec', 'flac', str(final_path)],
+        'aac': ['ffmpeg', '-y', '-i', str(source_path), '-vn', '-c:a', 'aac', '-b:a', '192k', str(final_path)],
+        'ogg': ['ffmpeg', '-y', '-i', str(source_path), '-vn', '-c:a', 'libvorbis', '-q:a', '5', str(final_path)],
+        'opus': ['ffmpeg', '-y', '-i', str(source_path), '-vn', '-c:a', 'libopus', '-b:a', '160k', str(final_path)],
+    }
+    run_ffmpeg(command_map[output_type])
+    return final_path
+
+
+def export_audio(source_video: Path | None, source_audio: Path | None, final_path: Path, output_type: str) -> Path:
+    audio_source = resolve_audio_source(source_video, source_audio)
+    if output_type == 'm4a':
+        run_ffmpeg(['ffmpeg', '-y', '-i', str(audio_source), '-vn', '-c:a', 'copy', str(final_path)])
+        return final_path
+    return transcode_audio(audio_source, final_path, output_type)
+
+
+def export_media(
+    *,
+    source_video: Path | None,
+    source_audio: Path | None,
+    output_dir: Path,
+    base_name: str,
+    output_type: str,
+) -> Path:
+    spec = get_output_format_spec(output_type)
+    final_path = output_dir / f'{base_name}.{spec.extension}'
+    if spec.kind == 'audio':
+        return export_audio(source_video, source_audio, final_path, output_type)
+    raise ValueError(f'Video export not implemented yet for: {output_type}')
 
 
 def materialize_output(
