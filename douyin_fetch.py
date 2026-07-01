@@ -22,6 +22,10 @@ USER_AGENT = (
 )
 
 
+def log(message: str) -> None:
+    print(f"[douyin-fetch] {message}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Extract Douyin media from a link using no-login-first strategy."
@@ -174,7 +178,12 @@ def download_media(url: str, destination: Path) -> Path:
 
 
 def run_ffmpeg(args: list[str]) -> None:
-    subprocess.run(args, check=True)
+    subprocess.run(
+        args,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def materialize_output(source_file: Path, output_dir: Path, base_name: str, output_type: str) -> Path:
@@ -197,6 +206,7 @@ def main() -> int:
 
     normalized_link = extract_first_url(args.link)
     output_dir = ensure_output_dir(args.outputPath)
+    log(f"normalized link: {normalized_link}")
 
     try:
         capture = capture_media_no_login(normalized_link)
@@ -207,7 +217,8 @@ def main() -> int:
             strategy = "chrome-cookies"
         except Exception as cookie_error:
             raise RuntimeError(
-                f"Capture failed. no-login={no_login_error}; chrome-cookies={cookie_error}"
+                "Capture failed in both strategies: "
+                f"no-login=({no_login_error}); chrome-cookies=({cookie_error})"
             )
 
     base_name = sanitize_filename(capture["title"].replace(" - 抖音", "").strip())
@@ -217,9 +228,10 @@ def main() -> int:
         download_media(capture["media_url"], temp_source)
         final_path = materialize_output(temp_source, output_dir, base_name, args.outputType)
 
-    print(f"strategy={strategy}")
-    print(f"media_kind={capture['media_kind']}")
-    print(f"saved={final_path}")
+    log(f"capture strategy: {strategy}")
+    log(f"captured media kind: {capture['media_kind']}")
+    log(f"final page: {capture['final_url']}")
+    log(f"output file: {final_path}")
     return 0
 
 
