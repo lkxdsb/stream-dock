@@ -3,15 +3,23 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
 import browser_cookie3
+import requests
 from playwright.sync_api import BrowserContext, sync_playwright
 
 SUPPORTED_OUTPUT_TYPES = {"m4a", "mp3", "mp4"}
 URL_PATTERN = re.compile(r"https?://[^\s]+")
 INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -103,6 +111,7 @@ def capture_media_no_login(link: str, wait_ms: int = 10_000) -> dict[str, Any]:
         context = browser.new_context(
             viewport={"width": 1440, "height": 900},
             locale="zh-CN",
+            user_agent=USER_AGENT,
         )
         try:
             return _capture_media_from_context(context, link, wait_ms=wait_ms)
@@ -144,6 +153,7 @@ def capture_media_with_chrome_cookies(link: str, wait_ms: int = 10_000) -> dict[
         context = browser.new_context(
             viewport={"width": 1440, "height": 900},
             locale="zh-CN",
+            user_agent=USER_AGENT,
         )
         context.add_cookies(cookies)
         try:
@@ -152,12 +162,64 @@ def capture_media_with_chrome_cookies(link: str, wait_ms: int = 10_000) -> dict[
             browser.close()
 
 
+def download_media(url: str, destination: Path) -> Path:
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Referer": "https://www.douyin.com/",
+    }
+    response = requests.get(url, headers=headers, timeout=60)
+    response.raise_for_status()
+    destination.write_bytes(response.content)
+    return destination
+
+
+def run_ffmpeg(args: list[str]) -> None:
+    subprocess.run(args, check=True)
+
+
+def materialize_output(source_file: Path, output_dir: Path, base_name: str, output_type: str) -> Path:
+    final_path = output_dir / f"{base_name}.{output_type}"
+    if output_type == "mp4":
+        shutil.copyfile(source_file, final_path)
+        return final_path
+    if output_type == "m4a":
+        run_ffmpeg(["ffmpeg", "-y", "-i", str(source_file), "-vn", "-c:a", "copy", str(final_path)])
+        return final_path
+    if output_type == "mp3":
+        run_ffmpeg(["ffmpeg", "-y", "-i", str(source_file), "-vn", "-acodec", "libmp3lame", "-q:a", "2", str(final_path)])
+        return final_path
+    raise ValueError(f"Unsupported output type: {output_type}")
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    extract_first_url(args.link)
-    ensure_output_dir(args.outputPath)
-    sanitize_filename("placeholder")
+
+    normalized_link = extract_first_url(args.link)
+    output_dir = ensure_output_dir(args.outputPath)
+
+    try:
+        capture = capture_media_no_login(normalized_link)
+        strategy = "no-login"
+    except Exception as no_login_error:
+        try:
+            capture = capture_media_with_chrome_cookies(normalized_link)
+            strategy = "chrome-cookies"
+        except Exception as cookie_error:
+            raise RuntimeError(
+                f"Capture failed. no-login={no_login_error}; chrome-cookies={cookie_error}"
+            )
+
+    base_name = sanitize_filename(capture["title"].replace(" - 抖音", "").strip())
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_source = Path(temp_dir) / "source.mp4"
+        download_media(capture["media_url"], temp_source)
+        final_path = materialize_output(temp_source, output_dir, base_name, args.outputType)
+
+    print(f"strategy={strategy}")
+    print(f"media_kind={capture['media_kind']}")
+    print(f"saved={final_path}")
     return 0
 
 
