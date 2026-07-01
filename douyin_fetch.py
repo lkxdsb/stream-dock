@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,6 @@ import browser_cookie3
 import requests
 from playwright.sync_api import BrowserContext, sync_playwright
 
-SUPPORTED_OUTPUT_TYPES = {"m4a", "mp3", "mp4"}
 URL_PATTERN = re.compile(r"https?://[^\s]+")
 INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
 USER_AGENT = (
@@ -22,8 +22,48 @@ USER_AGENT = (
 )
 
 
+@dataclass(frozen=True)
+class OutputFormatSpec:
+    extension: str
+    kind: str
+    mode: str
+    needs_video_stream: bool
+    needs_audio_stream: bool
+
+
+OUTPUT_FORMATS: dict[str, OutputFormatSpec] = {
+    'm4a': OutputFormatSpec('m4a', 'audio', 'extract', False, True),
+    'mp3': OutputFormatSpec('mp3', 'audio', 'transcode', False, True),
+    'mp4': OutputFormatSpec('mp4', 'video', 'mux', True, False),
+    'wav': OutputFormatSpec('wav', 'audio', 'transcode', False, True),
+    'flac': OutputFormatSpec('flac', 'audio', 'transcode', False, True),
+    'aac': OutputFormatSpec('aac', 'audio', 'transcode', False, True),
+    'ogg': OutputFormatSpec('ogg', 'audio', 'transcode', False, True),
+    'opus': OutputFormatSpec('opus', 'audio', 'transcode', False, True),
+    'mkv': OutputFormatSpec('mkv', 'video', 'mux', True, False),
+    'mov': OutputFormatSpec('mov', 'video', 'mux', True, False),
+    'webm': OutputFormatSpec('webm', 'video', 'transcode', True, True),
+}
+SUPPORTED_OUTPUT_TYPES = set(OUTPUT_FORMATS)
+
+
 def log(message: str) -> None:
     print(f"[douyin-fetch] {message}")
+
+
+def get_output_format_spec(output_type: str) -> OutputFormatSpec:
+    try:
+        return OUTPUT_FORMATS[output_type]
+    except KeyError as exc:
+        raise ValueError(f'Unsupported output type: {output_type}') from exc
+
+
+def is_audio_output(output_type: str) -> bool:
+    return get_output_format_spec(output_type).kind == 'audio'
+
+
+def is_video_output(output_type: str) -> bool:
+    return get_output_format_spec(output_type).kind == 'video'
 
 
 def build_parser() -> argparse.ArgumentParser:
