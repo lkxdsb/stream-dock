@@ -62,17 +62,78 @@ def sanitize_filename(name: str, max_length: int = 120) -> str:
     return cleaned[:max_length].strip()
 
 
+def classify_media_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    normalized = url.strip()
+    if not normalized or normalized.startswith("blob:"):
+        return None
+    lowered = normalized.lower()
+    if "media-audio-und-mp4a" in lowered:
+        return "audio"
+    if "media-video-" in lowered:
+        return "video"
+    if lowered.endswith(".mp4"):
+        return "video"
+    return None
+
+
+def choose_media_capture(
+    *,
+    candidate_video_url: str | None,
+    candidate_audio_url: str | None,
+    dom_video_sources: list[str],
+    final_url: str,
+    title: str,
+) -> dict[str, Any]:
+    video_url = candidate_video_url
+    audio_url = candidate_audio_url
+
+    if video_url is None:
+        for src in dom_video_sources:
+            if classify_media_url(src) == "video":
+                video_url = src
+                break
+
+    if video_url:
+        return {
+            "final_url": final_url,
+            "title": title,
+            "media_url": video_url,
+            "media_kind": "video",
+            "video_url": video_url,
+            "audio_url": audio_url,
+        }
+    if audio_url:
+        return {
+            "final_url": final_url,
+            "title": title,
+            "media_url": audio_url,
+            "media_kind": "audio",
+            "video_url": None,
+            "audio_url": audio_url,
+        }
+    raise RuntimeError("No media URL captured")
+
+
+def validate_output_request(*, media_kind: str, output_type: str) -> None:
+    if output_type == "mp4" and media_kind != "video":
+        raise ValueError("Only audio stream found; cannot export a real mp4 video")
+
+
 def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int = 10_000) -> dict[str, Any]:
-    media_url: str | None = None
-    media_kind: str | None = None
+    candidate_video_url: str | None = None
+    candidate_audio_url: str | None = None
     page = context.new_page()
 
     def on_request(req: Any) -> None:
-        nonlocal media_url, media_kind
+        nonlocal candidate_video_url, candidate_audio_url
         url = req.url
-        if media_url is None and "media-audio-und-mp4a" in url:
-            media_url = url
-            media_kind = "audio"
+        media_kind = classify_media_url(url)
+        if media_kind == "video":
+            candidate_video_url = url
+        elif media_kind == "audio":
+            candidate_audio_url = url
 
     page.on("request", on_request)
     page.goto(link, wait_until="domcontentloaded", timeout=120_000)
@@ -89,24 +150,14 @@ def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int
     )
     final_url = page.url
     title = page.title()
-
-    if media_url is None:
-        for item in video_sources:
-            src = item.get("src")
-            if src:
-                media_url = src
-                media_kind = "video"
-                break
-
-    if media_url is None or media_kind is None:
-        raise RuntimeError("No media URL captured")
-
-    return {
-        "final_url": final_url,
-        "title": title,
-        "media_url": media_url,
-        "media_kind": media_kind,
-    }
+    dom_video_sources = [item.get("src") for item in video_sources if item.get("src")]
+    return choose_media_capture(
+        candidate_video_url=candidate_video_url,
+        candidate_audio_url=candidate_audio_url,
+        dom_video_sources=dom_video_sources,
+        final_url=final_url,
+        title=title,
+    )
 
 
 def capture_media_no_login(link: str, wait_ms: int = 10_000) -> dict[str, Any]:
@@ -186,16 +237,39 @@ def run_ffmpeg(args: list[str]) -> None:
     )
 
 
-def materialize_output(source_file: Path, output_dir: Path, base_name: str, output_type: str) -> Path:
+def merge_streams_to_mp4(video_file: Path, audio_file: Path, final_path: Path) -> Path:
+    run_ffmpeg(
+        [
+            "ffmpeg", "-y",
+            "-i", str(video_file),
+            "-i", str(audio_file),
+            "-c:v", "copy",
+            "-c:a", "copy",
+            str(final_path),
+        ]
+    )
+    return final_path
+
+
+def materialize_output(
+    source_file: Path,
+    output_dir: Path,
+    base_name: str,
+    output_type: str,
+    *,
+    audio_file: Path | None = None,
+) -> Path:
     final_path = output_dir / f"{base_name}.{output_type}"
     if output_type == "mp4":
+        if audio_file is not None:
+            return merge_streams_to_mp4(source_file, audio_file, final_path)
         shutil.copyfile(source_file, final_path)
         return final_path
     if output_type == "m4a":
-        run_ffmpeg(["ffmpeg", "-y", "-i", str(source_file), "-vn", "-c:a", "copy", str(final_path)])
+        run_ffmpeg(["ffmpeg", "-y", "-i", str(audio_file or source_file), "-vn", "-c:a", "copy", str(final_path)])
         return final_path
     if output_type == "mp3":
-        run_ffmpeg(["ffmpeg", "-y", "-i", str(source_file), "-vn", "-acodec", "libmp3lame", "-q:a", "2", str(final_path)])
+        run_ffmpeg(["ffmpeg", "-y", "-i", str(audio_file or source_file), "-vn", "-acodec", "libmp3lame", "-q:a", "2", str(final_path)])
         return final_path
     raise ValueError(f"Unsupported output type: {output_type}")
 
@@ -222,11 +296,22 @@ def main() -> int:
             )
 
     base_name = sanitize_filename(capture["title"].replace(" - 抖音", "").strip())
+    validate_output_request(media_kind=capture["media_kind"], output_type=args.outputType)
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_source = Path(temp_dir) / "source.mp4"
+        temp_audio: Path | None = None
         download_media(capture["media_url"], temp_source)
-        final_path = materialize_output(temp_source, output_dir, base_name, args.outputType)
+        if capture.get("audio_url") and capture.get("audio_url") != capture["media_url"]:
+            temp_audio = Path(temp_dir) / "audio.m4a"
+            download_media(capture["audio_url"], temp_audio)
+        final_path = materialize_output(
+            temp_source,
+            output_dir,
+            base_name,
+            args.outputType,
+            audio_file=temp_audio,
+        )
 
     log(f"capture strategy: {strategy}")
     log(f"captured media kind: {capture['media_kind']}")
