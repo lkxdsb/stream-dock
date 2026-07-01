@@ -5,6 +5,7 @@ from pathlib import Path
 
 from douyin_fetch import (
     OUTPUT_FORMATS,
+    enrich_capture_if_missing_audio,
     export_media,
     get_output_format_spec,
     is_audio_output,
@@ -88,6 +89,21 @@ class AudioExportTests(unittest.TestCase):
             )
             self.assertEqual(final_path.suffix, '.opus')
 
+    def test_ogg_export_creates_audio_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            audio_file = self._make_audio_fixture(temp_path)
+            output_dir = temp_path / 'out'
+            output_dir.mkdir()
+            final_path = export_media(
+                source_video=None,
+                source_audio=audio_file,
+                output_dir=output_dir,
+                base_name='demo',
+                output_type='ogg',
+            )
+            self.assertEqual(final_path.suffix, '.ogg')
+
 
 class VideoExportTests(unittest.TestCase):
     def _make_av_fixture(self, temp_path: Path) -> tuple[Path, Path]:
@@ -142,6 +158,39 @@ class VideoExportTests(unittest.TestCase):
                 output_type='webm',
             )
             self.assertEqual(final_path.suffix, '.webm')
+
+
+class CaptureEnrichmentTests(unittest.TestCase):
+    def test_retries_capture_when_video_missing_audio_url(self):
+        initial_capture = {
+            'media_kind': 'video',
+            'media_url': 'https://example.com/video-only.mp4',
+            'video_url': 'https://example.com/video-only.mp4',
+            'audio_url': None,
+            'title': 'demo - 抖音',
+            'final_url': 'https://www.douyin.com/video/1',
+        }
+        retried_capture = {
+            **initial_capture,
+            'audio_url': 'https://example.com/audio.m4a',
+        }
+        calls: list[tuple[str, int]] = []
+
+        def fake_no_login(link: str, wait_ms: int):
+            calls.append((link, wait_ms))
+            return retried_capture
+
+        updated_capture, updated_strategy = enrich_capture_if_missing_audio(
+            initial_capture,
+            link='https://v.douyin.com/demo/',
+            strategy='no-login',
+            no_login_capturer=fake_no_login,
+            cookie_capturer=None,
+        )
+
+        self.assertEqual(updated_capture['audio_url'], 'https://example.com/audio.m4a')
+        self.assertEqual(updated_strategy, 'no-login')
+        self.assertEqual(calls, [('https://v.douyin.com/demo/', 15000)])
 
 
 if __name__ == '__main__':

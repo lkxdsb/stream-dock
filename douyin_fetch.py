@@ -162,6 +162,35 @@ def validate_output_request(*, media_kind: str, output_type: str) -> None:
         raise ValueError(f'Only audio stream found; cannot export a real {output_type} video')
 
 
+def enrich_capture_if_missing_audio(
+    capture: dict[str, Any],
+    *,
+    link: str,
+    strategy: str,
+    no_login_capturer: Any,
+    cookie_capturer: Any,
+) -> tuple[dict[str, Any], str]:
+    if capture.get('media_kind') != 'video' or capture.get('audio_url'):
+        return capture, strategy
+
+    retry_candidates: list[tuple[str, Any]] = []
+    if strategy == 'no-login':
+        retry_candidates.append(('no-login', no_login_capturer))
+        if cookie_capturer is not None:
+            retry_candidates.append(('chrome-cookies', cookie_capturer))
+    elif cookie_capturer is not None:
+        retry_candidates.append(('chrome-cookies', cookie_capturer))
+
+    for retry_strategy, capturer in retry_candidates:
+        try:
+            refreshed_capture = capturer(link, wait_ms=15_000)
+        except Exception:
+            continue
+        if refreshed_capture.get('audio_url'):
+            return refreshed_capture, retry_strategy
+    return capture, strategy
+
+
 def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int = 10_000) -> dict[str, Any]:
     candidate_video_url: str | None = None
     candidate_audio_url: str | None = None
@@ -323,7 +352,7 @@ def transcode_audio(source_path: Path, final_path: Path, output_type: str) -> Pa
         'wav': ['ffmpeg', '-y', '-i', str(source_path), '-vn', '-acodec', 'pcm_s16le', str(final_path)],
         'flac': ['ffmpeg', '-y', '-i', str(source_path), '-vn', '-acodec', 'flac', str(final_path)],
         'aac': ['ffmpeg', '-y', '-i', str(source_path), '-vn', '-c:a', 'aac', '-b:a', '192k', str(final_path)],
-        'ogg': ['ffmpeg', '-y', '-i', str(source_path), '-vn', '-c:a', 'libvorbis', '-q:a', '5', str(final_path)],
+        'ogg': ['ffmpeg', '-y', '-i', str(source_path), '-vn', '-ac', '2', '-c:a', 'vorbis', '-strict', '-2', '-q:a', '5', str(final_path)],
         'opus': ['ffmpeg', '-y', '-i', str(source_path), '-vn', '-c:a', 'libopus', '-b:a', '160k', str(final_path)],
     }
     run_ffmpeg(command_map[output_type])
@@ -389,19 +418,13 @@ def materialize_output(
     *,
     audio_file: Path | None = None,
 ) -> Path:
-    final_path = output_dir / f"{base_name}.{output_type}"
-    if output_type == "mp4":
-        if audio_file is not None:
-            return merge_streams_to_mp4(source_file, audio_file, final_path)
-        shutil.copyfile(source_file, final_path)
-        return final_path
-    if output_type == "m4a":
-        run_ffmpeg(["ffmpeg", "-y", "-i", str(audio_file or source_file), "-vn", "-c:a", "copy", str(final_path)])
-        return final_path
-    if output_type == "mp3":
-        run_ffmpeg(["ffmpeg", "-y", "-i", str(audio_file or source_file), "-vn", "-acodec", "libmp3lame", "-q:a", "2", str(final_path)])
-        return final_path
-    raise ValueError(f"Unsupported output type: {output_type}")
+    return export_media(
+        source_video=source_file,
+        source_audio=audio_file,
+        output_dir=output_dir,
+        base_name=base_name,
+        output_type=output_type,
+    )
 
 
 def main() -> int:
@@ -424,6 +447,14 @@ def main() -> int:
                 "Capture failed in both strategies: "
                 f"no-login=({no_login_error}); chrome-cookies=({cookie_error})"
             )
+
+    capture, strategy = enrich_capture_if_missing_audio(
+        capture,
+        link=normalized_link,
+        strategy=strategy,
+        no_login_capturer=capture_media_no_login,
+        cookie_capturer=capture_media_with_chrome_cookies,
+    )
 
     base_name = sanitize_filename(capture["title"].replace(" - 抖音", "").strip())
     validate_output_request(media_kind=capture["media_kind"], output_type=args.outputType)
