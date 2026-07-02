@@ -9,8 +9,6 @@ from fetchers.adapters.kuaishou import KuaishouAdapter
 from fetchers.adapters.weibo import WeiboAdapter
 from fetchers.adapters.xiaohongshu import XiaohongshuAdapter
 from fetchers.models import ExportRequest, MediaFetchResult, MediaStream, ResolvedMediaSelection
-from fetchers.pipeline import detect_platform_adapter, run_pipeline
-from fetchers.registry import get_registered_adapters
 
 
 class ModelContractTests(unittest.TestCase):
@@ -68,6 +66,8 @@ class ModelContractTests(unittest.TestCase):
 
 class RegistryTests(unittest.TestCase):
     def test_registry_exposes_all_platform_adapters(self):
+        from fetchers.registry import get_registered_adapters
+
         adapter_names = [adapter.platform_name for adapter in get_registered_adapters()]
         self.assertEqual(
             adapter_names,
@@ -85,6 +85,8 @@ class RegistryTests(unittest.TestCase):
         )
 
     def test_pipeline_detects_platform_by_url(self):
+        from fetchers.pipeline import detect_platform_adapter
+
         self.assertEqual(detect_platform_adapter("https://v.douyin.com/abcd/").platform_name, "douyin")
         self.assertEqual(
             detect_platform_adapter("https://www.kuaishou.com/short-video/123").platform_name,
@@ -126,6 +128,8 @@ class DouyinAdapterTests(unittest.TestCase):
         self.assertFalse(adapter.can_handle("https://evil.example.com/?redirect=https://www.douyin.com/video/123"))
 
     def test_pipeline_runs_with_injected_fake_adapter(self):
+        from fetchers.pipeline import run_pipeline
+
         class FakeAdapter:
             platform_name = "douyin"
 
