@@ -164,11 +164,11 @@ class ApiResponseShapeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data['platform'], 'douyin')
         self.assertEqual(data['outputPath'], '/tmp/demo.mp3')
 
-    async def test_fetch_api_returns_platform_field_for_new_platforms(self):
+    async def test_fetch_api_returns_platform_field_for_expanded_platforms(self):
         from unittest.mock import patch
 
         transport = httpx.ASGITransport(app=app)
-        for platform_name in ['xiaohongshu', 'weibo', 'channels']:
+        for platform_name in ['xiaohongshu', 'weibo', 'channels', 'youtube', 'tiktok', 'twitter_x']:
             async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
                 with patch('app.subprocess.run') as mocked_run:
                     mocked_run.return_value.returncode = 0

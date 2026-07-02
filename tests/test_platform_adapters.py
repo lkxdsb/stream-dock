@@ -166,6 +166,377 @@ class DouyinAdapterTests(unittest.TestCase):
         self.assertEqual(result["normalized_link"], "normalized-link")
 
 
+class YoutubeAdapterTests(unittest.TestCase):
+    def test_youtube_adapter_recognizes_watch_urls_and_rejects_spoofed_domain(self):
+        from fetchers.adapters.youtube import YoutubeAdapter
+
+        adapter = YoutubeAdapter()
+        self.assertTrue(adapter.can_handle("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+        self.assertTrue(adapter.can_handle("https://youtu.be/dQw4w9WgXcQ"))
+        self.assertFalse(adapter.can_handle("https://evil.example.com/?next=https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+
+    def test_youtube_adapter_normalizes_short_url(self):
+        from fetchers.adapters.youtube import YoutubeAdapter
+
+        adapter = YoutubeAdapter()
+        self.assertEqual(
+            adapter.normalize_link("分享链接 https://youtu.be/dQw4w9WgXcQ"),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
+
+    def test_youtube_adapter_fetches_streams_from_player_response(self):
+        from fetchers.adapters.youtube import YoutubeAdapter
+
+        adapter = YoutubeAdapter()
+        html = """
+        <html><body>
+        <script>var ytInitialPlayerResponse = {"videoDetails":{"videoId":"dQw4w9WgXcQ","title":"YouTube 测试视频","author":"demo-channel","thumbnail":{"thumbnails":[{"url":"https://example.com/cover.jpg"}]}},"streamingData":{"formats":[{"url":"https://cdn.example.com/yt-720.mp4","mimeType":"video/mp4; codecs=\\"avc1\\"","width":1280,"height":720,"bitrate":800000,"contentLength":"1234567","qualityLabel":"720p"}],"adaptiveFormats":[{"url":"https://cdn.example.com/yt-audio.m4a","mimeType":"audio/mp4; codecs=\\"mp4a\\"","bitrate":128000}]}};</script>
+        </body></html>
+        """
+
+        class FakeResponse:
+            def __init__(self, text: str, url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
+                self.text = text
+                self.url = url
+                self.status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        with patch("fetchers.adapters.youtube.requests.get", return_value=FakeResponse(html)):
+            result = adapter.fetch_media("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+        self.assertEqual(result.platform, "youtube")
+        self.assertEqual(result.title, "YouTube 测试视频")
+        self.assertEqual(result.author, "demo-channel")
+        self.assertEqual(result.preferred_video.url, "https://cdn.example.com/yt-720.mp4")
+        self.assertEqual(result.preferred_video.filesize, 1234567)
+        self.assertEqual(result.preferred_audio.url, "https://cdn.example.com/yt-audio.m4a")
+        self.assertEqual(result.metadata["raw_platform_id"], "dQw4w9WgXcQ")
+        self.assertEqual(result.metadata["resolve_method"], "embedded-json")
+
+    def test_youtube_adapter_extracts_stream_url_from_signature_cipher(self):
+        from fetchers.adapters.youtube import YoutubeAdapter
+
+        adapter = YoutubeAdapter()
+        html = """
+        <html><body>
+        <script>var ytInitialPlayerResponse = {"videoDetails":{"videoId":"dQw4w9WgXcQ","title":"Cipher YouTube","author":"demo-channel"},"streamingData":{"formats":[{"signatureCipher":"url=https%3A%2F%2Fcdn.example.com%2Fyt-720.mp4&sp=signature&sig=plain-video-signature","mimeType":"video/mp4; codecs=\\"avc1\\"","width":1280,"height":720,"bitrate":800000,"qualityLabel":"720p"}],"adaptiveFormats":[{"cipher":"url=https%3A%2F%2Fcdn.example.com%2Fyt-audio.m4a&sp=sig&sig=plain-audio-signature","mimeType":"audio/mp4; codecs=\\"mp4a\\"","bitrate":128000}]}};</script>
+        </body></html>
+        """
+
+        class FakeResponse:
+            def __init__(self, text: str, url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
+                self.text = text
+                self.url = url
+                self.status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        with patch("fetchers.adapters.youtube.requests.get", return_value=FakeResponse(html)):
+            result = adapter.fetch_media("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+        self.assertEqual(
+            result.preferred_video.url,
+            "https://cdn.example.com/yt-720.mp4?signature=plain-video-signature",
+        )
+        self.assertEqual(
+            result.preferred_audio.url,
+            "https://cdn.example.com/yt-audio.m4a?sig=plain-audio-signature",
+        )
+        self.assertEqual(result.metadata["resolve_method"], "embedded-json")
+
+    def test_youtube_adapter_accepts_player_response_anchor_variant(self):
+        from fetchers.adapters.youtube import YoutubeAdapter
+
+        adapter = YoutubeAdapter()
+        html = """
+        <html><body>
+        <script>ytInitialPlayerResponse={"videoDetails":{"videoId":"dQw4w9WgXcQ","title":"Anchor Variant","author":"demo-channel"},"streamingData":{"formats":[{"url":"https://cdn.example.com/yt-720.mp4","mimeType":"video/mp4; codecs=\\"avc1\\"","width":1280,"height":720,"bitrate":800000,"qualityLabel":"720p"}],"adaptiveFormats":[]}};</script>
+        </body></html>
+        """
+
+        class FakeResponse:
+            def __init__(self, text: str, url: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"):
+                self.text = text
+                self.url = url
+                self.status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        with patch("fetchers.adapters.youtube.requests.get", return_value=FakeResponse(html)):
+            result = adapter.fetch_media("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+        self.assertEqual(result.title, "Anchor Variant")
+        self.assertEqual(result.metadata["resolve_method"], "embedded-json")
+
+    def test_youtube_adapter_falls_back_when_cipher_needs_signature_decoding(self):
+        from fetchers.adapters.youtube import YoutubeAdapter
+
+        adapter = YoutubeAdapter()
+        html = """
+        <html><body>
+        <script>var ytInitialPlayerResponse = {"videoDetails":{"videoId":"dQw4w9WgXcQ","title":"Cipher Needs Decode","author":"demo-channel"},"streamingData":{"formats":[{"signatureCipher":"url=https%3A%2F%2Fcdn.example.com%2Fyt-720.mp4&sp=sig&s=encrypted","mimeType":"video/mp4; codecs=\\"avc1\\"","width":1280,"height":720,"bitrate":800000,"qualityLabel":"720p"}],"adaptiveFormats":[]}};</script>
+        </body></html>
+        """
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+                self.url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                self.status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        fallback_capture = {
+            "final_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "title": "fallback cipher youtube",
+            "author": "fallback channel",
+            "cover_url": "https://example.com/fallback-cipher.jpg",
+            "video_url": "https://cdn.example.com/fallback-cipher-video.mp4",
+            "audio_url": None,
+        }
+        with patch("fetchers.adapters.youtube.requests.get", return_value=FakeResponse(html)):
+            with patch("fetchers.adapters.youtube.capture_media_with_browser", return_value=fallback_capture):
+                result = adapter.fetch_media("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+        self.assertEqual(result.title, "fallback cipher youtube")
+        self.assertEqual(result.metadata["resolve_method"], "playwright-fallback")
+
+    def test_youtube_adapter_falls_back_to_browser_capture(self):
+        from fetchers.adapters.youtube import YoutubeAdapter
+
+        adapter = YoutubeAdapter()
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+                self.url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                self.status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        fallback_capture = {
+            "final_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "title": "fallback youtube",
+            "author": "fallback channel",
+            "cover_url": "https://example.com/fallback.jpg",
+            "video_url": "https://cdn.example.com/fallback-video.mp4",
+            "audio_url": "https://cdn.example.com/fallback-audio.m4a",
+        }
+        with patch("fetchers.adapters.youtube.requests.get", return_value=FakeResponse("<html></html>")):
+            with patch("fetchers.adapters.youtube.capture_media_with_browser", return_value=fallback_capture):
+                result = adapter.fetch_media("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+        self.assertEqual(result.title, "fallback youtube")
+        self.assertEqual(result.metadata["resolve_method"], "playwright-fallback")
+
+
+class TiktokAdapterTests(unittest.TestCase):
+    def test_tiktok_adapter_recognizes_video_links_and_rejects_spoofed_domain(self):
+        from fetchers.adapters.tiktok import TiktokAdapter
+
+        adapter = TiktokAdapter()
+        self.assertTrue(adapter.can_handle("https://www.tiktok.com/@demo/video/7350000000000000001"))
+        self.assertFalse(adapter.can_handle("https://evil.example.com/?next=https://www.tiktok.com/@demo/video/7350000000000000001"))
+
+    def test_tiktok_adapter_normalize_rejects_non_video_page(self):
+        from fetchers.adapters.tiktok import TiktokAdapter
+
+        adapter = TiktokAdapter()
+        with self.assertRaisesRegex(ValueError, "Unsupported TikTok video URL"):
+            adapter.normalize_link("https://www.tiktok.com/@demo")
+
+    def test_tiktok_adapter_fetches_media_from_next_data(self):
+        from fetchers.adapters.tiktok import TiktokAdapter
+
+        adapter = TiktokAdapter()
+        html = """
+        <html><body>
+        <script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"itemInfo":{"itemStruct":{"id":"7350000000000000001","desc":"TikTok 测试视频","author":{"nickname":"demo-creator"},"video":{"cover":"https://example.com/tiktok-cover.jpg","downloadAddr":"https://cdn.example.com/tiktok-video.mp4","playAddr":"https://cdn.example.com/tiktok-play.mp4"},"music":{"playUrl":"https://cdn.example.com/tiktok-audio.m4a"}}}}}}</script>
+        </body></html>
+        """
+
+        class FakeResponse:
+            def __init__(self, text: str, url: str = "https://www.tiktok.com/@demo/video/7350000000000000001"):
+                self.text = text
+                self.url = url
+                self.status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        with patch("fetchers.adapters.tiktok.requests.get", return_value=FakeResponse(html)):
+            result = adapter.fetch_media("https://www.tiktok.com/@demo/video/7350000000000000001")
+
+        self.assertEqual(result.platform, "tiktok")
+        self.assertEqual(result.title, "TikTok 测试视频")
+        self.assertEqual(result.author, "demo-creator")
+        self.assertEqual(result.preferred_video.url, "https://cdn.example.com/tiktok-video.mp4")
+        self.assertEqual(result.preferred_audio.url, "https://cdn.example.com/tiktok-audio.m4a")
+        self.assertEqual(result.metadata["raw_platform_id"], "7350000000000000001")
+
+    def test_tiktok_adapter_uses_play_addr_when_download_addr_missing(self):
+        from fetchers.adapters.tiktok import TiktokAdapter
+
+        adapter = TiktokAdapter()
+        html = """
+        <html><body>
+        <script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"itemInfo":{"itemStruct":{"id":"7350000000000000001","desc":"TikTok playAddr","author":{"nickname":"demo-creator"},"video":{"cover":"https://example.com/tiktok-cover.jpg","playAddr":"https://cdn.example.com/tiktok-play.mp4"},"music":{"playUrl":"https://cdn.example.com/tiktok-audio.m4a"}}}}}}</script>
+        </body></html>
+        """
+
+        class FakeResponse:
+            def __init__(self, text: str, url: str = "https://www.tiktok.com/@demo/video/7350000000000000001"):
+                self.text = text
+                self.url = url
+                self.status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        with patch("fetchers.adapters.tiktok.requests.get", return_value=FakeResponse(html)):
+            result = adapter.fetch_media("https://www.tiktok.com/@demo/video/7350000000000000001")
+
+        self.assertEqual(result.preferred_video.url, "https://cdn.example.com/tiktok-play.mp4")
+
+    def test_tiktok_adapter_falls_back_to_browser_capture(self):
+        from fetchers.adapters.tiktok import TiktokAdapter
+
+        adapter = TiktokAdapter()
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+                self.url = "https://www.tiktok.com/@demo/video/7350000000000000001"
+                self.status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        fallback_capture = {
+            "final_url": "https://www.tiktok.com/@demo/video/7350000000000000001",
+            "title": "fallback tiktok",
+            "author": "fallback creator",
+            "cover_url": "https://example.com/tiktok-fallback.jpg",
+            "video_url": "https://cdn.example.com/tiktok-fallback.mp4",
+            "audio_url": None,
+        }
+        with patch("fetchers.adapters.tiktok.requests.get", return_value=FakeResponse("<html></html>")):
+            with patch("fetchers.adapters.tiktok.capture_media_with_browser", return_value=fallback_capture):
+                result = adapter.fetch_media("https://www.tiktok.com/@demo/video/7350000000000000001")
+
+        self.assertEqual(result.title, "fallback tiktok")
+        self.assertEqual(result.metadata["resolve_method"], "playwright-fallback")
+
+
+class TwitterXAdapterTests(unittest.TestCase):
+    def test_twitter_x_adapter_recognizes_status_video_links_and_rejects_spoofed_domain(self):
+        from fetchers.adapters.twitter_x import TwitterXAdapter
+
+        adapter = TwitterXAdapter()
+        self.assertTrue(adapter.can_handle("https://x.com/demo/status/1800000000000000000"))
+        self.assertTrue(adapter.can_handle("https://twitter.com/demo/status/1800000000000000000"))
+        self.assertFalse(adapter.can_handle("https://evil.example.com/?next=https://x.com/demo/status/1800000000000000000"))
+
+    def test_twitter_x_adapter_normalizes_twitter_host_and_rejects_non_status_page(self):
+        from fetchers.adapters.twitter_x import TwitterXAdapter
+
+        adapter = TwitterXAdapter()
+        self.assertEqual(
+            adapter.normalize_link("https://twitter.com/demo/status/1800000000000000000"),
+            "https://x.com/demo/status/1800000000000000000",
+        )
+        with self.assertRaisesRegex(ValueError, "Unsupported X status URL"):
+            adapter.normalize_link("https://x.com/demo")
+
+    def test_twitter_x_adapter_fetches_variants_from_next_data(self):
+        from fetchers.adapters.twitter_x import TwitterXAdapter
+
+        adapter = TwitterXAdapter()
+        html = """
+        <html><body>
+        <script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"status":{"rest_id":"1800000000000000000","text":"X 测试视频","core":{"user_results":{"result":{"legacy":{"name":"demo-author"}}}},"mediaEntities":[{"media_url_https":"https://example.com/x-cover.jpg","video_info":{"variants":[{"content_type":"video/mp4","bitrate":832000,"url":"https://cdn.example.com/x-720.mp4"},{"content_type":"video/mp4","bitrate":256000,"url":"https://cdn.example.com/x-480.mp4"}]}}]}}}}</script>
+        </body></html>
+        """
+
+        class FakeResponse:
+            def __init__(self, text: str, url: str = "https://x.com/demo/status/1800000000000000000"):
+                self.text = text
+                self.url = url
+                self.status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        with patch("fetchers.adapters.twitter_x.requests.get", return_value=FakeResponse(html)):
+            result = adapter.fetch_media("https://x.com/demo/status/1800000000000000000")
+
+        self.assertEqual(result.platform, "twitter_x")
+        self.assertEqual(result.title, "X 测试视频")
+        self.assertEqual(result.author, "demo-author")
+        self.assertEqual(result.preferred_video.url, "https://cdn.example.com/x-720.mp4")
+        self.assertEqual(result.cover_url, "https://example.com/x-cover.jpg")
+        self.assertEqual(result.metadata["raw_platform_id"], "1800000000000000000")
+
+    def test_twitter_x_adapter_ignores_hls_and_prefers_highest_mp4_variant(self):
+        from fetchers.adapters.twitter_x import TwitterXAdapter
+
+        adapter = TwitterXAdapter()
+        html = """
+        <html><body>
+        <script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"status":{"rest_id":"1800000000000000000","text":"X variants","core":{"user_results":{"result":{"legacy":{"name":"demo-author"}}}},"mediaEntities":[{"media_url_https":"https://example.com/x-cover.jpg","video_info":{"variants":[{"content_type":"application/x-mpegURL","url":"https://cdn.example.com/x-master.m3u8"},{"content_type":"video/mp4","bitrate":256000,"url":"https://cdn.example.com/x-480.mp4"},{"content_type":"video/mp4","bitrate":832000,"url":"https://cdn.example.com/x-720.mp4"}]}}]}}}}</script>
+        </body></html>
+        """
+
+        class FakeResponse:
+            def __init__(self, text: str, url: str = "https://x.com/demo/status/1800000000000000000"):
+                self.text = text
+                self.url = url
+                self.status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        with patch("fetchers.adapters.twitter_x.requests.get", return_value=FakeResponse(html)):
+            result = adapter.fetch_media("https://x.com/demo/status/1800000000000000000")
+
+        self.assertEqual(result.preferred_video.url, "https://cdn.example.com/x-720.mp4")
+
+    def test_twitter_x_adapter_falls_back_to_browser_capture(self):
+        from fetchers.adapters.twitter_x import TwitterXAdapter
+
+        adapter = TwitterXAdapter()
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+                self.url = "https://x.com/demo/status/1800000000000000000"
+                self.status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        fallback_capture = {
+            "final_url": "https://x.com/demo/status/1800000000000000000",
+            "title": "fallback x",
+            "author": "fallback user",
+            "cover_url": "https://example.com/x-fallback.jpg",
+            "video_url": "https://cdn.example.com/x-fallback.mp4",
+            "audio_url": None,
+        }
+        with patch("fetchers.adapters.twitter_x.requests.get", return_value=FakeResponse("<html></html>")):
+            with patch("fetchers.adapters.twitter_x.capture_media_with_browser", return_value=fallback_capture):
+                result = adapter.fetch_media("https://x.com/demo/status/1800000000000000000")
+
+        self.assertEqual(result.title, "fallback x")
+        self.assertEqual(result.metadata["resolve_method"], "playwright-fallback")
+
+
 class BilibiliAdapterTests(unittest.TestCase):
     def test_bilibili_adapter_extracts_core_url_from_share_text(self):
         adapter = BilibiliAdapter()

@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from fetchers.exporters import OUTPUT_FORMATS as SHARED_OUTPUT_FORMATS
+from fetchers.exporters import export_media as shared_export_media
 from douyin_fetch import (
     OUTPUT_FORMATS,
     enrich_capture_if_missing_audio,
@@ -191,6 +193,17 @@ class CaptureEnrichmentTests(unittest.TestCase):
         self.assertEqual(updated_capture['audio_url'], 'https://example.com/audio.m4a')
         self.assertEqual(updated_strategy, 'no-login')
         self.assertEqual(calls, [('https://v.douyin.com/demo/', 15000)])
+
+
+class SharedExporterTests(unittest.TestCase):
+    def test_shared_exporter_exposes_all_formats(self):
+        self.assertEqual(
+            set(SHARED_OUTPUT_FORMATS),
+            {'m4a', 'mp3', 'mp4', 'wav', 'flac', 'aac', 'ogg', 'opus', 'mkv', 'mov', 'webm'},
+        )
+
+    def test_old_export_media_symbol_uses_shared_exporter(self):
+        self.assertIs(shared_export_media, export_media)
 
 
 if __name__ == '__main__':
