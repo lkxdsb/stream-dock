@@ -16,6 +16,7 @@ TEMPLATES_DIR = BASE_DIR / 'templates'
 STATIC_DIR = BASE_DIR / 'static'
 SCRIPT_PATH = BASE_DIR / 'douyin_fetch.py'
 OUTPUT_FILE_PATTERN = re.compile(r"output file:\s*(.+)$")
+PLATFORM_PATTERN = re.compile(r"platform:\s*(.+)$")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app = FastAPI(title='Douyin Local Fetch UI')
@@ -36,13 +37,21 @@ def extract_output_file(stdout: str) -> str | None:
     return None
 
 
+def extract_platform(stdout: str) -> str | None:
+    for line in stdout.splitlines():
+        match = PLATFORM_PATTERN.search(line)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
 @app.get('/', response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse(
         'index.html',
         {
             'request': request,
-            'title': '抖音本地解析工具',
+            'title': 'StreamDock · 多平台媒体解析工具',
         },
     )
 
@@ -56,15 +65,30 @@ def fetch(payload: FetchRequest):
         '--outputPath', payload.outputPath,
         '--outputType', payload.outputType,
     ]
-    completed = subprocess.run(
-        command,
-        cwd=str(BASE_DIR),
-        text=True,
-        capture_output=True,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(BASE_DIR),
+            text=True,
+            capture_output=True,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        return JSONResponse(
+            {
+                'success': False,
+                'stdout': '',
+                'stderr': '',
+                'returncode': None,
+                'outputPath': None,
+                'platform': None,
+                'error': 'Execution timeout while fetching media',
+            }
+        )
     stdout = completed.stdout.strip()
     stderr = completed.stderr.strip()
     output_file = extract_output_file(stdout)
+    platform = extract_platform(stdout)
 
     success = completed.returncode == 0
     body = {
@@ -73,6 +97,7 @@ def fetch(payload: FetchRequest):
         'stderr': stderr,
         'returncode': completed.returncode,
         'outputPath': output_file,
+        'platform': platform,
     }
     if not success:
         body['error'] = stderr or stdout or 'Unknown execution error'

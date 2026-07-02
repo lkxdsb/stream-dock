@@ -23,6 +23,41 @@ class HomePageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('name="outputType"', text)
         self.assertIn('开始解析', text)
 
+    async def test_home_page_renders_streamdock_landing_content(self):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            response = await client.get('/')
+
+        self.assertEqual(response.status_code, 200)
+        text = response.text
+        self.assertIn('StreamDock', text)
+        self.assertIn('从各处而来，归于本地。', text)
+        self.assertIn('支持平台', text)
+        self.assertIn('抖音', text)
+        self.assertIn('快手', text)
+        self.assertIn('B站', text)
+
+    async def test_home_page_uses_reference_poster_layout(self):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            response = await client.get('/')
+
+        self.assertEqual(response.status_code, 200)
+        text = response.text
+        self.assertIn('class="page"', text)
+        self.assertIn('class="hero"', text)
+        self.assertIn('class="bottom"', text)
+        self.assertIn('class="panel"', text)
+        self.assertIn('id="topDownloadBtn"', text)
+        self.assertIn('id="mainDownloadBtn"', text)
+        self.assertNotIn('streamdock-reference.png', text)
+
+    def test_frontend_script_supports_poster_hotspot_interactions(self):
+        script = Path('static/app.js').read_text(encoding='utf-8')
+        self.assertIn('scrollTriggers', script)
+        self.assertIn('scrollIntoView', script)
+        self.assertIn('prefers-reduced-motion', script)
+
 
 class MediaSelectionTests(unittest.TestCase):
     def test_prefers_video_when_both_audio_and_video_urls_exist(self):
@@ -107,6 +142,65 @@ class HomePageOptionTests(unittest.IsolatedAsyncioTestCase):
         text = response.text
         for marker in ['value="wav"', 'value="flac"', 'value="aac"', 'value="ogg"', 'value="opus"', 'value="mkv"', 'value="mov"', 'value="webm"']:
             self.assertIn(marker, text)
+
+
+class ApiResponseShapeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fetch_api_returns_platform_field_on_success(self):
+        from unittest.mock import patch
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            with patch('app.subprocess.run') as mocked_run:
+                mocked_run.return_value.returncode = 0
+                mocked_run.return_value.stdout = '[douyin-fetch] platform: douyin\n[douyin-fetch] output file: /tmp/demo.mp3\n'
+                mocked_run.return_value.stderr = ''
+                response = await client.post('/api/fetch', json={
+                    'link': 'https://v.douyin.com/demo/',
+                    'outputPath': '/tmp/out',
+                    'outputType': 'mp3',
+                })
+        data = response.json()
+        self.assertTrue(data['success'])
+        self.assertEqual(data['platform'], 'douyin')
+        self.assertEqual(data['outputPath'], '/tmp/demo.mp3')
+
+    async def test_fetch_api_returns_platform_field_for_new_platforms(self):
+        from unittest.mock import patch
+
+        transport = httpx.ASGITransport(app=app)
+        for platform_name in ['xiaohongshu', 'weibo', 'channels']:
+            async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                with patch('app.subprocess.run') as mocked_run:
+                    mocked_run.return_value.returncode = 0
+                    mocked_run.return_value.stdout = (
+                        f'[douyin-fetch] platform: {platform_name}\n'
+                        '[douyin-fetch] output file: /tmp/demo.mp4\n'
+                    )
+                    mocked_run.return_value.stderr = ''
+                    response = await client.post('/api/fetch', json={
+                        'link': 'https://example.com/demo',
+                        'outputPath': '/tmp/out',
+                        'outputType': 'mp4',
+                    })
+            data = response.json()
+            self.assertTrue(data['success'])
+            self.assertEqual(data['platform'], platform_name)
+            self.assertEqual(data['outputPath'], '/tmp/demo.mp4')
+
+    async def test_fetch_api_returns_timeout_error_when_cli_hangs(self):
+        from unittest.mock import patch
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            with patch('app.subprocess.run', side_effect=subprocess.TimeoutExpired(cmd='demo', timeout=180)):
+                response = await client.post('/api/fetch', json={
+                    'link': 'https://example.com/demo',
+                    'outputPath': '/tmp/out',
+                    'outputType': 'mp4',
+                })
+        data = response.json()
+        self.assertFalse(data['success'])
+        self.assertIn('timeout', data['error'].lower())
 
 
 if __name__ == '__main__':
