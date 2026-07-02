@@ -67,35 +67,45 @@ class ModelContractTests(unittest.TestCase):
 
 
 class RegistryTests(unittest.TestCase):
+    def _detect_platform_name(self, raw_link: str) -> str | None:
+        try:
+            return detect_platform_adapter(raw_link).platform_name
+        except ValueError:
+            return None
+
     def test_registry_exposes_all_platform_adapters(self):
         adapter_names = [adapter.platform_name for adapter in get_registered_adapters()]
         self.assertEqual(
             adapter_names,
-            ["douyin", "kuaishou", "bilibili", "xiaohongshu", "weibo", "channels"],
+            [
+                "douyin",
+                "kuaishou",
+                "bilibili",
+                "xiaohongshu",
+                "weibo",
+                "channels",
+                "youtube",
+                "tiktok",
+                "twitter_x",
+            ],
         )
 
     def test_pipeline_detects_platform_by_url(self):
-        self.assertEqual(detect_platform_adapter("https://v.douyin.com/abcd/").platform_name, "douyin")
+        self.assertEqual(self._detect_platform_name("https://v.douyin.com/abcd/"), "douyin")
+        self.assertEqual(self._detect_platform_name("https://www.kuaishou.com/short-video/123"), "kuaishou")
+        self.assertEqual(self._detect_platform_name("https://www.bilibili.com/video/BV1xx411c7mD"), "bilibili")
+        self.assertEqual(self._detect_platform_name("https://www.xiaohongshu.com/explore/66abc123"), "xiaohongshu")
+        self.assertEqual(self._detect_platform_name("https://weibo.com/tv/show/1034:abc"), "weibo")
         self.assertEqual(
-            detect_platform_adapter("https://www.kuaishou.com/short-video/123").platform_name,
-            "kuaishou",
-        )
-        self.assertEqual(
-            detect_platform_adapter("https://www.bilibili.com/video/BV1xx411c7mD").platform_name,
-            "bilibili",
-        )
-        self.assertEqual(
-            detect_platform_adapter("https://www.xiaohongshu.com/explore/66abc123").platform_name,
-            "xiaohongshu",
-        )
-        self.assertEqual(
-            detect_platform_adapter("https://weibo.com/tv/show/1034:abc").platform_name,
-            "weibo",
-        )
-        self.assertEqual(
-            detect_platform_adapter("https://channels.weixin.qq.com/web/pages/feed?feedid=xyz").platform_name,
+            self._detect_platform_name("https://channels.weixin.qq.com/web/pages/feed?feedid=xyz"),
             "channels",
         )
+        self.assertEqual(self._detect_platform_name("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), "youtube")
+        self.assertEqual(
+            self._detect_platform_name("https://www.tiktok.com/@demo/video/7350000000000000001"),
+            "tiktok",
+        )
+        self.assertEqual(self._detect_platform_name("https://x.com/demo/status/1800000000000000000"), "twitter_x")
 
 
 class DouyinAdapterTests(unittest.TestCase):
