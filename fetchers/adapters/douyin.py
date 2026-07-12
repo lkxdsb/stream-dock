@@ -48,6 +48,7 @@ def choose_media_capture(
     dom_video_sources: list[str],
     final_url: str,
     title: str,
+    aweme_detail: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     video_url = candidate_video_url
     audio_url = candidate_audio_url
@@ -66,6 +67,7 @@ def choose_media_capture(
             "media_kind": "video",
             "video_url": video_url,
             "audio_url": audio_url,
+            "aweme_detail": aweme_detail,
         }
     if audio_url:
         return {
@@ -75,6 +77,7 @@ def choose_media_capture(
             "media_kind": "audio",
             "video_url": None,
             "audio_url": audio_url,
+            "aweme_detail": aweme_detail,
         }
     raise RuntimeError("No media URL captured")
 
@@ -111,6 +114,7 @@ def enrich_capture_if_missing_audio(
 def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int = 10_000) -> dict[str, Any]:
     candidate_video_url: str | None = None
     candidate_audio_url: str | None = None
+    aweme_detail: dict[str, Any] | None = None
     page = context.new_page()
 
     def on_request(req: Any) -> None:
@@ -122,7 +126,20 @@ def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int
         elif media_kind == "audio":
             candidate_audio_url = url
 
+    def on_response(resp: Any) -> None:
+        nonlocal aweme_detail
+        if "/aweme/v1/web/aweme/detail/" not in resp.url:
+            return
+        try:
+            payload = resp.json()
+        except Exception:
+            return
+        detail = payload.get("aweme_detail")
+        if isinstance(detail, dict):
+            aweme_detail = detail
+
     page.on("request", on_request)
+    page.on("response", on_response)
     page.goto(link, wait_until="domcontentloaded", timeout=120_000)
     page.wait_for_timeout(wait_ms)
 
@@ -144,6 +161,7 @@ def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int
         dom_video_sources=dom_video_sources,
         final_url=final_url,
         title=title,
+        aweme_detail=aweme_detail,
     )
 
 
@@ -245,15 +263,16 @@ class DouyinAdapter(BasePlatformAdapter):
 
         preferred_video = None
         preferred_audio = None
-        video_streams: list[MediaStream] = []
+        video_streams = self._build_video_streams(capture.get("aweme_detail"))
         audio_streams: list[MediaStream] = []
 
-        if capture.get("video_url"):
-            preferred_video = MediaStream(
-                url=capture["video_url"],
-                stream_type="video",
-                container="mp4",
+        if video_streams:
+            preferred_video = max(
+                video_streams,
+                key=lambda s: ((s.height or 0), (s.width or 0), (s.bitrate or 0)),
             )
+        elif capture.get("video_url"):
+            preferred_video = MediaStream(url=capture["video_url"], stream_type="video", container="mp4")
             video_streams.append(preferred_video)
         if capture.get("audio_url"):
             preferred_audio = MediaStream(
@@ -281,3 +300,33 @@ class DouyinAdapter(BasePlatformAdapter):
                 "media_kind": capture["media_kind"],
             },
         )
+
+    def _build_video_streams(self, aweme_detail: dict[str, Any] | None) -> list[MediaStream]:
+        if not aweme_detail:
+            return []
+        video = aweme_detail.get("video") or {}
+        raw_streams = video.get("bit_rate") or []
+        streams: list[MediaStream] = []
+        seen_urls: set[str] = set()
+        for item in raw_streams:
+            play_addr = item.get("play_addr") or {}
+            url_list = play_addr.get("url_list") or []
+            stream_url = next((url for url in url_list if url), None)
+            if not stream_url or stream_url in seen_urls:
+                continue
+            codec = "h265" if item.get("is_h265") else ("bytevc1" if item.get("is_bytevc1") else "h264")
+            streams.append(
+                MediaStream(
+                    url=stream_url,
+                    stream_type="video",
+                    container=item.get("format") or "mp4",
+                    codec=codec,
+                    width=play_addr.get("width"),
+                    height=play_addr.get("height"),
+                    bitrate=item.get("bit_rate"),
+                    filesize=play_addr.get("data_size"),
+                    quality_label=item.get("gear_name"),
+                )
+            )
+            seen_urls.add(stream_url)
+        return streams

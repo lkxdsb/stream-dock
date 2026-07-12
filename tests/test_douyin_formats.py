@@ -2,9 +2,12 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from fetchers.downloader import download_hls_media, download_media
 from fetchers.exporters import OUTPUT_FORMATS as SHARED_OUTPUT_FORMATS
 from fetchers.exporters import export_media as shared_export_media
+from fetchers.exporters import run_ffmpeg
 from douyin_fetch import (
     OUTPUT_FORMATS,
     enrich_capture_if_missing_audio,
@@ -204,6 +207,40 @@ class SharedExporterTests(unittest.TestCase):
 
     def test_old_export_media_symbol_uses_shared_exporter(self):
         self.assertIs(shared_export_media, export_media)
+
+    def test_run_ffmpeg_reports_timeout_cleanly(self):
+        with patch('fetchers.exporters.subprocess.run', side_effect=subprocess.TimeoutExpired(cmd='ffmpeg', timeout=1)):
+            with self.assertRaisesRegex(RuntimeError, '超时'):
+                run_ffmpeg(['ffmpeg', '-version'])
+
+
+class DownloaderTests(unittest.TestCase):
+    def test_download_media_uses_ffmpeg_for_m3u8_sources(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / 'source.mp4'
+            with patch('fetchers.downloader.requests.get', side_effect=AssertionError('requests path should not be used')):
+                with patch('fetchers.downloader.download_hls_media', return_value=destination, create=True) as mocked_hls:
+                    result = download_media(
+                        'https://example.com/video-720.m3u8',
+                        destination,
+                        user_agent='demo-agent',
+                        referer='https://m.gifshow.com/',
+                    )
+
+        self.assertEqual(result, destination)
+        mocked_hls.assert_called_once()
+
+    def test_download_hls_media_reports_timeout_cleanly(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / 'source.mp4'
+            with patch('fetchers.downloader.subprocess.run', side_effect=subprocess.TimeoutExpired(cmd='ffmpeg', timeout=1)):
+                with self.assertRaisesRegex(RuntimeError, '超时'):
+                    download_hls_media(
+                        'https://example.com/video-720.m3u8',
+                        destination,
+                        user_agent='demo-agent',
+                        referer='https://m.gifshow.com/',
+                    )
 
 
 if __name__ == '__main__':

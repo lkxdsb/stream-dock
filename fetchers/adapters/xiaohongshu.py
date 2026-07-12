@@ -61,10 +61,11 @@ class XiaohongshuAdapter(BasePlatformAdapter):
             )
             response.raise_for_status()
             payload = self._extract_initial_state(response.text)
-            note = payload.get("note") or {}
+            note = self._extract_note(payload)
             media = ((note.get("video") or {}).get("media") or {})
+            raw_stream_groups = (media.get("stream") or {})
 
-            video_streams = self._build_video_streams(((media.get("stream") or {}).get("h264")) or [])
+            video_streams = self._build_video_streams(raw_stream_groups)
             audio_streams = self._build_audio_streams(media.get("audioStream"))
             if not video_streams:
                 raise RuntimeError("No XiaoHongShu video stream found")
@@ -75,7 +76,7 @@ class XiaohongshuAdapter(BasePlatformAdapter):
             return MediaFetchResult(
                 platform=self.platform_name,
                 content_type="video",
-                title=note.get("title") or "xiaohongshu_video",
+                title=note.get("title") or self._fallback_title(note.get("noteId") or self._extract_note_id(response.url)),
                 source_url=normalized_link,
                 final_url=response.url,
                 cover_url=((note.get("cover") or {}).get("url")),
@@ -94,27 +95,94 @@ class XiaohongshuAdapter(BasePlatformAdapter):
             return self._build_fallback_result(normalized_link, capture)
 
     def _extract_initial_state(self, html: str) -> dict[str, Any]:
-        return json.loads(extract_balanced_json_after(html, "window.__INITIAL_STATE__=", "{"))
+        raw_state = extract_balanced_json_after(html, "window.__INITIAL_STATE__=", "{")
+        return json.loads(self._sanitize_js_object_literal(raw_state))
 
-    def _build_video_streams(self, raw_streams: list[dict[str, Any]]) -> list[MediaStream]:
-        streams: list[MediaStream] = []
-        for item in raw_streams:
-            stream_url = item.get("masterUrl") or item.get("url")
-            if not stream_url:
+    def _extract_note(self, payload: dict[str, Any]) -> dict[str, Any]:
+        direct_note = payload.get("note")
+        if isinstance(direct_note, dict):
+            if isinstance(direct_note.get("video"), dict) or isinstance(direct_note.get("imageList"), list):
+                return direct_note
+
+            current_note_id = direct_note.get("currentNoteId")
+            note_detail_map = direct_note.get("noteDetailMap") or {}
+            if isinstance(current_note_id, str) and isinstance(note_detail_map, dict):
+                detail = note_detail_map.get(current_note_id) or {}
+                if isinstance(detail, dict) and isinstance(detail.get("note"), dict):
+                    return detail["note"]
+
+            if isinstance(note_detail_map, dict):
+                for detail in note_detail_map.values():
+                    if isinstance(detail, dict) and isinstance(detail.get("note"), dict):
+                        return detail["note"]
+
+        raise RuntimeError("Failed to extract XiaoHongShu note payload")
+
+    def _sanitize_js_object_literal(self, raw_state: str) -> str:
+        parts: list[str] = []
+        index = 0
+        in_string = False
+        escaped = False
+
+        while index < len(raw_state):
+            ch = raw_state[index]
+            if in_string:
+                parts.append(ch)
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                index += 1
                 continue
-            streams.append(
-                MediaStream(
-                    url=stream_url,
-                    stream_type="video",
-                    container="mp4",
-                    codec=item.get("codec"),
-                    width=item.get("width"),
-                    height=item.get("height"),
-                    bitrate=item.get("avgBitrate") or item.get("bitrate"),
-                    filesize=item.get("size"),
-                    quality_label=item.get("qualityLabel"),
+
+            if ch == '"':
+                in_string = True
+                parts.append(ch)
+                index += 1
+                continue
+
+            if raw_state.startswith("undefined", index):
+                prev_char = raw_state[index - 1] if index > 0 else ""
+                next_index = index + len("undefined")
+                next_char = raw_state[next_index] if next_index < len(raw_state) else ""
+                if (not prev_char or not (prev_char.isalnum() or prev_char == "_")) and (
+                    not next_char or not (next_char.isalnum() or next_char == "_")
+                ):
+                    parts.append("null")
+                    index = next_index
+                    continue
+
+            parts.append(ch)
+            index += 1
+
+        return "".join(parts)
+
+    def _build_video_streams(self, raw_stream_groups: dict[str, Any]) -> list[MediaStream]:
+        streams: list[MediaStream] = []
+        seen_urls: set[str] = set()
+        for codec_name, raw_streams in raw_stream_groups.items():
+            if not isinstance(raw_streams, list):
+                continue
+            for item in raw_streams:
+                stream_url = item.get("masterUrl") or item.get("url")
+                if not stream_url or stream_url in seen_urls:
+                    continue
+                streams.append(
+                    MediaStream(
+                        url=stream_url,
+                        stream_type="video",
+                        container="mp4",
+                        codec=item.get("codec") or codec_name,
+                        width=item.get("width"),
+                        height=item.get("height"),
+                        bitrate=item.get("avgBitrate") or item.get("bitrate"),
+                        filesize=item.get("size"),
+                        quality_label=item.get("qualityLabel"),
+                    )
                 )
-            )
+                seen_urls.add(stream_url)
         return streams
 
     def _build_audio_streams(self, raw_audio: dict[str, Any] | None) -> list[MediaStream]:
@@ -145,7 +213,7 @@ class XiaohongshuAdapter(BasePlatformAdapter):
         return MediaFetchResult(
             platform=self.platform_name,
             content_type="video",
-            title=capture.get("title") or "xiaohongshu_video",
+            title=capture.get("title") or self._fallback_title(self._extract_note_id(capture.get("final_url") or normalized_link)),
             source_url=normalized_link,
             final_url=capture.get("final_url") or normalized_link,
             cover_url=capture.get("cover_url"),
@@ -163,3 +231,8 @@ class XiaohongshuAdapter(BasePlatformAdapter):
     def _extract_note_id(self, normalized_link: str) -> str | None:
         parts = [part for part in normalized_link.rstrip("/").split("/") if part]
         return parts[-1] if parts else None
+
+    @staticmethod
+    def _fallback_title(note_id: str | None) -> str:
+        clean_id = str(note_id or '').split('?', 1)[0].strip()
+        return f'小红书视频_{clean_id[:12]}' if clean_id else '小红书视频'

@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+
+{% block page_styles %}
+<link rel="stylesheet" href="{{ url_for('static', path='/css/home.css') }}" />
+{% endblock %}
+
+{% block page_content %}
+<main>
+  <section class="hero" id="product">
+    <div class="hero-bg">
+      <div class="wood"></div>
+      <div class="water"></div>
+      <div class="mist"></div>
+      <div class="rock r1"></div>
+      <div class="rock r2"></div>
+      <div class="rock r3"></div>
+      <div class="rock r4"></div>
+      <div class="platform"></div>
+    </div>
+
+    <div class="container hero-inner">
+      <section class="hero-copy">
+        <div class="kicker">多平台媒体解析工具</div>
+        <h1 class="hero-title" aria-label="从各处而来，归于本地。">从各处而来，<br />归于本地。</h1>
+        <p class="hero-desc">
+          支持抖音、B站、快手等主流平台<br />
+          高质量解析 · 多格式导出 · 隐私安全 · 完全本地
+        </p>
+
+        <div class="hero-actions">
+          <button class="main-download" id="mainDownloadBtn" type="button">
+            <span>↓</span>
+            <span>立即使用</span>
+          </button>
+          <button class="learn" id="learnMoreBtn" type="button">
+            <span>了解更多</span>
+            <span>→</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="flow-area" id="platforms" aria-label="支持平台">
+        <div class="app-node node-top brand-douyin" data-label="抖音" data-flow="douyin"><div class="node-logo"><img src="{{ url_for('static', path='/icons/platforms/svg/douyin.svg') }}" alt="" /></div></div>
+        <div class="app-node node-mid brand-bilibili" data-label="B站" data-flow="bilibili"><div class="node-logo"><img src="{{ url_for('static', path='/icons/platforms/svg/bilibili.svg') }}" alt="" /></div></div>
+        <div class="app-node node-bottom brand-kuaishou" data-label="快手" data-flow="kuaishou"><div class="node-logo"><img src="{{ url_for('static', path='/icons/platforms/svg/kuaishou.svg') }}" alt="" /></div></div>
+        <div class="app-node node-extra node-xhs brand-youtube" data-label="YouTube" data-flow="youtube"><div class="node-logo"><img src="{{ url_for('static', path='/icons/platforms/svg/youtube.svg') }}" alt="" /></div></div>
+        <div class="app-node node-extra node-channel brand-tiktok" data-label="TikTok" data-flow="tiktok"><div class="node-logo"><img src="{{ url_for('static', path='/icons/platforms/svg/tiktok.svg') }}" alt="" /></div></div>
+        <div class="app-node node-extra node-weibo brand-x" data-label="X" data-flow="twitter"><div class="node-logo"><img src="{{ url_for('static', path='/icons/platforms/svg/x.svg') }}" alt="" /></div></div>
+
+        <svg class="flow-svg" viewBox="0 0 180 440" aria-hidden="true">
+          <defs>
+            <linearGradient id="flowDouyin" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#00f5ff" stop-opacity="0" />
+              <stop offset="42%" stop-color="#00f5ff" stop-opacity=".54" />
+              <stop offset="72%" stop-color="#fe2c55" stop-opacity=".50" />
+              <stop offset="100%" stop-color="#fe2c55" stop-opacity=".12" />
+            </linearGradient>
+            <linearGradient id="flowBilibili" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#00a1d6" stop-opacity="0" />
+              <stop offset="48%" stop-color="#00a1d6" stop-opacity=".36" />
+              <stop offset="76%" stop-color="#fb7299" stop-opacity=".50" />
+              <stop offset="100%" stop-color="#fb7299" stop-opacity=".14" />
+            </linearGradient>
+            <linearGradient id="flowKuaishou" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#0f1419" stop-opacity="0" />
+              <stop offset="46%" stop-color="#0f1419" stop-opacity=".40" />
+              <stop offset="78%" stop-color="#ff5f00" stop-opacity=".58" />
+              <stop offset="100%" stop-color="#ff5f00" stop-opacity=".16" />
+            </linearGradient>
+            <linearGradient id="flowYoutube" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#ff0000" stop-opacity="0" />
+              <stop offset="46%" stop-color="#ff0000" stop-opacity=".48" />
+              <stop offset="82%" stop-color="#ff4d4d" stop-opacity=".58" />
+              <stop offset="100%" stop-color="#ff4d4d" stop-opacity=".14" />
+            </linearGradient>
+            <linearGradient id="flowTiktok" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#25f4ee" stop-opacity="0" />
+              <stop offset="45%" stop-color="#25f4ee" stop-opacity=".46" />
+              <stop offset="80%" stop-color="#fe2c55" stop-opacity=".56" />
+              <stop offset="100%" stop-color="#fe2c55" stop-opacity=".14" />
+            </linearGradient>
+            <linearGradient id="flowTwitter" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#1d9bf0" stop-opacity="0" />
+              <stop offset="45%" stop-color="#1d9bf0" stop-opacity=".48" />
+              <stop offset="80%" stop-color="#0f1419" stop-opacity=".55" />
+              <stop offset="100%" stop-color="#0f1419" stop-opacity=".14" />
+            </linearGradient>
+            <filter id="flowSoft" x="-10%" y="-20%" width="120%" height="140%">
+              <feGaussianBlur stdDeviation="1.2" />
+            </filter>
+          </defs>
+          <path class="flow-glow line-douyin" d="M0 18 C 44 24, 104 86, 176 218" />
+          <path class="flow-glow line-bilibili" d="M0 98 C 54 98, 112 134, 176 218" />
+          <path class="flow-glow line-kuaishou" d="M0 178 C 62 178, 116 194, 176 218" />
+          <path class="flow-glow line-youtube" d="M0 258 C 62 258, 116 238, 176 218" />
+          <path class="flow-glow line-tiktok" d="M0 338 C 54 334, 110 288, 176 218" />
+          <path class="flow-glow line-twitter" d="M0 418 C 48 410, 100 336, 176 218" />
+          <path class="flow-line line-douyin" d="M0 18 C 44 24, 104 86, 176 218" />
+          <path class="flow-line line-bilibili" d="M0 98 C 54 98, 112 134, 176 218" />
+          <path class="flow-line line-kuaishou" d="M0 178 C 62 178, 116 194, 176 218" />
+          <path class="flow-line line-youtube" d="M0 258 C 62 258, 116 238, 176 218" />
+          <path class="flow-line line-tiktok" d="M0 338 C 54 334, 110 288, 176 218" />
+          <path class="flow-line line-twitter" d="M0 418 C 48 410, 100 336, 176 218" />
+          <path class="flow-spark line-douyin" d="M0 18 C 44 24, 104 86, 176 218" />
+          <path class="flow-spark line-bilibili" d="M0 98 C 54 98, 112 134, 176 218" />
+          <path class="flow-spark line-kuaishou" d="M0 178 C 62 178, 116 194, 176 218" />
+          <path class="flow-spark line-youtube" d="M0 258 C 62 258, 116 238, 176 218" />
+          <path class="flow-spark line-tiktok" d="M0 338 C 54 334, 110 288, 176 218" />
+          <path class="flow-spark line-twitter" d="M0 418 C 48 410, 100 336, 176 218" />
+          <circle class="flow-pulse" cx="176" cy="218" r="8" />
+          <circle class="flow-terminal" cx="176" cy="218" r="2.6" />
+        </svg>
+
+        <div class="join-dot"></div>
+
+        <div class="demo-window">
+        <section class="panel demo-panel" aria-label="StreamDock 演示窗口">
+          <aside class="panel-sidebar">
+            <div class="dots">
+              <span class="red"></span>
+              <span class="yellow"></span>
+              <span class="green"></span>
+            </div>
+            <div class="menu">
+              <div class="menu-item active"><span class="mini-icon">◉</span><span>解析</span></div>
+              <div class="menu-item"><span class="mini-icon">⇩</span><span>下载中</span></div>
+              <div class="menu-item"><span class="mini-icon">☑</span><span>已完成</span></div>
+              <div class="menu-item"><span class="mini-icon">⚙</span><span>设置</span></div>
+            </div>
+          </aside>
+
+          <section class="panel-main demo-main">
+            <div class="panel-title">解析</div>
+            <div class="panel-subtitle">演示输入链接、自动识别清晰度并本地保存</div>
+
+            <div class="input-card demo-card">
+              <div class="placeholder demo-placeholder">
+                <span>🔗</span>
+                <div id="demoLinkText" class="demo-link-text">https://v.douyin.com/xxxxx/</div>
+              </div>
+              <button class="start" id="demoStartBtn" type="button">在线使用</button>
+            </div>
+
+            <div class="demo-progress">
+              <span class="demo-progress-dot active"></span>
+              <span class="demo-progress-dot"></span>
+              <span class="demo-progress-dot"></span>
+            </div>
+
+            <div class="demo-metrics">
+              <div class="demo-metric">
+                <label>平台</label>
+                <div id="demoPlatformText" class="select demo-chip">抖音</div>
+              </div>
+              <div class="demo-metric">
+                <label>清晰度</label>
+                <div id="demoQualityText" class="select demo-chip">1080P · 自动最优</div>
+              </div>
+              <div class="demo-metric demo-metric-wide">
+                <label>保存到</label>
+                <div class="select demo-chip">~/Downloads/StreamDock</div>
+              </div>
+            </div>
+
+            <div class="recent-label">演示状态</div>
+            <div class="recent demo-recent">
+              <div class="thumb"></div>
+              <div>
+                <div class="recent-title" id="demoResultText">等待开始演示</div>
+                <div class="recent-meta" id="demoStatusText">复制链接 → 粘贴 → 自动识别 → 保存到本地</div>
+              </div>
+              <div>
+                <div class="done" id="demoBadge">• 演示中</div>
+                <div class="tools"><span>▷</span><span>□</span><span>⋮</span></div>
+              </div>
+            </div>
+
+            <div class="privacy">首页仅展示流程，真实解析已迁移到“在线使用”。</div>
+          </section>
+        </section>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <section class="bottom" aria-label="产品说明">
+    <div class="mountain"></div>
+    <div class="tiny-person"></div>
+    <div class="container bottom-inner">
+      <section class="bottom-left">
+        <div class="section-tag">本地优先</div>
+        <h2 class="bottom-title">所有处理<br />都在你设备上完成。</h2>
+        <p class="bottom-desc">
+          我们相信，隐私不该妥协。本工具不上云、不存储、<br />
+          不收集任何你的数据。
+        </p>
+      </section>
+
+      <section class="orbit"><div class="home-icon"></div></section>
+
+      <section class="bottom-stats">
+        <div class="bottom-stat"><strong>6+</strong><span>主流平台支持</span></div>
+        <div class="bottom-stat"><strong>10+</strong><span>导出格式</span></div>
+        <div class="bottom-stat"><strong>本地</strong><span>安全可靠</span></div>
+      </section>
+    </div>
+  </section>
+
+  <section class="home-updates" id="updates">
+    <div class="container updates-inner">
+      <div class="updates-kicker">更新日志</div>
+      <div class="updates-grid">
+        <article>
+          <h3>首页演示模式</h3>
+          <p>首页不再承担真实解析，改为动态演示产品如何使用。</p>
+        </article>
+        <article>
+          <h3>在线使用独立路由</h3>
+          <p>真实表单、日志、最近解析与结果展示统一迁移到 /use。</p>
+        </article>
+        <article>
+          <h3>前端模块拆分</h3>
+          <p>样式和脚本按页面与能力拆分，后续扩展平台更容易维护。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+</main>
+{% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', path='/js/home-demo.js') }}"></script>
+{% endblock %}

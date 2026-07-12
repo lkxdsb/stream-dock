@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+
+{% block body_class_attr %} class="use-body"{% endblock %}
+
+{% block page_styles %}
+<link rel="stylesheet" href="{{ url_for('static', path='/css/use.css') }}?v=20260708-log1" />
+{% endblock %}
+
+{% block page_content %}
+<main class="use-page">
+  <section class="use-workspace">
+    <div class="use-layout">
+      <aside class="use-sidebar" aria-label="功能导航">
+        <a class="use-sidebar-brand" href="/" aria-label="StreamDock 首页">
+          <span class="brand-mark"></span>
+          <span>StreamDock</span>
+        </a>
+        <div class="menu use-sidebar-menu">
+          <button class="menu-item active" type="button" data-use-tab="parse">
+            <span class="sidebar-item-icon mini-icon" aria-hidden="true">◉</span>
+            <span class="sidebar-item-copy"><strong class="sidebar-item-title">解析</strong><small class="sidebar-item-subtitle">粘贴链接</small></span>
+          </button>
+          <button class="menu-item" type="button" data-use-tab="downloading">
+            <span class="sidebar-item-icon mini-icon" aria-hidden="true">⇩</span>
+            <span class="sidebar-item-copy"><strong class="sidebar-item-title">下载中</strong><small class="sidebar-item-subtitle">当前任务</small></span>
+          </button>
+          <button class="menu-item" type="button" data-use-tab="completed">
+            <span class="sidebar-item-icon mini-icon" aria-hidden="true">☑</span>
+            <span class="sidebar-item-copy"><strong class="sidebar-item-title">已完成</strong><small class="sidebar-item-subtitle">历史记录</small></span>
+          </button>
+          <button class="menu-item" type="button" data-use-tab="settings">
+            <span class="sidebar-item-icon mini-icon" aria-hidden="true">⚙</span>
+            <span class="sidebar-item-copy"><strong class="sidebar-item-title">设置</strong><small class="sidebar-item-subtitle">偏好配置</small></span>
+          </button>
+        </div>
+      </aside>
+
+      <section class="use-main-shell" aria-label="StreamDock 在线使用工作台">
+        <div class="use-main-inner">
+          <div class="workspace-heading">
+            <div>
+              <p class="workspace-eyebrow">Online workspace</p>
+              <h2 class="workspace-title">在线解析工作台</h2>
+            </div>
+            <p class="workspace-description">粘贴链接，选择格式和保存目录，开始本地解析。</p>
+          </div>
+
+          <section class="use-panel-content active" data-use-panel="parse">
+            <form id="fetchForm" class="use-form">
+              <div class="input-card use-input-card">
+                <div class="placeholder use-placeholder">
+                  <span>🔗</span>
+                  <textarea id="link" name="link" class="link-input use-link-input" rows="2" placeholder="粘贴视频链接或分享文案到这里；多条链接可换行批量提交..."></textarea>
+                </div>
+                <button class="start use-start" id="submitButton" type="submit">开始解析</button>
+              </div>
+              <section class="media-probe-preview" id="mediaProbePreview" hidden aria-live="polite">
+                <div><span id="mediaProbePlatform">待识别</span><strong id="mediaProbeTitle">视频信息</strong></div>
+                <div class="media-probe-facts" id="mediaProbeFacts"></div>
+                <details class="media-stream-details"><summary>高级画质详情</summary><div class="media-stream-table" id="mediaStreamTable"></div></details>
+              </section>
+
+              <div class="fields use-fields">
+                <div class="field use-field">
+                  <label for="outputType">输出格式</label>
+                  <select id="outputType" name="outputType" class="select native-select">
+                    <optgroup label="音频">
+                      <option value="m4a">M4A 音频</option>
+                      <option value="mp3">MP3 音频</option>
+                      <option value="wav">WAV 音频</option>
+                      <option value="flac">FLAC 音频</option>
+                      <option value="aac">AAC 音频</option>
+                      <option value="ogg">OGG 音频</option>
+                      <option value="opus">Opus 音频</option>
+                    </optgroup>
+                    <optgroup label="视频">
+                      <option value="mp4" selected>MP4 视频</option>
+                      <option value="mkv">MKV 视频</option>
+                      <option value="mov">MOV 视频</option>
+                      <option value="webm">WebM 视频</option>
+                    </optgroup>
+                  </select>
+                </div>
+
+                <div class="field use-field">
+                  <label for="qualityPreset">清晰度</label>
+                  <select id="qualityPreset" name="videoQuality" class="select native-select" disabled>
+                    <option value="">最佳画质（自动）</option>
+                  </select>
+                  <div class="quality-hint" id="qualityHint">自动选择当前可达最高画质。</div>
+                </div>
+
+                <div class="field use-field use-field-path">
+                  <label for="outputPath">保存到</label>
+                  <div class="path-row">
+                    <input id="outputPath" name="outputPath" class="select native-input" type="text" value="~/Downloads/StreamDock" placeholder="~/Downloads/StreamDock" readonly />
+                    <button class="select-dir-button" id="selectOutputDirButton" type="button">选择目录</button>
+                  </div>
+                </div>
+
+                <div class="field field-wide use-field-cookie">
+                  <label for="bilibiliCookie">B站 Cookie（可选）</label>
+                  <div class="cookie-row">
+                    <input id="bilibiliCookie" name="bilibiliCookie" class="select native-input" type="text" value="" placeholder="仅在别人的机器无法读取本地浏览器登录态时填写" />
+                    <button class="gear button-reset use-gear" id="clearLogButton" type="button" aria-label="清空日志">⚙</button>
+                  </div>
+                </div>
+              </div>
+            </form>
+
+            <section class="use-recent-section">
+              <div class="recent-label use-section-label">最近解析</div>
+              <div class="recent use-recent-card" id="recentCard">
+                <div class="thumb"></div>
+                <div>
+                  <div class="recent-title" id="recentTitle">等待新的解析任务</div>
+                  <div class="recent-meta" id="statusText">复制链接 → 粘贴 → 开始解析</div>
+                  <div id="resultBox" class="result-box" hidden>
+                    <div class="result-row"><span>平台</span><code id="resultPlatform">-</code></div>
+                    <div class="result-row"><span>输出文件</span><code id="resultPath">-</code></div>
+                    <div class="result-row" id="resultQualityRow" hidden><span>质量结果</span><code id="resultQuality">-</code></div>
+                    <div class="result-row" id="resultWarningRow" hidden><span>质量提示</span><code id="resultWarning">-</code></div>
+                    <div class="result-row result-row-error" id="resultErrorRow" hidden><span>错误</span><code id="resultError">-</code></div>
+                  </div>
+                </div>
+                <div>
+                  <div class="done" id="statusBadge">• 待执行</div>
+                  <div class="tools"><span>▷</span><span>□</span><span>⋮</span></div>
+                </div>
+              </div>
+            </section>
+
+            <section class="use-log-section" id="updates">
+              <div class="recent-label use-section-label">运行日志</div>
+              <article class="info-card use-log-card">
+                <pre id="logOutput" class="debug-log">等待执行...</pre>
+              </article>
+            </section>
+          </section>
+
+          <section class="use-panel-content" data-use-panel="downloading" hidden>
+            <div class="task-toolbar">
+              <div><strong>当前任务</strong><span>视频任务采用保守队列，暂停不会中断正在处理的任务。</span></div>
+              <div class="task-toolbar-actions">
+                <button type="button" id="pauseMediaTasks">暂停队列</button>
+                <button type="button" id="resumeMediaTasks">继续队列</button>
+              </div>
+            </div>
+            <div class="task-list" id="downloadingTasks"></div>
+            <div class="empty-state" id="downloadingEmpty">当前没有下载任务。</div>
+          </section>
+
+          <section class="use-panel-content" data-use-panel="completed" hidden>
+            <div class="task-toolbar">
+              <div class="task-filter-row">
+                <input id="mediaTaskSearch" type="search" placeholder="搜索标题、平台或链接" aria-label="搜索解析任务" />
+                <select id="mediaTaskStatusFilter" aria-label="筛选任务状态">
+                  <option value="all">全部状态</option>
+                  <option value="completed">已完成</option>
+                  <option value="failed">失败</option>
+                  <option value="cancelled">已取消</option>
+                </select>
+              </div>
+              <div class="task-toolbar-actions"><button type="button" id="clearMediaFinished">清除历史记录</button></div>
+            </div>
+            <div class="task-list" id="completedTasks"></div>
+            <div class="empty-state" id="completedEmpty">还没有完成记录。</div>
+          </section>
+
+          <section class="use-panel-content" data-use-panel="settings" hidden>
+            <form class="settings-form" id="settingsForm">
+              <div class="settings-grid">
+                <div class="field use-field field-wide">
+                  <label for="settingsOutputPath">默认保存目录</label>
+                  <div class="path-row">
+                    <input id="settingsOutputPath" class="select native-input" type="text" value="~/Downloads/StreamDock" readonly />
+                    <button class="select-dir-button" id="settingsSelectOutputDirButton" type="button">选择目录</button>
+                  </div>
+                </div>
+                <div class="field use-field">
+                  <label for="settingsOutputType">默认输出格式</label>
+                  <select id="settingsOutputType" class="select native-select">
+                    <option value="mp4">MP4 视频</option>
+                    <option value="m4a">M4A 音频</option>
+                    <option value="mp3">MP3 音频</option>
+                    <option value="wav">WAV 音频</option>
+                    <option value="flac">FLAC 音频</option>
+                    <option value="mkv">MKV 视频</option>
+                    <option value="mov">MOV 视频</option>
+                    <option value="webm">WebM 视频</option>
+                  </select>
+                </div>
+                <div class="field use-field">
+                  <label for="settingsQualityMode">默认清晰度</label>
+                  <select id="settingsQualityMode" class="select native-select">
+                    <option value="best_quality">最佳画质（自动）</option>
+                    <option value="best_compatibility">最佳兼容（MP4 优先）</option>
+                    <option value="smallest_size">最小体积</option>
+                    <option value="manual">解析时手动选择</option>
+                  </select>
+                </div>
+                <div class="field use-field field-wide">
+                  <label for="settingsBilibiliCookie">B站 Cookie（可选）</label>
+                  <input id="settingsBilibiliCookie" class="select native-input" type="text" placeholder="保存到本机浏览器 localStorage，不上传到服务端" />
+                </div>
+              </div>
+              <button class="settings-save" type="submit">保存设置</button>
+            </form>
+            <section class="system-health-card" aria-label="本地环境状态">
+              <div class="system-health-head"><div><strong>本地环境状态</strong><span>检查输出目录、FFmpeg 与常用转换依赖。</span></div><button type="button" data-health-refresh>重新检查</button></div>
+              <div class="system-health-list" data-health-list></div>
+            </section>
+          </section>
+
+          <div class="privacy use-privacy">所有解析任务均在本地完成，保护你的隐私。</div>
+        </div>
+      </section>
+    </div>
+  </section>
+</main>
+{% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', path='/js/use-logs.js') }}"></script>
+<script src="{{ url_for('static', path='/js/use-result.js') }}"></script>
+<script src="{{ url_for('static', path='/js/use-quality.js') }}"></script>
+<script src="{{ url_for('static', path='/js/use-tabs.js') }}"></script>
+<script src="{{ url_for('static', path='/js/task-center.js') }}?v=20260711-task2"></script>
+<script src="{{ url_for('static', path='/js/health.js') }}?v=20260711-health1"></script>
+<script src="{{ url_for('static', path='/js/use-form.js') }}"></script>
+{% endblock %}

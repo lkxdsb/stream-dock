@@ -1,0 +1,132 @@
+.header {
+  height: 96px;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  backdrop-filter: blur(12px);
+  background: rgba(249, 245, 239, 0.72);
+  border-bottom: 1px solid rgba(50, 43, 36, 0.06);
+}
+
+.header-inner {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 310px 1fr 300px;
+  align-items: center;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.35px;
+}
+
+.brand-mark {
+  width: 22px;
+  height: 31px;
+  position: relative;
+  display: inline-block;
+}
+
+.brand-mark::before,
+.brand-mark::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  width: 8px;
+  height: 18px;
+  border: 2px solid #111;
+  transform: rotate(32deg);
+}
+
+.brand-mark::before {
+  top: 0;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+}
+
+.brand-mark::after {
+  bottom: 0;
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  transform: rotate(32deg) scaleY(-1);
+}
+
+.nav {
+  display: flex;
+  justify-content: center;
+  gap: 56px;
+  color: #171717;
+  font-size: 14px;
+  font-weight: 520;
+}
+
+.nav-link {
+  position: relative;
+  padding: 6px 0;
+}
+
+.nav-link.active::after,
+.nav-link:hover::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -8px;
+  height: 2px;
+  background: rgba(23, 23, 23, 0.65);
+}
+
+.header-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16px;
+  align-items: center;
+}
+
+.top-btn {
+  height: 40px;
+  border: 0;
+  border-radius: 12px;
+  padding: 0 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 560;
+}
+
+.top-btn.github {
+  background: rgba(27, 27, 27, 0.07);
+  color: #171717;
+}
+
+.github-mark {
+  width: 16px;
+  height: 16px;
+  display: block;
+  flex: 0 0 auto;
+}
+
+.top-btn.download {
+  background: #171717;
+  color: #fff;
+  box-shadow: 0 10px 22px rgba(0,0,0,0.13);
+}
+
+.use-body .header-inner,
+.platforms-body .header-inner {
+  width: 100%;
+  padding-left: 280px;
+  padding-right: 64px;
+  grid-template-columns: 0 minmax(0, 1fr) 300px;
+}
+
+.use-body .header .brand,
+.platforms-body .header .brand {
+  visibility: hidden;
+  pointer-events: none;
+}

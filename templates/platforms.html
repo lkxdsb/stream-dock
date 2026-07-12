@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block body_class_attr %} class="platforms-body"{% endblock %}
+
+{% block page_styles %}
+<link rel="stylesheet" href="{{ url_for('static', path='/css/platforms.css') }}?v=20260708-icons1" />
+{% endblock %}
+
+{% block page_content %}
+<main class="platforms-page" data-platforms="抖音 B站 快手 小红书 微博 视频号 YouTube TikTok X / Twitter">
+  <section class="platforms-workspace" aria-label="平台能力矩阵">
+    <div class="container platforms-layout">
+      <aside class="platform-category-nav" aria-label="平台分类">
+        <a class="platform-sidebar-brand" href="/" aria-label="StreamDock 首页">
+          <span class="brand-mark"></span>
+          <span>StreamDock</span>
+        </a>
+        <div class="platform-category-list">
+          <button class="platform-category active" type="button" data-platform-category="domestic">
+            <span class="sidebar-item-icon platform-category-icon" aria-hidden="true">⌂</span>
+            <span class="sidebar-item-copy platform-category-copy"><strong class="sidebar-item-title">国内平台</strong><small class="sidebar-item-subtitle">抖音 / B站 / 快手</small></span>
+          </button>
+          <button class="platform-category" type="button" data-platform-category="overseas">
+            <span class="sidebar-item-icon platform-category-icon" aria-hidden="true">◎</span>
+            <span class="sidebar-item-copy platform-category-copy"><strong class="sidebar-item-title">海外平台</strong><small class="sidebar-item-subtitle">YouTube / TikTok / X</small></span>
+          </button>
+          <button class="platform-category" type="button" data-platform-category="experimental">
+            <span class="sidebar-item-icon platform-category-icon" aria-hidden="true">✧</span>
+            <span class="sidebar-item-copy platform-category-copy"><strong class="sidebar-item-title">实验支持</strong><small class="sidebar-item-subtitle">回退链路 / 登录态增强</small></span>
+          </button>
+        </div>
+      </aside>
+
+      <section class="platform-matrix-shell">
+        <div class="workspace-heading">
+          <div>
+            <p class="workspace-eyebrow">Capability matrix</p>
+            <h2 class="workspace-title">平台能力矩阵</h2>
+          </div>
+          <p class="workspace-description">点击任意平台查看当前解析策略与限制说明。</p>
+        </div>
+
+        <div class="matrix-table" id="platformMatrix" aria-live="polite">
+          <noscript>请启用 JavaScript 查看可交互的平台能力矩阵。</noscript>
+        </div>
+
+        <article class="platform-detail" id="platformDetail" aria-live="polite">
+          <div class="detail-empty">选择一个平台，查看解析能力、登录态依赖与画质策略。</div>
+        </article>
+      </section>
+    </div>
+  </section>
+</main>
+{% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', path='/js/platforms.js') }}?v=20260711-status1"></script>
+{% endblock %}

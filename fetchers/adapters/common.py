@@ -103,6 +103,28 @@ def classify_generic_media_url(url: str | None) -> str | None:
     return None
 
 
+def classify_browser_response_candidate(
+    url: str | None,
+    *,
+    resource_type: str | None = None,
+    content_type: str | None = None,
+) -> str | None:
+    if not url:
+        return None
+
+    normalized_resource_type = (resource_type or "").lower()
+    normalized_content_type = (content_type or "").lower()
+
+    if normalized_content_type.startswith("video/"):
+        return "video"
+    if normalized_content_type.startswith("audio/"):
+        return "audio"
+    if normalized_content_type.startswith("image/") or normalized_resource_type == "image":
+        return None
+
+    return classify_generic_media_url(url)
+
+
 def choose_generic_capture(
     *,
     candidate_video_url: str | None,
@@ -139,15 +161,19 @@ def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int
     candidate_audio_url: str | None = None
     page = context.new_page()
 
-    def on_request(req: Any) -> None:
+    def on_response(resp: Any) -> None:
         nonlocal candidate_video_url, candidate_audio_url
-        media_kind = classify_generic_media_url(req.url)
+        media_kind = classify_browser_response_candidate(
+            resp.url,
+            resource_type=getattr(resp.request, "resource_type", None),
+            content_type=(resp.headers or {}).get("content-type"),
+        )
         if media_kind == "video":
-            candidate_video_url = req.url
+            candidate_video_url = resp.url
         elif media_kind == "audio":
-            candidate_audio_url = req.url
+            candidate_audio_url = resp.url
 
-    page.on("request", on_request)
+    page.on("response", on_response)
     page.goto(link, wait_until="domcontentloaded", timeout=120_000)
     page.wait_for_timeout(wait_ms)
 

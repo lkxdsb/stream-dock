@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import contextvars
 import json
+import os
 import re
 from typing import Any
 from urllib.parse import urlparse
 
+import browser_cookie3
 import requests
 
 from fetchers.adapters.base import BasePlatformAdapter
@@ -19,6 +22,105 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 )
 PLAYURL_ENDPOINT = "https://api.bilibili.com/x/player/playurl"
+
+MANUAL_COOKIE_ENV = "BILIBILI_COOKIE"
+MANUAL_COOKIE_FILE_ENV = "BILIBILI_COOKIE_FILE"
+MANUAL_COOKIE_OVERRIDE = contextvars.ContextVar("bilibili_manual_cookie_override", default=None)
+MANUAL_COOKIE_FILE_OVERRIDE = contextvars.ContextVar("bilibili_manual_cookie_file_override", default=None)
+
+
+def parse_cookie_header(raw_cookie: str) -> dict[str, str]:
+    cookies: dict[str, str] = {}
+    for part in raw_cookie.split(";"):
+        item = part.strip()
+        if not item or "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key:
+            cookies[key] = value
+    return cookies
+
+
+def load_manual_cookies_for_bilibili() -> dict[str, str] | None:
+    override_cookie = MANUAL_COOKIE_OVERRIDE.get()
+    if isinstance(override_cookie, str) and override_cookie.strip():
+        parsed = parse_cookie_header(override_cookie.strip())
+        if parsed:
+            return parsed
+
+    override_cookie_file = MANUAL_COOKIE_FILE_OVERRIDE.get()
+    if isinstance(override_cookie_file, str) and override_cookie_file.strip():
+        try:
+            content = open(override_cookie_file.strip(), "r", encoding="utf-8").read().strip()
+        except OSError:
+            return None
+        parsed = parse_cookie_header(content)
+        if parsed:
+            return parsed
+
+    raw_cookie = os.environ.get(MANUAL_COOKIE_ENV, "").strip()
+    if raw_cookie:
+        parsed = parse_cookie_header(raw_cookie)
+        if parsed:
+            return parsed
+
+    cookie_file = os.environ.get(MANUAL_COOKIE_FILE_ENV, "").strip()
+    if cookie_file:
+        try:
+            content = open(cookie_file, "r", encoding="utf-8").read().strip()
+        except OSError:
+            return None
+        parsed = parse_cookie_header(content)
+        if parsed:
+            return parsed
+    return None
+
+
+def set_manual_cookie_overrides(raw_cookie: str | None = None, cookie_file: str | None = None) -> tuple[contextvars.Token, contextvars.Token]:
+    return (
+        MANUAL_COOKIE_OVERRIDE.set(raw_cookie),
+        MANUAL_COOKIE_FILE_OVERRIDE.set(cookie_file),
+    )
+
+
+def reset_manual_cookie_overrides(tokens: tuple[contextvars.Token, contextvars.Token]) -> None:
+    cookie_token, cookie_file_token = tokens
+    MANUAL_COOKIE_OVERRIDE.reset(cookie_token)
+    MANUAL_COOKIE_FILE_OVERRIDE.reset(cookie_file_token)
+
+
+def try_load_browser_cookie(loader) -> Any | None:
+    try:
+        cookies = loader(domain_name="bilibili.com")
+    except Exception:
+        return None
+    if cookies is None:
+        return None
+    try:
+        if len(list(cookies)) == 0:
+            return None
+    except Exception:
+        pass
+    return cookies
+
+
+def load_bilibili_cookies() -> tuple[Any | None, str | None]:
+    manual_cookies = load_manual_cookies_for_bilibili()
+    if manual_cookies:
+        return manual_cookies, "manual"
+
+    browser_loaders = [
+        ("chrome", browser_cookie3.chrome),
+        ("edge", browser_cookie3.edge),
+        ("brave", browser_cookie3.brave),
+    ]
+    for source, loader in browser_loaders:
+        cookies = try_load_browser_cookie(loader)
+        if cookies:
+            return cookies, source
+    return None, None
 
 
 def extract_first_url(raw_text: str) -> str:
@@ -79,9 +181,11 @@ class BilibiliAdapter(BasePlatformAdapter):
         return candidate
 
     def fetch_media(self, normalized_link: str) -> MediaFetchResult:
+        cookies, cookie_source = load_bilibili_cookies()
         page_response = requests.get(
             normalized_link,
             headers={"User-Agent": USER_AGENT, "Referer": "https://www.bilibili.com/"},
+            cookies=cookies,
             timeout=30,
         )
         page_response.raise_for_status()
@@ -98,7 +202,7 @@ class BilibiliAdapter(BasePlatformAdapter):
         if not bvid or cid is None:
             raise RuntimeError("Failed to extract Bilibili bvid/cid from page state")
 
-        playurl_payload = self._fetch_playurl(bvid=bvid, cid=cid, referer=final_url)
+        playurl_payload = self._fetch_playurl(bvid=bvid, cid=cid, referer=final_url, cookies=cookies)
         dash = (playurl_payload.get("dash") or {})
         video_streams = self._build_video_streams(
             dash.get("video") or [],
@@ -136,7 +240,8 @@ class BilibiliAdapter(BasePlatformAdapter):
             preferred_video=preferred_video,
             preferred_audio=preferred_audio,
             metadata={
-                "capture_strategy": "web-playurl",
+                "capture_strategy": "web-playurl-cookie" if cookies else "web-playurl",
+                "cookie_source": cookie_source,
                 "media_kind": "video",
                 "bvid": bvid,
                 "cid": cid,
@@ -149,7 +254,7 @@ class BilibiliAdapter(BasePlatformAdapter):
             raise RuntimeError("Failed to locate Bilibili initial state JSON")
         return json.loads(match.group(1))
 
-    def _fetch_playurl(self, *, bvid: str, cid: int, referer: str) -> dict[str, Any]:
+    def _fetch_playurl(self, *, bvid: str, cid: int, referer: str, cookies=None) -> dict[str, Any]:
         response = requests.get(
             PLAYURL_ENDPOINT,
             params={
@@ -163,6 +268,7 @@ class BilibiliAdapter(BasePlatformAdapter):
                 "User-Agent": USER_AGENT,
                 "Referer": referer,
             },
+            cookies=cookies,
             timeout=30,
         )
         response.raise_for_status()

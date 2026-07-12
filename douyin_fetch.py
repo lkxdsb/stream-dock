@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from fetchers.adapters.douyin import (
     USER_AGENT,
     capture_media_no_login,
@@ -27,7 +28,12 @@ SUPPORTED_OUTPUT_TYPES = set(OUTPUT_FORMATS)
 
 
 def log(message: str) -> None:
-    print(f"[douyin-fetch] {message}")
+    print(f"[douyin-fetch] {message}", flush=True)
+
+
+def progress(value: float | None, stage: str) -> None:
+    value_text = '' if value is None else str(round(value, 1))
+    log(f"progress: {value_text}|{stage}")
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -41,22 +47,45 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(SUPPORTED_OUTPUT_TYPES),
         help="Output file type: m4a, mp3, or mp4",
     )
+    parser.add_argument(
+        "--videoQuality",
+        required=False,
+        help="Preferred video quality label returned by the platform adapter",
+    )
+    parser.add_argument(
+        "--bilibiliCookie",
+        required=False,
+        help="Optional raw Bilibili cookie header for unlocking higher quality",
+    )
+    parser.add_argument(
+        "--bilibiliCookieFile",
+        required=False,
+        help="Optional file path containing raw Bilibili cookie header",
+    )
     return parser
 
 
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if args.bilibiliCookie:
+        os.environ["BILIBILI_COOKIE"] = args.bilibiliCookie
+    if args.bilibiliCookieFile:
+        os.environ["BILIBILI_COOKIE_FILE"] = args.bilibiliCookieFile
 
     result = run_pipeline(
         raw_link=args.link,
         export_request=ExportRequest(output_path=args.outputPath, output_type=args.outputType),
+        video_quality=args.videoQuality,
+        progress_callback=progress,
     )
     log(f"platform: {result['platform']}")
     log(f"normalized link: {result['normalized_link']}")
     log(f"capture strategy: {result['capture_strategy']}")
     log(f"captured media kind: {result['media_kind']}")
     log(f"final page: {result['final_url']}")
+    if result.get("selected_video_quality"):
+        log(f"selected video quality: {result['selected_video_quality']}")
     log(f"output file: {result['output_file']}")
     return 0
 

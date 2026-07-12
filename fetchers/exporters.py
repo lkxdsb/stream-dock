@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+FFMPEG_EXPORT_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_FFMPEG_EXPORT_TIMEOUT_SECONDS', str(20 * 60)))
 
 
 @dataclass(frozen=True)
@@ -52,12 +55,16 @@ def validate_output_request(*, media_kind: str, output_type: str) -> None:
 
 
 def run_ffmpeg(args: list[str]) -> None:
-    subprocess.run(
-        args,
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    try:
+        subprocess.run(
+            args,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=FFMPEG_EXPORT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f'ffmpeg 导出超时，已停止任务（{FFMPEG_EXPORT_TIMEOUT_SECONDS} 秒）') from exc
 
 
 def resolve_audio_source(source_video: Path | None, source_audio: Path | None) -> Path:

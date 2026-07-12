@@ -88,24 +88,16 @@ class KuaishouAdapter(BasePlatformAdapter):
         if photo.get("singlePicture") or photo.get("type") != 1:
             raise RuntimeError("Kuaishou page is not a normal video")
 
-        main_mv_urls = photo.get("mainMvUrls") or []
-        if not main_mv_urls:
-            raise RuntimeError("No Kuaishou mainMvUrls found")
-        video_url = (main_mv_urls[0] or {}).get("url")
-        if not video_url:
-            raise RuntimeError("No Kuaishou video url found in mainMvUrls")
-
-        representation = self._extract_preferred_representation(photo)
-        preferred_video = MediaStream(
-            url=video_url,
-            stream_type="video",
-            container="mp4",
-            codec=representation.get("videoCodec") or representation.get("codecs"),
-            width=representation.get("width") or photo.get("width"),
-            height=representation.get("height") or photo.get("height"),
-            bitrate=representation.get("avgBitrate"),
-            filesize=None,
-            quality_label=representation.get("qualityLabel"),
+        video_streams = self._build_video_streams(photo)
+        if not video_streams:
+            raise RuntimeError("No Kuaishou video streams found")
+        preferred_video = max(
+            video_streams,
+            key=lambda stream: (
+                stream.height or 0,
+                stream.width or 0,
+                stream.bitrate or 0,
+            ),
         )
 
         return MediaFetchResult(
@@ -116,7 +108,7 @@ class KuaishouAdapter(BasePlatformAdapter):
             final_url=response.url,
             cover_url=((photo.get("coverUrls") or [{}])[0].get("url")),
             author=photo.get("userName"),
-            video_streams=[preferred_video],
+            video_streams=video_streams,
             audio_streams=[],
             preferred_video=preferred_video,
             preferred_audio=None,
@@ -194,3 +186,63 @@ class KuaishouAdapter(BasePlatformAdapter):
                 if current_score > best_score:
                     best = representation
         return best or {}
+
+    def _build_video_streams(self, photo: dict[str, object]) -> list[MediaStream]:
+        manifest = photo.get("manifest") or {}
+        adaptation_sets = manifest.get("adaptationSet") or []
+        streams: list[MediaStream] = []
+        seen_urls: set[str] = set()
+
+        for adaptation in adaptation_sets:
+            if not isinstance(adaptation, dict):
+                continue
+            for representation in adaptation.get("representation") or []:
+                if not isinstance(representation, dict):
+                    continue
+                stream_url = representation.get("url")
+                if not stream_url or stream_url in seen_urls:
+                    continue
+                streams.append(
+                    MediaStream(
+                        url=stream_url,
+                        stream_type="video",
+                        container="m3u8" if str(stream_url).lower().endswith(".m3u8") else "mp4",
+                        codec=representation.get("videoCodec") or representation.get("codecs"),
+                        width=representation.get("width") or photo.get("width"),
+                        height=representation.get("height") or photo.get("height"),
+                        bitrate=representation.get("avgBitrate"),
+                        filesize=None,
+                        quality_label=representation.get("qualityLabel"),
+                    )
+                )
+                seen_urls.add(stream_url)
+
+        if len(streams) > 1:
+            return streams
+
+        main_mv_urls = photo.get("mainMvUrls") or []
+        video_url = next(
+            (
+                item.get("url")
+                for item in main_mv_urls
+                if isinstance(item, dict) and item.get("url")
+            ),
+            None,
+        )
+        if not video_url:
+            return streams
+
+        representation = self._extract_preferred_representation(photo)
+        return [
+            MediaStream(
+                url=video_url,
+                stream_type="video",
+                container="mp4",
+                codec=representation.get("videoCodec") or representation.get("codecs"),
+                width=representation.get("width") or photo.get("width"),
+                height=representation.get("height") or photo.get("height"),
+                bitrate=representation.get("avgBitrate"),
+                filesize=None,
+                quality_label=representation.get("qualityLabel"),
+            )
+        ]

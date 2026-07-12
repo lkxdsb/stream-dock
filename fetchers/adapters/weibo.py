@@ -65,7 +65,7 @@ class WeiboAdapter(BasePlatformAdapter):
                 author=((status.get("user") or {}).get("screen_name")),
                 video_streams=video_streams,
                 audio_streams=[],
-                preferred_video=video_streams[0],
+                preferred_video=self._choose_preferred_video(video_streams),
                 preferred_audio=None,
                 metadata={
                     "resolve_method": "embedded-json",
@@ -94,7 +94,10 @@ class WeiboAdapter(BasePlatformAdapter):
             candidates.append((media_info["mp4_sd_url"], "标清"))
 
         streams: list[MediaStream] = []
+        seen_urls: set[str] = set()
         for url, quality in candidates:
+            if url in seen_urls:
+                continue
             streams.append(
                 MediaStream(
                     url=url,
@@ -103,7 +106,14 @@ class WeiboAdapter(BasePlatformAdapter):
                     quality_label=quality,
                 )
             )
+            seen_urls.add(url)
         return streams
+
+    def _choose_preferred_video(self, streams: list[MediaStream]) -> MediaStream:
+        return max(
+            streams,
+            key=lambda stream: 1 if stream.quality_label == "高清" else 0,
+        )
 
     def _build_fallback_result(self, normalized_link: str, capture: dict[str, Any]) -> MediaFetchResult:
         video_streams = [MediaStream(url=capture["video_url"], stream_type="video", container="mp4")]

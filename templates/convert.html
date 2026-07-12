@@ -1,0 +1,400 @@
+{% extends "base.html" %}
+
+{% block body_class_attr %} class="convert-body"{% endblock %}
+
+{% block page_styles %}
+<link rel="stylesheet" href="{{ url_for('static', path='/css/convert.css') }}?v=20260708-world3" />
+{% endblock %}
+
+{% block page_content %}
+<main class="convert-page">
+  <section class="convert-workspace">
+    <aside class="convert-sidebar" aria-label="文件转换功能导航">
+      <a class="convert-sidebar-brand" href="/" aria-label="StreamDock 首页">
+        <span class="brand-mark"></span>
+        <span>StreamDock</span>
+      </a>
+
+      <nav class="convert-nav" aria-label="文件转换工作区">
+        <div class="convert-nav-section">
+          <p>常用</p>
+          <button class="convert-nav-item active" type="button" data-convert-nav="workbench">
+            <span class="sidebar-item-icon" aria-hidden="true">◎</span>
+            <span class="sidebar-item-copy"><strong class="sidebar-item-title">文件转换中心</strong><small class="sidebar-item-subtitle">上传并转换文件</small></span>
+          </button>
+          <button class="convert-nav-item" type="button" data-convert-nav="tasks">
+            <span class="sidebar-item-icon" aria-hidden="true">↓</span>
+            <span class="sidebar-item-copy"><strong class="sidebar-item-title">转换任务</strong><small class="sidebar-item-subtitle">进行中 / 已完成</small></span>
+          </button>
+        </div>
+
+        <div class="convert-nav-section">
+          <p>能力</p>
+          <button class="convert-nav-item" type="button" data-convert-nav="matrix">
+            <span class="sidebar-item-icon" aria-hidden="true">◇</span>
+            <span class="sidebar-item-copy"><strong class="sidebar-item-title">转换能力矩阵</strong><small class="sidebar-item-subtitle">查看全部格式</small></span>
+          </button>
+          <button class="convert-nav-item" type="button" data-convert-nav="tools">
+            <span class="sidebar-item-icon" aria-hidden="true">↗</span>
+            <span class="sidebar-item-copy"><strong class="sidebar-item-title">专业工具推荐</strong><small class="sidebar-item-subtitle">PDF / OCR / 高保真</small></span>
+          </button>
+        </div>
+
+        <div class="convert-nav-section">
+          <p>设置</p>
+          <button class="convert-nav-item" type="button" data-convert-nav="settings">
+            <span class="sidebar-item-icon" aria-hidden="true">⚙</span>
+            <span class="sidebar-item-copy"><strong class="sidebar-item-title">转换设置</strong><small class="sidebar-item-subtitle">默认路径 / 输出偏好</small></span>
+          </button>
+        </div>
+      </nav>
+    </aside>
+
+    <section class="convert-main-shell">
+      <div class="convert-main-inner">
+        <section class="convert-panel active" data-convert-panel="workbench">
+          <header class="workspace-heading">
+            <div>
+              <p class="workspace-eyebrow">FILE CONVERSION</p>
+              <h1 class="workspace-title">文件转换中心</h1>
+            </div>
+            <p class="workspace-description">上传文件，选择输出格式和保存目录，在本地完成成熟稳定的转换。</p>
+          </header>
+
+          <section class="convert-card convert-workbench" aria-label="本地文件转换工作台">
+            <div class="convert-drop" id="convertDropZone">
+              <input class="convert-file-input" id="convertFileInput" type="file" multiple />
+              <div>
+                <strong id="convertFileTitle">选择或拖入文件</strong>
+                <span id="convertFileMeta">可一次选择多个同类型文件，使用同一转换路径批量处理</span>
+                <div class="convert-file-list" id="convertFileList" aria-live="polite"></div>
+              </div>
+              <button class="convert-secondary" id="convertPickButton" type="button">选择文件</button>
+            </div>
+
+            <div class="convert-fields">
+              <label class="convert-field">
+                <span>输入格式</span>
+                <input id="convertInputType" type="text" readonly placeholder="自动识别" />
+              </label>
+              <label class="convert-field">
+                <span>输出格式</span>
+                <select id="convertOutputType"><option value="">请先选择文件</option></select>
+              </label>
+              <label class="convert-field convert-output-field">
+                <span>保存到</span>
+                <div class="convert-path-row">
+                  <input id="convertOutputPath" type="text" value="~/Downloads/StreamDock" readonly />
+                  <button class="convert-secondary" id="convertSelectDirButton" type="button">选择目录</button>
+                </div>
+              </label>
+            </div>
+
+            <div class="convert-actions">
+              <button class="convert-primary" id="convertStartButton" type="button">开始转换</button>
+              <span class="convert-hint" id="convertHint">本地稳定路径会直接转换；推荐厂商路径只展示说明。</span>
+            </div>
+          </section>
+
+          <section class="convert-status-grid">
+            <article class="convert-card">
+              <h2>转换结果</h2>
+              <div class="convert-result" id="convertResultBox">
+                <strong>等待转换任务</strong>
+                <span>选择文件后，这里会显示输出文件或专业工具建议。</span>
+              </div>
+            </article>
+            <article class="convert-card">
+              <h2>运行日志</h2>
+              <pre class="convert-log" id="convertLogOutput">等待执行...</pre>
+            </article>
+          </section>
+        </section>
+
+        <section class="convert-panel" data-convert-panel="tasks">
+          <header class="workspace-heading">
+            <div>
+              <p class="workspace-eyebrow">TASKS</p>
+              <h1 class="workspace-title">转换任务</h1>
+            </div>
+            <p class="workspace-description">这里会集中展示正在转换、最近完成和失败的任务，批量转换会按文件逐条记录。</p>
+          </header>
+          <div class="task-toolbar">
+            <div class="task-filter-row">
+              <input id="convertTaskSearch" type="search" placeholder="搜索文件名或转换格式" aria-label="搜索转换任务" />
+              <select id="convertTaskStatusFilter" aria-label="筛选转换任务状态">
+                <option value="all">全部状态</option>
+                <option value="running">进行中</option>
+                <option value="completed">已完成</option>
+                <option value="failed">失败</option>
+              </select>
+            </div>
+            <div class="task-toolbar-actions"><button type="button" id="clearConvertFinished">清除历史记录</button></div>
+          </div>
+          <section class="convert-task-board convert-task-board-live">
+            <div class="task-list" id="convertTaskList" data-task-list="convert"></div>
+            <div class="empty-state" id="convertTaskEmpty">当前没有转换任务。批量转换或单文件转换完成后会显示在这里。</div>
+          </section>
+        </section>
+
+        <section class="convert-panel" data-convert-panel="matrix">
+          <header class="workspace-heading">
+            <div>
+              <p class="workspace-eyebrow">CAPABILITY MATRIX</p>
+              <h1 class="workspace-title">转换能力矩阵</h1>
+            </div>
+            <p class="workspace-description" id="convertWorkspaceDescription">查看全部格式能力，确认哪些路径可本地执行，哪些建议专业工具。</p>
+          </header>
+
+          <section class="convert-card convert-filter-card" aria-label="能力矩阵筛选">
+            <div class="convert-filter-block">
+              <span>能力等级</span>
+              <div class="convert-filter-row">
+                <button class="convert-filter-chip active" type="button" data-convert-filter="all">全部 <em data-count-for="all">0</em></button>
+                <button class="convert-filter-chip" type="button" data-convert-filter="stable">本地稳定 <em data-count-for="stable">0</em></button>
+                <button class="convert-filter-chip" type="button" data-convert-filter="basic">本地基础 <em data-count-for="basic">0</em></button>
+                <button class="convert-filter-chip" type="button" data-convert-filter="vendor">推荐厂商 <em data-count-for="vendor">0</em></button>
+              </div>
+            </div>
+            <div class="convert-filter-block">
+              <span>文件类型</span>
+              <div class="convert-filter-row">
+                <button class="convert-filter-chip active" type="button" data-convert-type="all">全部类型 <em data-count-for="type-all">0</em></button>
+                <button class="convert-filter-chip" type="button" data-convert-type="document">文档 <em data-count-for="document">0</em></button>
+                <button class="convert-filter-chip" type="button" data-convert-type="image">图片 <em data-count-for="image">0</em></button>
+                <button class="convert-filter-chip" type="button" data-convert-type="media">音视频 <em data-count-for="media">0</em></button>
+                <button class="convert-filter-chip" type="button" data-convert-type="subtitle">字幕 <em data-count-for="subtitle">0</em></button>
+                <button class="convert-filter-chip" type="button" data-convert-type="archive">压缩包 <em data-count-for="archive">0</em></button>
+              </div>
+            </div>
+          </section>
+
+          <section class="convert-matrix-section" aria-label="转换能力矩阵">
+            <section class="convert-card convert-world-card" aria-label="转换能力世界模型">
+              <div class="convert-world-rail" aria-hidden="true">
+                <span class="rail-active">◆</span>
+                <span>◇</span>
+                <span>◎</span>
+              </div>
+
+              <section class="convert-world-map">
+                <div class="convert-world-summary">
+                  <strong>Conversion World Model™</strong>
+                  <span><b id="convertOrbitTotal">0</b> total routes</span>
+                  <small>5 file type clusters</small>
+                </div>
+
+                <div class="convert-world-cloud" id="convertWorldCloud" aria-label="动态转换能力节点云">
+                  <canvas id="convertWorldCanvas"></canvas>
+                </div>
+
+
+                <div class="convert-world-search">
+                  <p>CONVERSION SEARCH ENGINE™</p>
+                  <div class="convert-world-pills">
+                    <button class="active" type="button" data-convert-type="all">All</button>
+                    <button type="button" data-convert-type="document">Document</button>
+                    <button type="button" data-convert-type="image">Image</button>
+                    <button type="button" data-convert-type="media">Media</button>
+                    <button type="button" data-convert-type="subtitle">Subtitle</button>
+                    <button type="button" data-convert-type="archive">Archive</button>
+                  </div>
+                  <label>
+                    <input id="convertWorldSearchInput" type="search" placeholder="Search formats or ask a question..." />
+                    <span>➤</span>
+                  </label>
+                </div>
+              </section>
+
+              <aside class="convert-world-panel">
+                <h2>Details panel</h2>
+                <p>NODE TYPES</p>
+                <div class="convert-world-types">
+                  <button class="active" type="button" data-convert-type="all"><span>Select all</span><strong data-count-for="type-all">0</strong></button>
+                  <button type="button" data-convert-type="document"><span><i class="type-document"></i>Document</span><strong data-count-for="document">0</strong></button>
+                  <button type="button" data-convert-type="image"><span><i class="type-image"></i>Image</span><strong data-count-for="image">0</strong></button>
+                  <button type="button" data-convert-type="media"><span><i class="type-media"></i>Media</span><strong data-count-for="media">0</strong></button>
+                  <button type="button" data-convert-type="subtitle"><span><i class="type-subtitle"></i>Subtitle</span><strong data-count-for="subtitle">0</strong></button>
+                  <button type="button" data-convert-type="archive"><span><i class="type-archive"></i>Archive</span><strong data-count-for="archive">0</strong></button>
+                </div>
+
+                <article class="convert-world-popover" id="convertWorldPopover">
+                  <div>
+                    <strong id="convertOrbitTitle">全部转换路径</strong>
+                    <span id="convertOrbitText">选择一个节点或文件类型，查看具体转换路径。</span>
+                  </div>
+                  <div class="convert-orbit-routes" id="convertOrbitRoutes"></div>
+                </article>
+              </aside>
+            </section>
+
+            <div class="convert-matrix" id="convertCapabilityMatrix"></div>
+          </section>
+        </section>
+
+        <section class="convert-panel" data-convert-panel="tools">
+          <header class="workspace-heading">
+            <div>
+              <p class="workspace-eyebrow">PRO TOOLS</p>
+              <h1 class="workspace-title">专业工具推荐</h1>
+            </div>
+            <p class="workspace-description">PDF、OCR、复杂排版和高保真场景不强行本地转换，明确推荐更可靠的专业工具。</p>
+          </header>
+
+          <section class="convert-tools-hero convert-card" aria-label="专业工具选择逻辑">
+            <div class="convert-tools-copy">
+              <p class="workspace-eyebrow">DECISION GUIDE</p>
+              <h2>不是所有转换都适合本地做。</h2>
+              <p>本地转换优先处理格式明确、结构简单、可稳定复现的任务；遇到 OCR、复杂 PDF、CAD、设计稿和高保真排版，就推荐成熟厂商工具，避免产出不可控。</p>
+            </div>
+            <div class="convert-tools-orbit" aria-hidden="true">
+              <span class="tool-orbit-core">LOCAL</span>
+              <span class="tool-orbit-dot dot-pdf">PDF</span>
+              <span class="tool-orbit-dot dot-ocr">OCR</span>
+              <span class="tool-orbit-dot dot-cad">CAD</span>
+              <span class="tool-orbit-dot dot-ai">AI</span>
+            </div>
+          </section>
+
+          <section class="convert-pro-grid" aria-label="专业工具推荐列表">
+            <article class="convert-pro-card">
+              <div class="convert-pro-icon">PDF</div>
+              <div>
+                <span class="convert-pro-tag">复杂排版</span>
+                <h2>PDF → Word / Excel / PPT</h2>
+                <p>适合合同、论文、扫描混排、表格抽取和需要保持版式的 PDF。</p>
+              </div>
+              <div class="convert-vendor-list">
+                <a href="https://www.adobe.com/acrobat.html" target="_blank" rel="noopener noreferrer">Adobe Acrobat ↗</a><a href="https://www.wps.com/" target="_blank" rel="noopener noreferrer">WPS ↗</a><a href="https://smallpdf.com/" target="_blank" rel="noopener noreferrer">Smallpdf ↗</a><a href="https://www.ilovepdf.com/" target="_blank" rel="noopener noreferrer">iLovePDF ↗</a>
+              </div>
+              <footer><strong>建议原因</strong><span>版式还原、表格识别、批注和字体处理更稳定。</span></footer>
+            </article>
+
+            <article class="convert-pro-card featured">
+              <div class="convert-pro-icon">OCR</div>
+              <div>
+                <span class="convert-pro-tag">扫描识别</span>
+                <h2>扫描件 OCR</h2>
+                <p>适合图片文字、扫描 PDF、票据、合同和多语言文档识别。</p>
+              </div>
+              <div class="convert-vendor-list">
+                <a href="https://pdf.abbyy.com/" target="_blank" rel="noopener noreferrer">ABBYY FineReader ↗</a><a href="https://www.adobe.com/acrobat.html" target="_blank" rel="noopener noreferrer">Adobe Acrobat ↗</a><a href="https://www.microsoft.com/microsoft-365" target="_blank" rel="noopener noreferrer">Microsoft 365 ↗</a>
+              </div>
+              <footer><strong>建议原因</strong><span>OCR 准确率和版面分析依赖专业模型，本地基础路线容易漏字。</span></footer>
+            </article>
+
+            <article class="convert-pro-card">
+              <div class="convert-pro-icon">CAD</div>
+              <div>
+                <span class="convert-pro-tag">高保真导出</span>
+                <h2>设计 / CAD 高保真导出</h2>
+                <p>适合设计稿、矢量图、工程图、图层、标注和印刷级导出。</p>
+              </div>
+              <div class="convert-vendor-list">
+                <a href="https://www.figma.com/" target="_blank" rel="noopener noreferrer">Figma ↗</a><a href="https://www.adobe.com/products/illustrator.html" target="_blank" rel="noopener noreferrer">Illustrator ↗</a><a href="https://www.autodesk.com/products/autocad/overview" target="_blank" rel="noopener noreferrer">AutoCAD ↗</a><a href="https://cloudconvert.com/" target="_blank" rel="noopener noreferrer">CloudConvert ↗</a>
+              </div>
+              <footer><strong>建议原因</strong><span>图层、字体、滤镜、单位和色彩管理需要原生工具处理。</span></footer>
+            </article>
+          </section>
+
+          <section class="convert-tools-flow convert-card" aria-label="本地转换与专业工具判断流程">
+            <div>
+              <p class="workspace-eyebrow">ROUTING</p>
+              <h2>推荐判断路径</h2>
+            </div>
+            <div class="convert-route-steps">
+              <span>识别文件类型</span>
+              <i></i>
+              <span>判断是否高保真</span>
+              <i></i>
+              <span>本地稳定转换 / 推荐专业工具</span>
+            </div>
+            <p>点击上方厂商名称可打开官方工具；敏感文件请优先使用本地桌面客户端。</p>
+          </section>
+        </section>
+
+        <section class="convert-panel" data-convert-panel="settings">
+          <header class="workspace-heading">
+            <div>
+              <p class="workspace-eyebrow">SETTINGS</p>
+              <h1 class="workspace-title">转换设置</h1>
+            </div>
+            <p class="workspace-description">配置常用转换偏好，后续进入文件转换中心时会自动带入。</p>
+          </header>
+
+          <section class="convert-card convert-settings-card" aria-label="常用转换设置">
+            <div class="convert-settings-head">
+              <div>
+                <h2>常用设置配置</h2>
+                <p>这些配置保存在当前浏览器本地，不上传、不同步。</p>
+              </div>
+              <span class="convert-settings-pill">LOCAL</span>
+            </div>
+
+            <div class="convert-settings-grid">
+              <label class="convert-field convert-output-field">
+                <span>默认保存目录</span>
+                <div class="convert-path-row convert-setting-path-row">
+                  <input id="convertDefaultOutputPath" type="text" value="~/Downloads/StreamDock" readonly />
+                  <button class="convert-secondary" id="convertSelectDefaultDirButton" type="button">选择目录</button>
+                </div>
+              </label>
+
+              <label class="convert-field">
+                <span>文件重名策略</span>
+                <select id="convertNamingStrategy">
+                  <option value="append">自动追加 _converted</option>
+                  <option value="timestamp">追加时间戳</option>
+                  <option value="keep">保留原文件并自动编号</option>
+                  <option value="overwrite">覆盖同名文件</option>
+                  <option value="skip">遇到同名文件时跳过</option>
+                </select>
+              </label>
+
+              <label class="convert-field">
+                <span>默认能力偏好</span>
+                <select id="convertDefaultLevel">
+                  <option value="all">自动选择可用路径</option>
+                  <option value="stable">优先本地稳定</option>
+                  <option value="basic">允许本地基础</option>
+                  <option value="vendor">只查看专业工具推荐</option>
+                </select>
+              </label>
+
+              <label class="convert-field">
+                <span>转换完成动作</span>
+                <select id="convertAfterDoneAction">
+                  <option value="none">仅显示结果</option>
+                  <option value="open">完成后打开目录</option>
+                  <option value="highlight">完成后定位文件</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="convert-settings-actions">
+              <button class="convert-primary" id="convertSaveSettingsButton" type="button">保存设置</button>
+              <button class="convert-secondary" id="convertResetSettingsButton" type="button">恢复默认</button>
+              <span class="convert-hint" id="convertSettingsStatus">等待保存常用设置。</span>
+            </div>
+          </section>
+          <section class="convert-card system-health-card" aria-label="本地环境状态">
+            <div class="system-health-head"><div><h2>本地环境状态</h2><span>检查输出目录、FFmpeg 与常用转换依赖。</span></div><button class="convert-secondary" type="button" data-health-refresh>重新检查</button></div>
+            <div class="system-health-list" data-health-list></div>
+          </section>
+        </section>
+      </div>
+    </section>
+  </section>
+</main>
+{% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', path='/js/convert-tabs.js') }}"></script>
+<script src="{{ url_for('static', path='/js/convert-logs.js') }}"></script>
+<script src="{{ url_for('static', path='/js/convert-result.js') }}?v=20260708-batchfix1"></script>
+<script src="{{ url_for('static', path='/js/convert-capabilities.js') }}?v=20260708-world3"></script>
+<script src="{{ url_for('static', path='/js/convert-settings.js') }}?v=20260707-settings1"></script>
+<script src="{{ url_for('static', path='/js/task-center.js') }}?v=20260711-task2"></script>
+<script src="{{ url_for('static', path='/js/health.js') }}?v=20260711-health1"></script>
+<script src="{{ url_for('static', path='/js/convert-form.js') }}?v=20260708-filelist3"></script>
+{% endblock %}
