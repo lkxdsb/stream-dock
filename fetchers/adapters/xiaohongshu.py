@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import html as html_lib
+import re
 from typing import Any
 
 import requests
@@ -8,6 +10,7 @@ import requests
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.adapters.common import (
     capture_media_with_browser,
+    collect_subtitle_tracks_from_payload,
     ensure_supported_host,
     extract_balanced_json_after,
     extract_first_url,
@@ -79,12 +82,18 @@ class XiaohongshuAdapter(BasePlatformAdapter):
                 title=note.get("title") or self._fallback_title(note.get("noteId") or self._extract_note_id(response.url)),
                 source_url=normalized_link,
                 final_url=response.url,
-                cover_url=((note.get("cover") or {}).get("url")),
+                cover_url=self._extract_cover_url(note) or self._extract_meta_cover_url(response.text),
                 author=((note.get("user") or {}).get("nickname")),
                 video_streams=video_streams,
                 audio_streams=audio_streams,
                 preferred_video=preferred_video,
                 preferred_audio=preferred_audio,
+                subtitle_tracks=collect_subtitle_tracks_from_payload(
+                    note,
+                    source="xiaohongshu-native",
+                    base_url=response.url,
+                    default_format="json",
+                ),
                 metadata={
                     "resolve_method": "embedded-json",
                     "raw_platform_id": note.get("noteId"),
@@ -203,6 +212,63 @@ class XiaohongshuAdapter(BasePlatformAdapter):
             )
         ]
 
+    @classmethod
+    def _extract_cover_url(cls, note: dict[str, Any]) -> str | None:
+        candidates: list[str] = []
+
+        cover = note.get("cover")
+        if isinstance(cover, str):
+            candidates.append(cover)
+        elif isinstance(cover, dict):
+            candidates.extend(str(cover.get(key) or "") for key in ("url", "urlDefault", "urlPre"))
+
+        for image in note.get("imageList") or []:
+            if not isinstance(image, dict):
+                continue
+            # urlDefault is the full-size web image. urlPre/WB_PRV is only a
+            # small preview and should be used after the default image.
+            candidates.extend(str(image.get(key) or "") for key in ("url", "urlDefault"))
+            info_list = [item for item in (image.get("infoList") or []) if isinstance(item, dict)]
+            candidates.extend(
+                str(item.get("url") or "")
+                for item in info_list
+                if str(item.get("imageScene") or "").upper() == "WB_DFT"
+            )
+            candidates.append(str(image.get("urlPre") or ""))
+            candidates.extend(str(item.get("url") or "") for item in info_list)
+
+        for candidate in candidates:
+            normalized = cls._normalize_cover_url(candidate)
+            if normalized:
+                return normalized
+        return None
+
+    @classmethod
+    def _extract_meta_cover_url(cls, page_html: str) -> str | None:
+        for tag in re.findall(r"<meta\b[^>]*>", page_html or "", flags=re.IGNORECASE):
+            attrs = {
+                name.lower(): html_lib.unescape(value)
+                for name, _quote, value in re.findall(
+                    r"([:\w-]+)\s*=\s*(['\"])(.*?)\2",
+                    tag,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+            }
+            if str(attrs.get("property") or attrs.get("name") or "").lower() in {"og:image", "twitter:image"}:
+                normalized = cls._normalize_cover_url(str(attrs.get("content") or ""))
+                if normalized:
+                    return normalized
+        return None
+
+    @staticmethod
+    def _normalize_cover_url(raw_url: str) -> str | None:
+        value = html_lib.unescape(str(raw_url or "")).strip()
+        if value.startswith("//"):
+            return f"https:{value}"
+        if value.startswith("http://"):
+            return f"https://{value.split('://', 1)[1]}"
+        return value if value.startswith("https://") else None
+
     def _build_fallback_result(self, normalized_link: str, capture: dict[str, Any]) -> MediaFetchResult:
         video_streams = [MediaStream(url=capture["video_url"], stream_type="video", container="mp4")]
         audio_streams = (
@@ -222,6 +288,12 @@ class XiaohongshuAdapter(BasePlatformAdapter):
             audio_streams=audio_streams,
             preferred_video=video_streams[0],
             preferred_audio=audio_streams[0] if audio_streams else None,
+            subtitle_tracks=collect_subtitle_tracks_from_payload(
+                capture,
+                source="xiaohongshu-browser",
+                base_url=capture.get("final_url") or normalized_link,
+                default_format="json",
+            ),
             metadata={
                 "resolve_method": "playwright-fallback",
                 "raw_platform_id": self._extract_note_id(normalized_link),

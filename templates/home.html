@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block page_styles %}
-<link rel="stylesheet" href="{{ url_for('static', path='/css/home.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', path='/css/home.css') }}?v=20260716-pmfix1" />
 {% endblock %}
 
 {% block page_content %}
@@ -183,6 +183,29 @@
     </div>
   </section>
 
+  <section class="home-capabilities" aria-label="核心工作台入口">
+    <div class="container capability-inner">
+      <article class="capability-card">
+        <span>01</span>
+        <h2>视频解析</h2>
+        <p>粘贴平台链接，识别可用清晰度，并保存到本地目录。</p>
+        <a href="/use" data-transition-link>开始解析 →</a>
+      </article>
+      <article class="capability-card">
+        <span>02</span>
+        <h2>文件转换</h2>
+        <p>上传文档、图片、音视频或压缩包，查看本地可执行转换路径。</p>
+        <a href="/convert" data-transition-link>打开转换 →</a>
+      </article>
+      <article class="capability-card">
+        <span>03</span>
+        <h2>PDF 解析</h2>
+        <p>先分析 PDF 类型，再输出 Markdown、JSON 与质量报告。</p>
+        <a href="/pdf" data-transition-link>解析 PDF →</a>
+      </article>
+    </div>
+  </section>
+
   <section class="bottom" aria-label="产品说明">
     <div class="mountain"></div>
     <div class="tiny-person"></div>
@@ -206,25 +229,6 @@
     </div>
   </section>
 
-  <section class="home-updates" id="updates">
-    <div class="container updates-inner">
-      <div class="updates-kicker">更新日志</div>
-      <div class="updates-grid">
-        <article>
-          <h3>首页演示模式</h3>
-          <p>首页不再承担真实解析，改为动态演示产品如何使用。</p>
-        </article>
-        <article>
-          <h3>在线使用独立路由</h3>
-          <p>真实表单、日志、最近解析与结果展示统一迁移到 /use。</p>
-        </article>
-        <article>
-          <h3>前端模块拆分</h3>
-          <p>样式和脚本按页面与能力拆分，后续扩展平台更容易维护。</p>
-        </article>
-      </div>
-    </div>
-  </section>
 </main>
 {% endblock %}
 

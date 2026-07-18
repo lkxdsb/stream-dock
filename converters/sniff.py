@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -71,6 +72,11 @@ def sniff_file_format(path: Path) -> str | None:
     if header.startswith(b'PK\x03\x04'):
         return _zip_format(path)
     if header.startswith(b'\x1f\x8b'):
+        try:
+            if tarfile.is_tarfile(path):
+                return 'tar.gz'
+        except (OSError, tarfile.TarError):
+            pass
         return 'gz'
     if header.startswith(b'BZh'):
         return 'bz2'
@@ -93,8 +99,11 @@ def sniff_file_format(path: Path) -> str | None:
             return 'json'
         except json.JSONDecodeError:
             pass
+    lowered = text.lower()
+    if lowered.startswith(('<!doctype html', '<html')):
+        return 'html'
     if text.startswith('<?xml') or (text.startswith('<') and text.endswith('>')):
-        return 'xml' if not text.lower().startswith(('<!doctype html', '<html')) else 'html'
+        return 'xml'
     if '\t' in text.splitlines()[0]:
         return 'tsv'
     if ',' in text.splitlines()[0]:

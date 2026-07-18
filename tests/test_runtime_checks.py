@@ -2,8 +2,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from runtime_checks import deep_media_quality, partial_output_path, prepare_output_directory, validate_media_output
+from runtime_checks import augmented_path, deep_media_quality, network_subprocess_environment, partial_output_path, prepare_output_directory, resolve_tool_path, validate_media_output
 
 
 class RuntimeChecksTests(unittest.TestCase):
@@ -18,6 +19,36 @@ class RuntimeChecksTests(unittest.TestCase):
     def test_partial_output_path_keeps_real_extension(self):
         path = partial_output_path(Path('/tmp/demo.mp4'))
         self.assertEqual(path.name, '.demo.streamdock-part.mp4')
+
+    def test_augmented_path_adds_common_macos_tool_dirs(self):
+        path = augmented_path('/usr/bin:/bin')
+        self.assertIn('/opt/homebrew/bin', path.split(':'))
+        self.assertIn('/usr/local/bin', path.split(':'))
+
+    def test_resolve_tool_path_finds_homebrew_tools_when_path_is_minimal(self):
+        ffmpeg = resolve_tool_path('ffmpeg')
+        if Path('/opt/homebrew/bin/ffmpeg').exists():
+            self.assertEqual(ffmpeg, '/opt/homebrew/bin/ffmpeg')
+        else:
+            self.assertTrue(ffmpeg == 'ffmpeg' or Path(ffmpeg).exists())
+
+    def test_network_subprocess_environment_inherits_macos_system_proxy_when_launchd_only_has_no_proxy(self):
+        base_env = {
+            'PATH': '/usr/bin:/bin',
+            'NO_PROXY': '127.0.0.1,localhost',
+            'no_proxy': '127.0.0.1,localhost',
+        }
+        with patch(
+            'runtime_checks.discover_system_proxies',
+            return_value={'http': 'http://127.0.0.1:7890', 'https': 'http://127.0.0.1:7890'},
+        ):
+            result = network_subprocess_environment(base_env)
+
+        self.assertEqual(result['HTTP_PROXY'], 'http://127.0.0.1:7890')
+        self.assertEqual(result['HTTPS_PROXY'], 'http://127.0.0.1:7890')
+        self.assertEqual(result['http_proxy'], 'http://127.0.0.1:7890')
+        self.assertEqual(result['https_proxy'], 'http://127.0.0.1:7890')
+        self.assertEqual(result['NO_PROXY'], '127.0.0.1,localhost')
 
     def test_validate_media_output_reports_streams_and_resolution(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -9,15 +9,23 @@ from .models import TaskKind, TaskStatus
 from .store import TaskStore
 
 MediaRunner = Callable[[dict[str, Any]], dict[str, Any]]
+MediaSuccessHook = Callable[[str, dict[str, Any], dict[str, Any]], None]
 
 
 class MediaQueue:
     """Conservative single-worker media parsing queue."""
 
-    def __init__(self, store: TaskStore, runner: MediaRunner, interval_seconds: float = 2.0) -> None:
+    def __init__(
+        self,
+        store: TaskStore,
+        runner: MediaRunner,
+        interval_seconds: float = 2.0,
+        success_hook: MediaSuccessHook | None = None,
+    ) -> None:
         self.store = store
         self.runner = runner
         self.interval_seconds = interval_seconds
+        self.success_hook = success_hook
         self._queue: deque[tuple[str, dict[str, Any]]] = deque()
         self._lock = Lock()
         self._worker: Thread | None = None
@@ -110,7 +118,26 @@ class MediaQueue:
         stderr = str(result.get('stderr') or '').strip()
         logs = [line for line in ['输出文件已生成' if result.get('success') else '媒体资源处理失败', stdout, stderr] if line]
         if result.get('success'):
-            self.store.update(task_id, status=TaskStatus.COMPLETED, logs=logs, result=dict(result), error=None, stage='已完成', progress=100)
+            result_copy = dict(result)
+            stage = '视频已下载' if result_copy.get('outputPath') else '已完成'
+            self.store.update(task_id, status=TaskStatus.COMPLETED, logs=logs, result=result_copy, error=None, stage=stage, progress=100)
+            if self.success_hook is not None:
+                try:
+                    self.success_hook(task_id, dict(payload), result_copy)
+                except Exception as exc:  # The media file must remain successful even if enrichment cannot start.
+                    current = self.store.get(task_id)
+                    current_logs = list(current.logs if current else logs)
+                    self.store.patch_result(
+                        task_id,
+                        {
+                            'subtitleJob': {
+                                'status': 'failed',
+                                'message': '字幕后台任务启动失败，视频文件不受影响',
+                                'error': str(exc),
+                            }
+                        },
+                        logs=[*current_logs, f'字幕后台任务启动失败：{exc}'],
+                    )
         else:
             error = str(result.get('error') or stderr or stdout or '解析失败')
             self.store.update(task_id, status=TaskStatus.FAILED, logs=logs, result=dict(result), error=error, stage='失败', progress=None)

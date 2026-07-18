@@ -83,7 +83,9 @@
 
   const platformSettings = readJson(platformSettingsKey, {});
   applySettings({ ...readJson(settingsKey, {}), ...(platformSettings.outputPath ? { outputPath: platformSettings.outputPath } : {}) });
-  setActiveTab(window.localStorage.getItem('streamdock.activeTab.v1') || 'parse');
+  const initialHash = window.location.hash.replace('#', '');
+  setActiveTab(['parse', 'downloading', 'completed', 'settings'].includes(initialHash) ? initialHash : (window.localStorage.getItem('streamdock.activeTab.v1') || 'parse'));
 
   window.StreamDockTasks = { setActiveTab };
+  window.StreamDockUseTabs = { setActiveTab };
 })();

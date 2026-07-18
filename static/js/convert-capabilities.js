@@ -14,9 +14,18 @@
   const ctx = worldCanvas?.getContext('2d');
   let capabilities = [];
   let particles = [];
+  let routeEdges = [];
+  let worldTextureDots = [];
+  let worldMapShapes = [];
+  let selectedFormat = null;
+  let routePinned = false;
   let activeFilter = 'all';
   let activeType = 'all';
   let activeQuery = '';
+  const focusTypes = ['document', 'image', 'media', 'subtitle', 'archive'];
+  let focusWeightsFrom = null;
+  let focusTransitionStartedAt = 0;
+  const focusTransitionDuration = 620;
   let selectedCapability = null;
   let hoveredCapability = null;
   let canvasWidth = 0;
@@ -28,44 +37,57 @@
   let isScrolling = false;
   let scrollTimer = null;
   let lastFrameAt = 0;
-  const frameInterval = 1000 / 20;
+  let worldRotationX = -0.32;
+  let worldRotationY = 0;
+  let worldVelocityX = 0;
+  let worldVelocityY = 0;
+  let worldTargetRotationX = worldRotationX;
+  let worldTargetRotationY = worldRotationY;
+  let worldFocusRotating = false;
+  let isDraggingWorld = false;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragMoved = false;
+  let lastPointerX = 0;
+  let lastPointerY = 0;
+  const frameInterval = 0;
 
   const typeMeta = {
     all: {
       title: '全部转换路径',
-      text: '这是 StreamDock 当前登记的完整转换世界。点击任何动态节点，可以查看具体源格式、目标格式和执行策略。',
+      text: '默认展示全部格式节点和转换路径。点击节点或右侧路径后，再聚焦查看某条转换链路。',
       description: '展示所有已登记转换能力；本地能力会直接执行，复杂高保真路径会推荐专业工具。',
-      color: '#2f6fed',
+      color: '#5f7fae',
     },
     document: {
       title: 'Document routes',
       text: '文档、Office、电子书和结构化表格转换，适合格式明确、结构可解析的文件。',
       description: '聚焦文档、Office、电子书和结构化表格转换；PDF 高保真转换暂不作为本地重点。',
-      color: '#2f6fed',
+      color: '#5f7fae',
     },
     image: {
       title: 'Image routes',
       text: '图片、图标和矢量图基础转换，适合 PNG、JPG、WEBP、BMP、TIFF、ICO 等常见格式。',
       description: '聚焦图片与矢量图转换；透明背景转 JPG 会自动使用白底。',
-      color: '#26b48b',
+      color: '#6faeb8',
     },
     media: {
       title: 'Media routes',
       text: '音频、视频容器、音轨提取和 GIF 导出，依赖本机 ffmpeg。',
       description: '聚焦音频、视频容器和常见转码；依赖本机 ffmpeg。',
-      color: '#ff7a2f',
+      color: '#c58a62',
     },
     subtitle: {
       title: 'Subtitle routes',
       text: '字幕与歌词时间轴转换，复杂字幕样式会降级为文本。',
       description: '聚焦字幕和歌词时间轴转换，复杂样式会降级为文本。',
-      color: '#9567f6',
+      color: '#9b84b8',
     },
     archive: {
       title: 'Archive routes',
       text: '压缩包转换、解压与文件夹打包，第一版不处理加密压缩包。',
       description: '聚焦压缩包解压和重新打包；第一版不处理加密压缩包。',
-      color: '#20b8c7',
+      color: '#8faf9a',
     },
   };
 
@@ -80,9 +102,16 @@
   }
 
   function levelLabel(level) {
-    if (level === 'stable') return '稳定';
-    if (level === 'basic') return '基础';
-    return '推荐';
+    if (level === 'stable') return '成熟引擎';
+    if (level === 'basic') return '基础转换';
+    return '专业工具';
+  }
+
+  function verificationLabel(item) {
+    if (item.verification === 'verified') return '样例已验证';
+    if (item.verification === 'engine') return '引擎可用';
+    if (item.verification === 'best-effort') return '可能有损';
+    return '外部能力';
   }
 
   function matchesActiveFilters(item) {
@@ -91,6 +120,108 @@
     const query = activeQuery.trim().toLowerCase();
     const queryMatches = !query || [item.source, item.target, item.category, item.engine, item.description].join(' ').toLowerCase().includes(query);
     return levelMatches && typeMatches && queryMatches;
+  }
+
+  function matchesCanvasFilters(item) {
+    const levelMatches = activeFilter === 'all' || item.level === activeFilter;
+    const query = activeQuery.trim().toLowerCase();
+    const queryMatches = !query || [item.source, item.target, item.category, item.engine, item.description].join(' ').toLowerCase().includes(query);
+    return levelMatches && queryMatches;
+  }
+
+  function focusWeightForState(type, state) {
+    if (state === 'all') return 1;
+    return type === state ? 1 : 0.12;
+  }
+
+  function easeFocusProgress(value) {
+    const t = clamp(value, 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+
+  function typeFocusWeight(type, time = performance.now()) {
+    if (!focusWeightsFrom) return focusWeightForState(type, activeType);
+    const progress = easeFocusProgress((time - focusTransitionStartedAt) / focusTransitionDuration);
+    if (progress >= 1) {
+      focusWeightsFrom = null;
+      return focusWeightForState(type, activeType);
+    }
+    const from = focusWeightsFrom[type] ?? focusWeightForState(type, activeType);
+    const to = focusWeightForState(type, activeType);
+    return from + (to - from) * progress;
+  }
+
+  function normalizeAngle(value) {
+    let angle = value;
+    while (angle > Math.PI) angle -= Math.PI * 2;
+    while (angle < -Math.PI) angle += Math.PI * 2;
+    return angle;
+  }
+
+  function setRotationTargetFromVector(vector) {
+    if (!vector) return;
+    const y = Math.atan2(-vector.sx, vector.sz || 0.0001);
+    const zAfterY = -vector.sx * Math.sin(y) + vector.sz * Math.cos(y);
+    const x = clamp(Math.atan2(vector.sy, zAfterY || 0.0001), -0.88, 0.68);
+    worldTargetRotationY = worldRotationY + normalizeAngle(y - worldRotationY);
+    worldTargetRotationX = x;
+    worldVelocityX = 0;
+    worldVelocityY = 0;
+    worldFocusRotating = true;
+  }
+
+  function focusVectorForType(type) {
+    if (type === 'all' || !particles.length) return { sx: 0, sy: 0.34, sz: 1 };
+    const selected = particles.filter((particle) => particle.type === type);
+    if (!selected.length) return null;
+    const vector = selected.reduce((acc, particle) => {
+      const weight = 1 + Math.min(8, particle.item.weight || 1);
+      acc.sx += particle.sx * weight;
+      acc.sy += particle.sy * weight;
+      acc.sz += particle.sz * weight;
+      acc.weight += weight;
+      return acc;
+    }, { sx: 0, sy: 0, sz: 0, weight: 0 });
+    const length = Math.hypot(vector.sx, vector.sy, vector.sz);
+    if (length < 0.12) {
+      const strongest = selected.slice().sort((a, b) => (b.item.weight || 0) - (a.item.weight || 0))[0];
+      return strongest ? { sx: strongest.sx, sy: strongest.sy, sz: strongest.sz } : null;
+    }
+    return { sx: vector.sx / length, sy: vector.sy / length, sz: vector.sz / length };
+  }
+
+  function focusVectorForRoute(route) {
+    if (!route || !particles.length) return null;
+    const source = particles.find((particle) => particle.item.key === route.source);
+    const target = particles.find((particle) => particle.item.key === route.target);
+    if (!source && !target) return null;
+    if (!source) return { sx: target.sx, sy: target.sy, sz: target.sz };
+    if (!target) return { sx: source.sx, sy: source.sy, sz: source.sz };
+    const sx = source.sx + target.sx;
+    const sy = source.sy + target.sy;
+    const sz = source.sz + target.sz;
+    const length = Math.hypot(sx, sy, sz);
+    if (length < 0.08) return { sx: source.sx, sy: source.sy, sz: source.sz };
+    return { sx: sx / length, sy: sy / length, sz: sz / length };
+  }
+
+  function focusWorldOnType(type) {
+    setRotationTargetFromVector(focusVectorForType(type));
+  }
+
+  function setActiveType(nextType, options = {}) {
+    const normalizedType = nextType || 'all';
+    if (normalizedType === activeType && !options.forceRotate) return false;
+    const now = performance.now();
+    focusWeightsFrom = focusTypes.reduce((acc, type) => {
+      acc[type] = typeFocusWeight(type, now);
+      return acc;
+    }, {});
+    focusTransitionStartedAt = now;
+    activeType = normalizedType;
+    if (options.route) setRotationTargetFromVector(focusVectorForRoute(options.route));
+    else focusWorldOnType(normalizedType);
+    return true;
   }
 
   function groupByCategory(items) {
@@ -115,13 +246,43 @@
     typeButtons.forEach((item) => item.classList.toggle('active', (item.dataset.convertType || 'all') === activeType));
   }
 
+  function animateWorldDetailChange() {
+    if (!worldPopover) return;
+    worldPopover.classList.remove('is-updating');
+    void worldPopover.offsetWidth;
+    worldPopover.classList.add('is-updating');
+    window.setTimeout(() => worldPopover.classList.remove('is-updating'), 220);
+  }
+
+  function updateWorldSelection() {
+    const filtered = capabilities.filter(matchesActiveFilters);
+    visibleKeySet = new Set(filtered.map((item) => item.key));
+    renderWorldDetail(filtered);
+    renderMatrix(filtered);
+    syncActiveButtons();
+    animateWorldDetailChange();
+    window.StreamDockConvertActiveFilters = { level: activeFilter, type: activeType, query: activeQuery };
+    window.dispatchEvent(new CustomEvent('streamdock:convert-filter-change', { detail: window.StreamDockConvertActiveFilters }));
+    drawCanvas(performance.now());
+  }
+
   function sampleRoutes(items) {
     const list = items.length ? items : capabilities.filter((item) => activeType === 'all' || capabilityType(item) === activeType);
     return list.slice(0, 6).map((item) => `
-      <span class="convert-orbit-route" data-level="${item.level}">
-        ${item.source.toUpperCase()} → ${item.target.toUpperCase()} · ${levelLabel(item.level)}
-      </span>
+      <button class="convert-orbit-route" type="button" data-route-key="${item.key}" data-level="${item.level}">
+        ${item.source.toUpperCase()} → ${item.target.toUpperCase()} · ${verificationLabel(item)}
+      </button>
     `).join('') || '<span class="convert-orbit-route">暂无匹配路径</span>';
+  }
+
+
+  function bindRouteButtons() {
+    orbitRoutes?.querySelectorAll('[data-route-key]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const route = capabilities.find((item) => item.key === button.dataset.routeKey);
+        selectRoute(route);
+      });
+    });
   }
 
   function renderWorldDetail(filtered) {
@@ -132,10 +293,13 @@
       if (orbitTitle) orbitTitle.textContent = `${selectedCapability.source.toUpperCase()} → ${selectedCapability.target.toUpperCase()}`;
       if (orbitText) orbitText.textContent = `${selectedCapability.category} · ${levelLabel(selectedCapability.level)} · ${selectedCapability.description || '已登记转换路径。'}`;
       if (orbitRoutes) {
+        const related = filtered.filter((item) => item.key !== selectedCapability.key && (item.source === selectedCapability.source || item.target === selectedCapability.source || item.source === selectedCapability.target || item.target === selectedCapability.target)).slice(0, 4);
         orbitRoutes.innerHTML = `
           <span class="convert-orbit-route" data-level="${selectedCapability.level}">${selectedCapability.engine || 'local'}</span>
           <span class="convert-orbit-route" data-level="${selectedCapability.level}">${selectedCapability.notes || '可在当前策略下处理'}</span>
+          ${related.map((item) => `<button class="convert-orbit-route" type="button" data-route-key="${item.key}" data-level="${item.level}">${item.source.toUpperCase()} → ${item.target.toUpperCase()}</button>`).join('')}
         `;
+        bindRouteButtons();
       }
       return;
     }
@@ -143,7 +307,20 @@
     selectedCapability = null;
     if (orbitTitle) orbitTitle.textContent = meta.title;
     if (orbitText) orbitText.textContent = meta.text;
-    if (orbitRoutes) orbitRoutes.innerHTML = sampleRoutes(filtered);
+    if (selectedFormat) {
+      const routes = filtered.filter((item) => item.source === selectedFormat || item.target === selectedFormat);
+      if (routes.length) {
+        if (orbitTitle) orbitTitle.textContent = `${selectedFormat.toUpperCase()} 相关路径`;
+        if (orbitText) orbitText.textContent = '点击下方路径，球体会高亮对应源格式、目标格式和转换连线。';
+        if (orbitRoutes) orbitRoutes.innerHTML = sampleRoutes(routes);
+        bindRouteButtons();
+        return;
+      }
+    }
+    if (orbitRoutes) {
+      orbitRoutes.innerHTML = sampleRoutes(filtered);
+      bindRouteButtons();
+    }
   }
 
   function dotPosition(index, total) {
@@ -154,31 +331,139 @@
   }
 
   function buildParticles() {
-    // 控制节点数与刷新率，保留动态效果但不抢占页面滚动帧。
-    const max = Math.min(capabilities.length, 140);
-    particles = capabilities.slice(0, max).map((item, index) => {
+    const formats = new Map();
+    capabilities.forEach((item) => {
       const type = capabilityType(item);
-      const pos = dotPosition(index, max);
+      [item.source, item.target].forEach((format) => {
+        if (!format) return;
+        const key = format.toLowerCase();
+        if (!formats.has(key)) {
+          formats.set(key, { key, format: key, type, routes: [], weight: 0 });
+        }
+        const node = formats.get(key);
+        node.routes.push(item);
+        node.weight += 1;
+        if (item.level !== 'vendor') node.type = type;
+      });
+    });
+
+    const nodes = Array.from(formats.values()).slice(0, 96);
+    const total = nodes.length;
+    particles = nodes.map((node, index) => {
+      const golden = Math.PI * (3 - Math.sqrt(5));
+      const y = 1 - (index / Math.max(total - 1, 1)) * 2;
+      const radius = Math.sqrt(Math.max(0, 1 - y * y));
+      const theta = index * golden;
       return {
-        item,
-        type,
-        color: typeMeta[type].color,
-        radius: pos.radius,
-        angle: pos.angle,
+        item: node,
+        type: node.type,
+        color: typeMeta[node.type].color,
+        sx: Math.cos(theta) * radius,
+        sy: y,
+        sz: Math.sin(theta) * radius,
         phase: index * 0.71,
-        speed: 0.00005 + (index % 9) * 0.000006,
-        orbit: 0.62 + (index % 7) * 0.04,
-        size: item.level === 'vendor' ? 4.8 : item.level === 'basic' ? 4.1 : 3.6,
+        size: Math.min(7.2, 3.8 + Math.sqrt(node.weight) * 0.52),
         x: 0,
         y: 0,
+        z: 0,
+        scale: 1,
+        visibleRoutes: [],
       };
     });
+
+    const nodeByFormat = new Map(particles.map((particle) => [particle.item.key, particle]));
+    routeEdges = capabilities.map((item, index) => ({
+      index,
+      item,
+      source: nodeByFormat.get(item.source),
+      target: nodeByFormat.get(item.target),
+      type: capabilityType(item),
+    })).filter((edge) => edge.source && edge.target);
+    buildWorldTexture();
+    buildWorldMapShapes();
+  }
+
+
+
+  function lonLatPoint(lon, lat) {
+    const lambda = lon * Math.PI / 180;
+    const phi = lat * Math.PI / 180;
+    const cosPhi = Math.cos(phi);
+    return {
+      sx: Math.sin(lambda) * cosPhi,
+      sy: -Math.sin(phi),
+      sz: Math.cos(lambda) * cosPhi,
+    };
+  }
+
+  function buildWorldMapShapes() {
+    const continents = [
+      // North America - deliberately simplified, soft background silhouette only.
+      [[-168, 62], [-145, 72], [-112, 70], [-84, 55], [-70, 42], [-88, 24], [-112, 18], [-132, 32], [-158, 44]],
+      // South America.
+      [[-82, 12], [-62, 8], [-48, -10], [-52, -32], [-66, -54], [-76, -36], [-82, -12]],
+      // Europe + Asia.
+      [[-10, 58], [18, 70], [58, 64], [96, 58], [135, 48], [150, 30], [128, 12], [86, 18], [54, 8], [28, 18], [2, 34]],
+      // Africa + Middle East.
+      [[-18, 34], [18, 36], [42, 18], [36, -8], [24, -32], [8, -36], [-10, -22], [-18, 4]],
+      // Australia / Oceania.
+      [[110, -14], [138, -10], [154, -24], [142, -38], [116, -34], [104, -24]],
+      // Greenland.
+      [[-52, 78], [-28, 74], [-20, 62], [-44, 58], [-62, 66]],
+    ];
+    worldMapShapes = continents.map((shape) => shape.map(([lon, lat]) => lonLatPoint(lon, lat)));
+  }
+
+  function buildWorldTexture() {
+    worldTextureDots = [];
+    const count = 260;
+    for (let index = 0; index < count; index += 1) {
+      const band = index % 5;
+      const longitude = ((index * 137.508) % 360) * Math.PI / 180;
+      const latitudeBase = Math.sin(index * 12.9898) * 0.62;
+      const latitude = latitudeBase + (band - 2) * 0.055;
+      const cluster = 0.72 + ((index * 17) % 11) * 0.018;
+      const r = Math.sqrt(Math.max(0, 1 - latitude * latitude)) * cluster;
+      worldTextureDots.push({
+        sx: Math.cos(longitude) * r,
+        sy: latitude * cluster,
+        sz: Math.sin(longitude) * r,
+        size: 0.9 + (index % 4) * 0.42,
+        alpha: 0.035 + (index % 7) * 0.012,
+      });
+    }
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function projectSpherePoint(x, y, z, radiusScale = 1) {
+    const minSide = Math.min(canvasWidth, canvasHeight);
+    const sphereRadius = minSide * 0.43 * radiusScale;
+    const cosY = Math.cos(worldRotationY);
+    const sinY = Math.sin(worldRotationY);
+    const cosX = Math.cos(worldRotationX);
+    const sinX = Math.sin(worldRotationX);
+    const x1 = x * cosY + z * sinY;
+    const z1 = -x * sinY + z * cosY;
+    const y1 = y * cosX - z1 * sinX;
+    const z2 = y * sinX + z1 * cosX;
+    const depth = 2.85;
+    const scale = depth / (depth - z2 * 0.72);
+    return {
+      x: canvasWidth / 2 + x1 * sphereRadius * scale,
+      y: canvasHeight / 2 + y1 * sphereRadius * 0.9 * scale,
+      z: z2,
+      scale,
+      radius: sphereRadius,
+    };
   }
 
   function resizeCanvas() {
     if (!worldCanvas || !worldCloud || !ctx) return;
     const rect = worldCloud.getBoundingClientRect();
-    const dpr = 1;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const nextWidth = Math.max(1, Math.floor(rect.width));
     const nextHeight = Math.max(1, Math.floor(rect.height));
     if (nextWidth === canvasWidth && nextHeight === canvasHeight) return;
@@ -191,17 +476,13 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  function particlePoint(particle, time) {
-    const minSide = Math.min(canvasWidth, canvasHeight);
-    const cloudRadius = minSide * 0.46;
-    const swirl = time * particle.speed;
-    const angle = particle.angle + swirl + Math.sin(time * 0.00028 + particle.phase) * 0.08;
-    const radius = cloudRadius * particle.radius * particle.orbit + Math.sin(time * 0.0011 + particle.phase) * 9;
-    const x = canvasWidth / 2 + Math.cos(angle) * radius + Math.sin(time * 0.0007 + particle.phase) * 7;
-    const y = canvasHeight / 2 + Math.sin(angle) * radius * 0.86 + Math.cos(time * 0.0006 + particle.phase) * 7;
-    particle.x = x;
-    particle.y = y;
-    return { x, y };
+  function particlePoint(particle) {
+    const point = projectSpherePoint(particle.sx, particle.sy, particle.sz);
+    particle.x = point.x;
+    particle.y = point.y;
+    particle.z = point.z;
+    particle.scale = point.scale;
+    return point;
   }
 
   function drawRoundRect(x, y, width, height, radius) {
@@ -219,7 +500,8 @@
   }
 
   function drawParticleLabel(particle) {
-    const text = `${particle.item.source.toUpperCase()} → ${particle.item.target.toUpperCase()}`;
+    const activeRoute = selectedCapability && (selectedCapability.source === particle.item.key || selectedCapability.target === particle.item.key) ? selectedCapability : particle.item.routes[0];
+    const text = activeRoute ? `${activeRoute.source.toUpperCase()} → ${activeRoute.target.toUpperCase()}` : particle.item.format.toUpperCase();
     ctx.save();
     ctx.font = '700 12px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
     const metrics = ctx.measureText(text);
@@ -238,52 +520,251 @@
     ctx.restore();
   }
 
+  function routeMatchesActive(route) {
+    return matchesActiveFilters(route);
+  }
+
+  function isRouteHighlighted(route) {
+    if (selectedCapability?.key === route.key || hoveredCapability?.key === route.key) return true;
+    if (selectedFormat && (route.source === selectedFormat || route.target === selectedFormat)) return true;
+    return false;
+  }
+
+
+  function drawWorldMapLayer(radius) {
+    if (!worldMapShapes.length) return;
+    const cx = canvasWidth / 2;
+    const cy = canvasHeight / 2;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius * 0.985, 0, Math.PI * 2);
+    ctx.clip();
+    worldMapShapes.forEach((shape, index) => {
+      const points = shape.map((point) => projectSpherePoint(point.sx, point.sy, point.sz, 0.94));
+      const avgZ = points.reduce((sum, point) => sum + point.z, 0) / Math.max(points.length, 1);
+      if (avgZ < -0.82) return;
+      ctx.beginPath();
+      points.forEach((point, pointIndex) => {
+        if (pointIndex === 0) ctx.moveTo(point.x, point.y);
+        else ctx.lineTo(point.x, point.y);
+      });
+      ctx.closePath();
+      const visibleAlpha = avgZ > 0 ? 0.105 : 0.052;
+      ctx.fillStyle = index === 2 ? `rgba(95,127,174,${visibleAlpha})` : `rgba(117,128,139,${visibleAlpha})`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(95,127,174,${visibleAlpha * 0.85})`;
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  function drawWorldBackdrop(time) {
+    const minSide = Math.min(canvasWidth, canvasHeight);
+    const radius = minSide * 0.43;
+    const cx = canvasWidth / 2;
+    const cy = canvasHeight / 2;
+
+    ctx.save();
+    const glow = ctx.createRadialGradient(cx, cy, radius * 0.1, cx, cy, radius * 1.2);
+    glow.addColorStop(0, 'rgba(255,255,255,.80)');
+    glow.addColorStop(0.5, 'rgba(237,229,218,.24)');
+    glow.addColorStop(1, 'rgba(95,127,174,.00)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius * 1.18, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(95,127,174,.16)';
+    ctx.lineWidth = 1.05;
+    for (let i = 0; i < 5; i += 1) {
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, radius * (1.02 + i * 0.055), radius * (0.18 + i * 0.025), worldRotationY * 0.45 + i * 0.56, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    const sphere = ctx.createRadialGradient(cx - radius * 0.22, cy - radius * 0.28, radius * 0.12, cx, cy, radius * 1.02);
+    sphere.addColorStop(0, 'rgba(255,255,255,.68)');
+    sphere.addColorStop(0.58, 'rgba(245,241,235,.40)');
+    sphere.addColorStop(1, 'rgba(95,127,174,.10)');
+    ctx.fillStyle = sphere;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(95,127,174,.12)';
+    ctx.stroke();
+    ctx.restore();
+
+    drawWorldMapLayer(radius);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius * 0.985, 0, Math.PI * 2);
+    ctx.clip();
+    worldTextureDots.forEach((dot) => {
+      const point = projectSpherePoint(dot.sx, dot.sy, dot.sz, 0.99);
+      if (point.z < -0.72) return;
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(92,103,116,${dot.alpha * (point.z > 0 ? 1.45 : 0.7)})`;
+      ctx.arc(point.x, point.y, dot.size * point.scale, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
+  }
+
+  function drawSphereGuides(time) {
+    const minSide = Math.min(canvasWidth, canvasHeight);
+    const radius = minSide * 0.43;
+    const cx = canvasWidth / 2;
+    const cy = canvasHeight / 2;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(95,127,174,.14)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 6; i += 1) {
+      const y = cy + (i - 2.5) * radius * 0.18;
+      ctx.beginPath();
+      ctx.ellipse(cx, y, radius * (0.94 - Math.abs(i - 2.5) * 0.08), radius * 0.14, Math.sin(worldRotationY) * 0.3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    for (let i = 0; i < 5; i += 1) {
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, radius * (0.22 + i * 0.16), radius * 0.9, worldRotationY + i * 0.64, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawRoute(edge, highlighted, time) {
+    const source = edge.source;
+    const target = edge.target;
+    const bothBack = source.z < -0.55 && target.z < -0.55;
+    const focus = typeFocusWeight(edge.type, time);
+    const alpha = highlighted ? 0.68 : (bothBack ? 0.045 : 0.13) * focus;
+    const color = typeMeta[edge.type]?.color || typeMeta.all.color;
+    const midX = (source.x + target.x) / 2 + Math.sin(time * 0.001 + source.phase) * 12;
+    const midY = (source.y + target.y) / 2 - 18 * Math.max(source.scale, target.scale);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(source.x, source.y);
+    ctx.quadraticCurveTo(midX, midY, target.x, target.y);
+    ctx.strokeStyle = hexToRgba(color, alpha);
+    ctx.lineWidth = highlighted ? 1.75 : 0.9;
+    ctx.stroke();
+
+    if (highlighted) {
+      const t = (time * 0.0007 + source.phase) % 1;
+      const x = (1 - t) * (1 - t) * source.x + 2 * (1 - t) * t * midX + t * t * target.x;
+      const y = (1 - t) * (1 - t) * source.y + 2 * (1 - t) * t * midY + t * t * target.y;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.beginPath();
+      ctx.fillStyle = hexToRgba(color, 0.38);
+      ctx.arc(x, y, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   function drawCanvas(time) {
     if (!ctx || !worldCanvas) return;
     resizeCanvas();
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
-    const hoveredKey = hoveredCapability?.key;
-    const selectedKey = selectedCapability?.key;
+    particles.forEach((particle) => particlePoint(particle));
+    drawWorldBackdrop(time);
+    drawSphereGuides(time);
 
-    particles.forEach((particle) => {
-      const point = particlePoint(particle, time);
-      const visible = visibleKeySet.has(particle.item.key);
-      const selected = selectedKey === particle.item.key;
-      const hovered = hoveredKey === particle.item.key;
-      const pulse = Math.sin(time * 0.003 + particle.phase) * 0.55;
-      const size = particle.size + pulse + (hovered || selected ? 5 : visible ? 1 : 0);
-      const alpha = selected ? .95 : hovered ? .88 : visible ? .58 : .055;
+    const filteredRoutes = capabilities.filter(matchesCanvasFilters).slice(0, 160);
 
+    const routeSet = new Set(filteredRoutes.map((item) => item.key));
+    routeEdges.forEach((edge) => {
+      if (!routeSet.has(edge.item.key)) return;
+      drawRoute(edge, isRouteHighlighted(edge.item), time);
+    });
+
+    const activeFormatSet = new Set();
+    if (selectedCapability) {
+      activeFormatSet.add(selectedCapability.source);
+      activeFormatSet.add(selectedCapability.target);
+    }
+    if (hoveredCapability) {
+      activeFormatSet.add(hoveredCapability.source);
+      activeFormatSet.add(hoveredCapability.target);
+    }
+    if (selectedFormat) activeFormatSet.add(selectedFormat);
+
+    const visibleFormatSet = new Set();
+    filteredRoutes.forEach((item) => {
+      visibleFormatSet.add(item.source);
+      visibleFormatSet.add(item.target);
+    });
+
+    particles.slice().sort((a, b) => a.z - b.z).forEach((particle) => {
+      const visible = visibleFormatSet.has(particle.item.key);
+      const active = activeFormatSet.has(particle.item.key);
+      const front = particle.z > -0.35;
+      const pulse = Math.sin(time * 0.0025 + particle.phase) * 0.35;
+      const focus = typeFocusWeight(particle.type, time);
+      const typeFocused = activeType !== 'all' && particle.type === activeType;
+      const size = (particle.size + pulse + (active ? 4.4 : 0) + (typeFocused ? 1.2 : 0)) * particle.scale;
+      const alpha = active ? .9 : typeFocused && visible && front ? .78 : visible && front ? .62 * focus : visible ? .28 * focus : .045;
       ctx.beginPath();
-      ctx.fillStyle = hexToRgba(particle.color, Math.max(.035, alpha));
-      ctx.arc(point.x, point.y, Math.max(1.4, size), 0, Math.PI * 2);
+      ctx.fillStyle = hexToRgba(particle.color, alpha);
+      ctx.arc(particle.x, particle.y, Math.max(1.4, size), 0, Math.PI * 2);
       ctx.fill();
 
-      if (selected || hovered) {
+      if (active || (typeFocused && front)) {
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
         ctx.beginPath();
-        ctx.fillStyle = hexToRgba(particle.color, .14);
-        ctx.arc(point.x, point.y, size + 15, 0, Math.PI * 2);
+        ctx.fillStyle = hexToRgba(particle.color, active ? .12 : .055);
+        ctx.arc(particle.x, particle.y, size + (active ? 13 : 8), 0, Math.PI * 2);
         ctx.fill();
         ctx.beginPath();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = hexToRgba(particle.color, .82);
-        ctx.arc(point.x, point.y, size + 8, 0, Math.PI * 2);
+        ctx.lineWidth = active ? 1.4 : 1;
+        ctx.strokeStyle = hexToRgba(particle.color, active ? .45 : .25);
+        ctx.arc(particle.x, particle.y, size + (active ? 6 : 4), 0, Math.PI * 2);
         ctx.stroke();
+        ctx.restore();
+      }
+
+      if (active || (typeFocused && visible && front && particle.item.weight >= 2) || (activeType === 'all' && visible && front && particle.scale > 1.02 && particle.item.weight >= 3)) {
+        ctx.save();
+        ctx.font = `${active ? 800 : 700} ${active ? 12 : 10}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
+        ctx.fillStyle = active || typeFocused ? 'rgba(58,64,72,.82)' : 'rgba(88,97,113,.52)';
+        ctx.textAlign = 'center';
+        ctx.fillText(particle.item.format.toUpperCase(), particle.x, particle.y + size + 13);
         ctx.restore();
       }
     });
 
-    const labelParticle = particles.find((particle) => particle.item.key === (hoveredKey || selectedKey));
+    const labelParticle = particles.find((particle) => activeFormatSet.has(particle.item.key) && particle.z > -0.6);
     if (labelParticle) drawParticleLabel(labelParticle);
   }
 
   function animate(time) {
     if (!animationStarted) return;
     const now = time || 0;
-    if (isDocumentVisible && isWorldVisible && !isScrolling && now - lastFrameAt >= frameInterval) {
+    const delta = Math.min(34, lastFrameAt ? now - lastFrameAt : 16.7);
+    if (isDocumentVisible && isWorldVisible && !isScrolling) {
+      if (!isDraggingWorld) {
+        if (worldFocusRotating) {
+          const ease = 1 - Math.pow(0.0018, delta / 900);
+          const diffY = normalizeAngle(worldTargetRotationY - worldRotationY);
+          const diffX = worldTargetRotationX - worldRotationX;
+          worldRotationY += diffY * ease;
+          worldRotationX = clamp(worldRotationX + diffX * ease, -1.05, 0.72);
+          if (Math.abs(diffY) < 0.0025 && Math.abs(diffX) < 0.0025) {
+            worldRotationY = worldTargetRotationY;
+            worldRotationX = worldTargetRotationX;
+            worldFocusRotating = false;
+          }
+        } else {
+          worldRotationY += delta * 0.00011 + worldVelocityY;
+          worldRotationX = clamp(worldRotationX + worldVelocityX, -1.05, 0.72);
+          worldVelocityX *= 0.93;
+          worldVelocityY *= 0.93;
+        }
+      }
       drawCanvas(now);
       lastFrameAt = now;
     }
@@ -302,11 +783,15 @@
     const rect = worldCanvas.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
+    const visibleFormats = new Set();
+    capabilities.filter(matchesCanvasFilters).forEach((item) => {
+      visibleFormats.add(item.source);
+      visibleFormats.add(item.target);
+    });
     let nearest = null;
     let nearestDistance = Infinity;
     particles.forEach((particle) => {
-      const visible = matchesActiveFilters(particle.item);
-      if (!visible) return;
+      if (!visibleFormats.has(particle.item.key)) return;
       const dx = particle.x - x;
       const dy = particle.y - y;
       const distance = Math.sqrt(dx * dx + dy * dy);
@@ -315,26 +800,80 @@
         nearest = particle;
       }
     });
-    return nearestDistance <= 22 ? nearest : null;
+    return nearestDistance <= 24 ? nearest : null;
+  }
+
+  function selectRoute(route) {
+    if (!route) return;
+    routePinned = true;
+    selectedCapability = route;
+    selectedFormat = route.source;
+    setActiveType(capabilityType(route), { route, forceRotate: true });
+    updateWorldSelection();
+  }
+
+  function selectFormat(format) {
+    routePinned = true;
+    selectedFormat = format;
+    const route = capabilities.find((item) => matchesActiveFilters(item) && (item.source === format || item.target === format));
+    if (route) selectedCapability = route;
+    updateWorldSelection();
   }
 
   function bindCanvasEvents() {
     if (!worldCanvas) return;
-    worldCanvas.addEventListener('mousemove', (event) => {
-      const nearest = nearestParticle(event);
-      hoveredCapability = nearest?.item || null;
-      worldCanvas.style.cursor = hoveredCapability ? 'pointer' : 'default';
+    worldCanvas.addEventListener('pointerdown', (event) => {
+      isDraggingWorld = true;
+      dragMoved = false;
+      dragStartX = event.clientX;
+      dragStartY = event.clientY;
+      lastPointerX = event.clientX;
+      lastPointerY = event.clientY;
+      worldVelocityX = 0;
+      worldVelocityY = 0;
+      worldFocusRotating = false;
+      worldCanvas.setPointerCapture?.(event.pointerId);
+      worldCanvas.style.cursor = 'grabbing';
     });
+    worldCanvas.addEventListener('pointermove', (event) => {
+      if (isDraggingWorld) {
+        const dx = event.clientX - lastPointerX;
+        const dy = event.clientY - lastPointerY;
+        if (Math.abs(event.clientX - dragStartX) + Math.abs(event.clientY - dragStartY) > 4) dragMoved = true;
+        worldRotationY += dx * 0.0062;
+        worldRotationX = clamp(worldRotationX + dy * 0.0048, -1.05, 0.72);
+        worldVelocityY = dx * 0.00034;
+        worldVelocityX = dy * 0.00025;
+        lastPointerX = event.clientX;
+        lastPointerY = event.clientY;
+        drawCanvas(performance.now());
+        return;
+      }
+      const nearest = nearestParticle(event);
+      if (nearest) {
+        hoveredCapability = capabilities.find((item) => matchesCanvasFilters(item) && (item.source === nearest.item.key || item.target === nearest.item.key)) || null;
+      } else {
+        hoveredCapability = null;
+      }
+      worldCanvas.style.cursor = nearest ? 'grab' : 'grab';
+    });
+    const endDrag = (event) => {
+      if (!isDraggingWorld) return;
+      isDraggingWorld = false;
+      worldCanvas.releasePointerCapture?.(event.pointerId);
+      worldCanvas.style.cursor = 'grab';
+    };
+    worldCanvas.addEventListener('pointerup', endDrag);
+    worldCanvas.addEventListener('pointercancel', endDrag);
     worldCanvas.addEventListener('mouseleave', () => {
-      hoveredCapability = null;
-      worldCanvas.style.cursor = 'default';
+      if (!isDraggingWorld) hoveredCapability = null;
     });
     worldCanvas.addEventListener('click', (event) => {
+      if (dragMoved) return;
       const nearest = nearestParticle(event);
       if (!nearest) return;
-      selectedCapability = nearest.item;
-      activeType = nearest.type;
-      render();
+      setActiveType(nearest.type, { forceRotate: true });
+      selectFormat(nearest.item.key);
     });
     window.addEventListener('resize', () => {
       resizeCanvas();
@@ -376,7 +915,7 @@
               <span class="flow-source">${item.source.toUpperCase()}</span>
               <i aria-hidden="true"></i>
               <span class="flow-target">${item.target.toUpperCase()}</span>
-              <em>${levelLabel(item.level)}</em>
+              <em>${verificationLabel(item)}</em>
             </button>
           `).join('')}
         </div>
@@ -385,8 +924,8 @@
 
     matrix.querySelectorAll('[data-capability-key]').forEach((button) => {
       button.addEventListener('click', () => {
-        selectedCapability = capabilities.find((item) => item.key === button.dataset.capabilityKey) || null;
-        render();
+        const route = capabilities.find((item) => item.key === button.dataset.capabilityKey) || null;
+        selectRoute(route);
         worldPopover?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       });
     });
@@ -428,21 +967,27 @@
     button.addEventListener('click', () => {
       activeFilter = button.dataset.convertFilter || 'all';
       selectedCapability = null;
+      selectedFormat = null;
+      routePinned = false;
       render();
     });
   });
 
   typeButtons.forEach((button) => {
     button.addEventListener('click', () => {
-      activeType = button.dataset.convertType || 'all';
+      setActiveType(button.dataset.convertType || 'all');
       selectedCapability = null;
-      render();
+      selectedFormat = null;
+      routePinned = false;
+      updateWorldSelection();
     });
   });
 
   worldSearchInput?.addEventListener('input', () => {
     activeQuery = worldSearchInput.value || '';
     selectedCapability = null;
+    selectedFormat = null;
+    routePinned = false;
     render();
   });
 

@@ -7,10 +7,12 @@ from urllib.parse import urlparse
 import requests
 
 from fetchers.adapters.base import BasePlatformAdapter
+from fetchers.adapters.common import collect_subtitle_tracks_from_payload
 from fetchers.models import MediaFetchResult, MediaStream
 
 URL_PATTERN = re.compile(r"https?://[^\s]+")
 SHORT_VIDEO_PATH_PATTERN = re.compile(r"^/short-video/([^/?#]+)")
+PC_SHARE_PATH_PATTERN = re.compile(r"^/f/([^/?#]+)")
 MOBILE_PHOTO_PATH_PATTERN = re.compile(r"^/fw/photo/([^/?#]+)")
 USER_AGENT = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
@@ -42,7 +44,7 @@ class KuaishouAdapter(BasePlatformAdapter):
         if host == "v.kuaishou.com":
             return True
         if host in {"www.kuaishou.com", "kuaishou.com"}:
-            return bool(SHORT_VIDEO_PATH_PATTERN.search(path))
+            return bool(SHORT_VIDEO_PATH_PATTERN.search(path) or PC_SHARE_PATH_PATTERN.search(path))
         if host in {"m.gifshow.com", "chenzhongtech.com"}:
             return bool(MOBILE_PHOTO_PATH_PATTERN.search(path))
         return False
@@ -56,6 +58,14 @@ class KuaishouAdapter(BasePlatformAdapter):
 
         if host in {"www.kuaishou.com", "kuaishou.com"}:
             match = SHORT_VIDEO_PATH_PATTERN.search(path)
+            if not match and PC_SHARE_PATH_PATTERN.search(path):
+                response = requests.get(
+                    candidate,
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=30,
+                )
+                response.raise_for_status()
+                return self.normalize_link(response.url)
             if not match:
                 raise ValueError(f"Unsupported Kuaishou page: {candidate}")
             return f"https://m.gifshow.com/fw/photo/{match.group(1)}{query}"
@@ -112,6 +122,12 @@ class KuaishouAdapter(BasePlatformAdapter):
             audio_streams=[],
             preferred_video=preferred_video,
             preferred_audio=None,
+            subtitle_tracks=collect_subtitle_tracks_from_payload(
+                photo,
+                source="kuaishou-native",
+                base_url=response.url,
+                default_format="json",
+            ),
             metadata={
                 "capture_strategy": "mobile-init-state",
                 "media_kind": "video",

@@ -84,7 +84,7 @@ def _read_docx_paragraphs(input_path: Path) -> list[str]:
 def _markdown_to_html(text: str) -> str:
     try:
         import markdown  # type: ignore
-        body = markdown.markdown(text)
+        body = markdown.markdown(text, extensions=['tables', 'fenced_code'])
     except Exception:
         lines = []
         for line in text.splitlines():
@@ -95,25 +95,94 @@ def _markdown_to_html(text: str) -> str:
             elif line.strip():
                 lines.append(f'<p>{html.escape(line)}</p>')
         body = '\n'.join(lines)
-    return '<!doctype html><meta charset="utf-8">\n' + body + '\n'
+    return '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>StreamDock 文档</title></head><body>\n' + body + '\n</body></html>\n'
 
 
 def _write_basic_pdf(text: str, output_path: Path) -> None:
     try:
         from reportlab.lib.pagesizes import A4  # type: ignore
+        from reportlab.pdfbase import pdfmetrics  # type: ignore
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont  # type: ignore
         from reportlab.pdfgen import canvas  # type: ignore
     except Exception as exc:  # pragma: no cover
         raise RuntimeError('缺少 reportlab，无法生成基础 PDF') from exc
     c = canvas.Canvas(str(output_path), pagesize=A4)
+    pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+    c.setFont('STSong-Light', 10)
     width, height = A4
     y = height - 50
-    for line in text.splitlines():
-        if y < 50:
-            c.showPage()
-            y = height - 50
-        c.drawString(50, y, line[:110])
-        y -= 16
+    for raw_line in text.splitlines():
+        line = raw_line or ' '
+        chunks = [line[index:index + 55] for index in range(0, len(line), 55)] or [' ']
+        for chunk in chunks:
+            if y < 50:
+                c.showPage(); c.setFont('STSong-Light', 10); y = height - 50
+            c.drawString(50, y, chunk)
+            y -= 16
     c.save()
+
+
+def _write_markdown_pdf(text: str, output_path: Path) -> None:
+    """Render readable Chinese Markdown, including wide pipe tables, to PDF."""
+    try:
+        from reportlab.lib import colors  # type: ignore
+        from reportlab.lib.pagesizes import A4, landscape  # type: ignore
+        from reportlab.lib.styles import ParagraphStyle  # type: ignore
+        from reportlab.lib.enums import TA_LEFT  # type: ignore
+        from reportlab.pdfbase import pdfmetrics  # type: ignore
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont  # type: ignore
+        from reportlab.platypus import LongTable, Paragraph, SimpleDocTemplate, Spacer, TableStyle  # type: ignore
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError('缺少 reportlab，无法生成 Markdown PDF') from exc
+
+    pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+    page_size = landscape(A4)
+    document = SimpleDocTemplate(str(output_path), pagesize=page_size, leftMargin=30, rightMargin=30, topMargin=32, bottomMargin=32)
+    body = ParagraphStyle('CJKBody', fontName='STSong-Light', fontSize=9, leading=14, alignment=TA_LEFT, wordWrap='CJK')
+    heading = ParagraphStyle('CJKHeading', parent=body, fontSize=20, leading=26, spaceAfter=10)
+    subheading = ParagraphStyle('CJKSubheading', parent=body, fontSize=14, leading=20, spaceBefore=8, spaceAfter=6)
+    table_text = ParagraphStyle('CJKTable', parent=body, fontSize=6.4, leading=9, wordWrap='CJK')
+    story = []
+    lines = text.splitlines()
+    index = 0
+
+    def cells(line: str) -> list[str]:
+        return [part.strip() for part in line.strip().strip('|').split('|')]
+
+    while index < len(lines):
+        line = lines[index].strip()
+        if not line:
+            index += 1
+            continue
+        if line.startswith('|') and index + 1 < len(lines) and re.match(r'^\s*\|?\s*:?-{3,}', lines[index + 1]):
+            rows = [cells(line)]
+            index += 2
+            while index < len(lines) and lines[index].strip().startswith('|'):
+                rows.append(cells(lines[index])); index += 1
+            column_count = max(len(row) for row in rows)
+            normalized = [row + [''] * (column_count - len(row)) for row in rows]
+            available_width = page_size[0] - 60
+            table = LongTable(
+                [[Paragraph(html.escape(value), table_text) for value in row] for row in normalized],
+                colWidths=[available_width / column_count] * column_count,
+                repeatRows=1,
+            )
+            table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (-1, -1), 'STSong-Light'), ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#eee8df')),
+                ('GRID', (0, 0), (-1, -1), .35, colors.HexColor('#cfc7bd')), ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 4), ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+                ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ]))
+            story.extend([table, Spacer(1, 10)])
+            continue
+        if line.startswith('# '):
+            story.append(Paragraph(html.escape(line[2:]), heading))
+        elif line.startswith(('## ', '### ')):
+            story.append(Paragraph(html.escape(line.lstrip('#').strip()), subheading))
+        else:
+            story.extend([Paragraph(html.escape(line), body), Spacer(1, 5)])
+        index += 1
+    document.build(story)
 
 
 def _libreoffice_convert(input_path: Path, output_dir: Path, target: str) -> Path:
@@ -170,7 +239,7 @@ def convert_document_basic(source: str, target: str, input_path: Path, output_pa
     elif source in {'md', 'markdown'} and target == 'docx':
         _write_docx_from_text(text, output_path)
     elif source in {'md', 'markdown'} and target == 'pdf':
-        _write_basic_pdf(_markdown_to_text(text), output_path)
+        _write_markdown_pdf(text, output_path)
     elif source == 'html' and target == 'txt':
         output_path.write_text(_html_to_text(text), encoding='utf-8')
     elif source == 'html' and target == 'md':

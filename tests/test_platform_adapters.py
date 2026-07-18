@@ -1,16 +1,17 @@
 import unittest
 import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.adapters.bilibili import BilibiliAdapter
 from fetchers.adapters.channels import ChannelsAdapter
-from fetchers.adapters.common import classify_browser_response_candidate
-from fetchers.adapters.douyin import DouyinAdapter
+from fetchers.adapters.common import classify_browser_response_candidate, choose_best_browser_media_url
+from fetchers.adapters.douyin import DouyinAdapter, extract_router_data_json, resolve_share_link
 from fetchers.adapters.kuaishou import KuaishouAdapter
 from fetchers.adapters.weibo import WeiboAdapter
 from fetchers.adapters.xiaohongshu import XiaohongshuAdapter
-from fetchers.models import ExportRequest, MediaFetchResult, MediaStream, ResolvedMediaSelection
+from fetchers.models import ExportRequest, MediaFetchResult, MediaStream, ResolvedMediaSelection, SubtitleTrack
 
 
 class ModelContractTests(unittest.TestCase):
@@ -86,6 +87,67 @@ class BrowserCaptureHelperTests(unittest.TestCase):
             "video",
         )
 
+    def test_browser_response_candidate_ignores_platform_decoy_media(self):
+        for url, content_type in (
+            ("https://rr2---sn-demo.googlevideo.com/generate_204", None),
+            ("https://www.youtube.com/s/search/audio/no_input.mp3", "audio/mpeg"),
+            ("https://www.youtube.com/s/search/audio/failure.mp3", "audio/mpeg"),
+            ("https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web_login_static/tiktok/webapp/main/webapp-desktop/playback1.mp4", "video/mp4"),
+            ("https://abs.twimg.com/x-web/x-web/assets/default-video-player-ui-CWE5L8B9.js", "application/javascript"),
+        ):
+            with self.subTest(url=url):
+                self.assertIsNone(
+                    classify_browser_response_candidate(
+                        url,
+                        resource_type="media",
+                        content_type=content_type,
+                    )
+                )
+
+    def test_browser_response_candidate_classifies_x_audio_segments_by_path(self):
+        self.assertEqual(
+            classify_browser_response_candidate(
+                "https://video.twimg.com/amplify_video/1/aud/mp4a/0/0/128000/demo.mp4",
+                resource_type="xhr",
+                content_type="video/mp4",
+            ),
+            "audio",
+        )
+        self.assertEqual(
+            classify_browser_response_candidate(
+                "https://video.twimg.com/amplify_video/1/vid/avc1/0/0/720x982/demo.mp4",
+                resource_type="xhr",
+                content_type="video/mp4",
+            ),
+            "video",
+        )
+
+    def test_browser_capture_prefers_complete_x_mp4_over_fragments(self):
+        self.assertEqual(
+            choose_best_browser_media_url(
+                [
+                    "https://video.twimg.com/amplify_video/1/vid/avc1/3000/6000/720x982/frag.m4s",
+                    "https://video.twimg.com/amplify_video/1/vid/avc1/0/0/320x436/low.mp4",
+                    "https://video.twimg.com/amplify_video/1/vid/avc1/0/0/720x982/high.mp4",
+                ],
+                kind="video",
+            ),
+            "https://video.twimg.com/amplify_video/1/vid/avc1/0/0/720x982/high.mp4",
+        )
+
+    def test_browser_capture_prefers_x_hls_playlist_over_init_mp4(self):
+        self.assertEqual(
+            choose_best_browser_media_url(
+                [
+                    "https://video.twimg.com/amplify_video/1/vid/avc1/0/0/720x982/init.mp4",
+                    "https://video.twimg.com/amplify_video/1/pl/avc1/720x982/video.m3u8",
+                    "https://video.twimg.com/amplify_video/1/vid/avc1/3000/6000/720x982/frag.m4s",
+                ],
+                kind="video",
+            ),
+            "https://video.twimg.com/amplify_video/1/pl/avc1/720x982/video.m3u8",
+        )
+
 
 class RegistryTests(unittest.TestCase):
     def test_registry_exposes_all_platform_adapters(self):
@@ -149,6 +211,28 @@ class DouyinAdapterTests(unittest.TestCase):
         self.assertTrue(adapter.can_handle("https://www.douyin.com/video/123"))
         self.assertFalse(adapter.can_handle("https://www.bilibili.com/video/BV1xx411c7mD"))
         self.assertFalse(adapter.can_handle("https://evil.example.com/?redirect=https://www.douyin.com/video/123"))
+
+    def test_douyin_router_data_parser_accepts_spacing_variants(self):
+        for anchor in ("window._ROUTER_DATA=", "window._ROUTER_DATA   ="):
+            with self.subTest(anchor=anchor):
+                self.assertEqual(extract_router_data_json(f"<script>{anchor}{{\"ok\":true}}</script>"), '{"ok":true}')
+
+    def test_douyin_share_resolver_ignores_homepage_redirect(self):
+        class FakeResponse:
+            headers = {"location": "https://www.douyin.com"}
+
+        with patch("fetchers.adapters.douyin.requests.get", return_value=FakeResponse()):
+            self.assertEqual(resolve_share_link("https://v.douyin.com/demo/"), "https://v.douyin.com/demo/")
+
+    def test_douyin_share_resolver_accepts_video_redirect(self):
+        class FakeResponse:
+            headers = {"location": "https://www.douyin.com/video/7444687640944790844"}
+
+        with patch("fetchers.adapters.douyin.requests.get", return_value=FakeResponse()):
+            self.assertEqual(
+                resolve_share_link("https://v.douyin.com/demo/"),
+                "https://www.douyin.com/video/7444687640944790844",
+            )
 
     def test_douyin_adapter_builds_quality_streams_from_aweme_detail(self):
         adapter = DouyinAdapter()
@@ -268,6 +352,175 @@ class DouyinAdapterTests(unittest.TestCase):
 
         self.assertEqual(result["platform"], "douyin")
         self.assertEqual(mocked_download.call_args_list[0].args[0], "https://cdn.example.com/dy-540.mp4")
+
+    def test_pipeline_generates_asr_subtitle_when_native_tracks_are_missing(self):
+        from pathlib import Path
+
+        from fetchers.pipeline import run_pipeline
+
+        class FakeAdapter:
+            platform_name = "douyin"
+            download_user_agent = "demo-agent"
+            download_referer = "https://v.douyin.com/"
+
+            def normalize_link(self, raw_link: str) -> str:
+                return "normalized-link"
+
+            def fetch_media(self, normalized_link: str) -> MediaFetchResult:
+                video = MediaStream(url="https://cdn.example.com/video.mp4", stream_type="video", container="mp4")
+                return MediaFetchResult(
+                    platform="douyin",
+                    content_type="video",
+                    title="demo",
+                    source_url="https://v.douyin.com/demo/",
+                    final_url="https://www.douyin.com/video/1",
+                    cover_url=None,
+                    author=None,
+                    video_streams=[video],
+                    audio_streams=[],
+                    preferred_video=video,
+                    preferred_audio=None,
+                    subtitle_tracks=[],
+                    metadata={},
+                )
+
+        with tempfile.TemporaryDirectory() as output_dir:
+            asr_path = Path(output_dir) / "demo_subtitle_asr.srt"
+            progress_events = []
+            with patch("fetchers.pipeline.download_media", return_value=Path("/tmp/source.mp4")), \
+                 patch("fetchers.pipeline.export_media", return_value=Path(output_dir) / "demo.mp4"), \
+                 patch("fetchers.pipeline.validate_media_output", return_value={'valid': True}), \
+                 patch("fetchers.pipeline.commit_partial"), \
+                 patch("fetchers.pipeline.asr_available", return_value=True), \
+                 patch("fetchers.pipeline.generate_asr_subtitle_file", return_value=asr_path) as mocked_asr, \
+                 patch("fetchers.pipeline.ocr_available", return_value=True), \
+                 patch("fetchers.pipeline.generate_ocr_subtitle_file") as mocked_ocr:
+                result = run_pipeline(
+                    raw_link="https://v.douyin.com/demo/",
+                    export_request=ExportRequest(output_path=output_dir, output_type="mp4"),
+                    adapter=FakeAdapter(),
+                    save_assets=True,
+                    subtitle_strategy="native-asr",
+                    progress_callback=lambda percent, stage: progress_events.append((percent, stage)),
+                )
+
+        self.assertEqual(result["assets"]["subtitles"], [str(asr_path)])
+        self.assertEqual(result["assets"]["subtitleDetails"][0]["source"], "speech-asr")
+        mocked_asr.assert_called_once()
+        mocked_ocr.assert_not_called()
+        self.assertIn((97, '视频已保存，正在生成语音字幕（可能需要几分钟）'), progress_events)
+
+    def test_pipeline_can_return_video_before_generated_subtitle_fallback(self):
+        from fetchers.pipeline import run_pipeline
+
+        class FakeAdapter:
+            platform_name = "douyin"
+            download_user_agent = "demo-agent"
+            download_referer = "https://v.douyin.com/"
+
+            def normalize_link(self, raw_link: str) -> str:
+                return "normalized-link"
+
+            def fetch_media(self, normalized_link: str) -> MediaFetchResult:
+                video = MediaStream(url="https://cdn.example.com/video.mp4", stream_type="video", container="mp4")
+                return MediaFetchResult(
+                    platform="douyin",
+                    content_type="video",
+                    title="demo",
+                    source_url="https://v.douyin.com/demo/",
+                    final_url="https://www.douyin.com/video/1",
+                    cover_url=None,
+                    author=None,
+                    video_streams=[video],
+                    preferred_video=video,
+                    subtitle_tracks=[],
+                    metadata={},
+                )
+
+        with tempfile.TemporaryDirectory() as output_dir:
+            with patch("fetchers.pipeline.download_media", return_value=Path("/tmp/source.mp4")), \
+                 patch("fetchers.pipeline.export_media", return_value=Path(output_dir) / "demo.mp4"), \
+                 patch("fetchers.pipeline.validate_media_output", return_value={'valid': True}), \
+                 patch("fetchers.pipeline.commit_partial"), \
+                 patch("fetchers.pipeline.generate_asr_subtitle_file") as mocked_asr, \
+                 patch("fetchers.pipeline.generate_ocr_subtitle_file") as mocked_ocr:
+                result = run_pipeline(
+                    raw_link="https://v.douyin.com/demo/",
+                    export_request=ExportRequest(output_path=output_dir, output_type="mp4"),
+                    adapter=FakeAdapter(),
+                    save_assets=True,
+                    subtitle_strategy="native-asr-ocr",
+                    defer_generated_subtitles=True,
+                )
+
+        self.assertTrue(result["subtitle_pending"])
+        self.assertEqual(result["output_file"], str((Path(output_dir) / "demo.mp4").resolve()))
+        self.assertEqual(result["assets"]["subtitles"], [])
+        mocked_asr.assert_not_called()
+        mocked_ocr.assert_not_called()
+
+    def test_pipeline_downloads_native_subtitle_before_asr_fallback(self):
+        from pathlib import Path
+
+        from fetchers.pipeline import run_pipeline
+
+        class FakeAdapter:
+            platform_name = "youtube"
+            download_user_agent = "demo-agent"
+            download_referer = "https://www.youtube.com/"
+
+            def normalize_link(self, raw_link: str) -> str:
+                return "normalized-link"
+
+            def fetch_media(self, normalized_link: str) -> MediaFetchResult:
+                video = MediaStream(url="https://cdn.example.com/video.mp4", stream_type="video", container="mp4")
+                return MediaFetchResult(
+                    platform="youtube",
+                    content_type="video",
+                    title="demo",
+                    source_url="https://youtu.be/demo",
+                    final_url="https://www.youtube.com/watch?v=demo",
+                    cover_url=None,
+                    author=None,
+                    video_streams=[video],
+                    audio_streams=[],
+                    preferred_video=video,
+                    preferred_audio=None,
+                    subtitle_tracks=[
+                        SubtitleTrack(
+                            url="https://cdn.example.com/subtitle.vtt",
+                            language="zh",
+                            label="中文",
+                            format="vtt",
+                            source="youtube-captions",
+                        )
+                    ],
+                    metadata={},
+                )
+
+        with tempfile.TemporaryDirectory() as output_dir:
+            native_path = Path(output_dir) / "demo_subtitle_zh.vtt"
+            with patch("fetchers.pipeline.download_media", return_value=Path("/tmp/source.mp4")), \
+                 patch("fetchers.pipeline.export_media", return_value=Path(output_dir) / "demo.mp4"), \
+                 patch("fetchers.pipeline.validate_media_output", return_value={'valid': True}), \
+                 patch("fetchers.pipeline.commit_partial"), \
+                 patch("fetchers.pipeline.download_subtitle_asset", return_value=(native_path, "vtt")) as mocked_sidecar, \
+                 patch("fetchers.pipeline.asr_available", return_value=True), \
+                 patch("fetchers.pipeline.generate_asr_subtitle_file") as mocked_asr:
+                result = run_pipeline(
+                    raw_link="https://youtu.be/demo",
+                    export_request=ExportRequest(output_path=output_dir, output_type="mp4"),
+                    adapter=FakeAdapter(),
+                    save_assets=True,
+                    subtitle_strategy="native-asr",
+                    defer_generated_subtitles=True,
+                )
+
+        self.assertEqual(result["assets"]["subtitles"], [str(native_path)])
+        self.assertEqual(result["assets"]["subtitleDetails"][0]["source"], "youtube-captions")
+        mocked_sidecar.assert_called_once()
+        mocked_asr.assert_not_called()
+        self.assertFalse(result["subtitle_pending"])
 
     def test_pipeline_runs_with_injected_fake_adapter(self):
         from fetchers.pipeline import run_pipeline
@@ -477,6 +730,32 @@ class YoutubeAdapterTests(unittest.TestCase):
         self.assertEqual(result.title, "fallback youtube")
         self.assertEqual(result.metadata["resolve_method"], "playwright-fallback")
 
+    def test_youtube_adapter_uses_chrome_cookie_ytdlp_for_login_required(self):
+        from fetchers.adapters.youtube import YoutubeAdapter
+
+        adapter = YoutubeAdapter()
+        html = """
+        <html><body>
+        <script>var ytInitialPlayerResponse = {"playabilityStatus":{"status":"LOGIN_REQUIRED","reason":"Sign in to confirm you’re not a bot"},"videoDetails":{"videoId":"ofAgMbcoSZc","title":"Login Required"}}</script>
+        </body></html>
+        """
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+                self.url = "https://www.youtube.com/watch?v=ofAgMbcoSZc"
+
+            def raise_for_status(self):
+                return None
+
+        with patch("fetchers.adapters.youtube.requests.get", return_value=FakeResponse(html)):
+            with patch("fetchers.adapters.youtube.capture_media_with_browser") as fallback:
+                result = adapter.fetch_media("https://www.youtube.com/watch?v=ofAgMbcoSZc")
+
+        fallback.assert_not_called()
+        self.assertEqual(result.metadata["resolve_method"], "yt-dlp-chrome-cookies")
+        self.assertTrue(result.preferred_video.url.startswith("ytdlp+chrome:"))
+
 
 class TiktokAdapterTests(unittest.TestCase):
     def test_tiktok_adapter_recognizes_video_links_and_rejects_spoofed_domain(self):
@@ -569,11 +848,33 @@ class TiktokAdapterTests(unittest.TestCase):
             "audio_url": None,
         }
         with patch("fetchers.adapters.tiktok.requests.get", return_value=FakeResponse("<html></html>")):
-            with patch("fetchers.adapters.tiktok.capture_media_with_browser", return_value=fallback_capture):
-                result = adapter.fetch_media("https://www.tiktok.com/@demo/video/7350000000000000001")
+            with patch.object(adapter, "_build_ytdlp_result", side_effect=RuntimeError("yt-dlp unavailable")):
+                with patch("fetchers.adapters.tiktok.capture_media_with_browser", return_value=fallback_capture):
+                    result = adapter.fetch_media("https://www.tiktok.com/@demo/video/7350000000000000001")
 
         self.assertEqual(result.title, "fallback tiktok")
         self.assertEqual(result.metadata["resolve_method"], "playwright-fallback")
+
+    def test_tiktok_adapter_prefers_ytdlp_fallback_before_browser_capture(self):
+        from fetchers.adapters.tiktok import TiktokAdapter
+
+        adapter = TiktokAdapter()
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+                self.url = "https://www.tiktok.com/@demo/video/7350000000000000001"
+
+            def raise_for_status(self):
+                return None
+
+        with patch("fetchers.adapters.tiktok.requests.get", return_value=FakeResponse("<html></html>")):
+            with patch("fetchers.adapters.tiktok.capture_media_with_browser") as browser_capture:
+                result = adapter.fetch_media("https://www.tiktok.com/@demo/video/7350000000000000001")
+
+        self.assertEqual(result.metadata["resolve_method"], "yt-dlp")
+        self.assertTrue(result.preferred_video.url.startswith("ytdlp:"))
+        browser_capture.assert_not_called()
 
 
 class TwitterXAdapterTests(unittest.TestCase):
@@ -1005,6 +1306,31 @@ class BilibiliAdapterTests(unittest.TestCase):
 
 
 class KuaishouAdapterTests(unittest.TestCase):
+    def test_kuaishou_adapter_recognizes_pc_share_f_links(self):
+        adapter = KuaishouAdapter()
+        self.assertTrue(adapter.can_handle("https://www.kuaishou.com/f/X-8B94d5ToRJx4Z8"))
+
+    def test_kuaishou_adapter_resolves_pc_share_f_links_to_mobile_url(self):
+        adapter = KuaishouAdapter()
+
+        class FakeResponse:
+            def __init__(self, url: str):
+                self.url = url
+
+            def raise_for_status(self):
+                return None
+
+        with patch("fetchers.adapters.kuaishou.requests.get") as mocked_get:
+            mocked_get.return_value = FakeResponse(
+                "https://www.kuaishou.com/short-video/3xhmsy6i2ct4bse?shareToken=X-8B94d5ToRJx4Z8"
+            )
+            normalized = adapter.normalize_link("https://www.kuaishou.com/f/X-8B94d5ToRJx4Z8")
+
+        self.assertEqual(
+            normalized,
+            "https://m.gifshow.com/fw/photo/3xhmsy6i2ct4bse?shareToken=X-8B94d5ToRJx4Z8",
+        )
+
     def test_kuaishou_adapter_normalizes_share_text_to_mobile_url(self):
         adapter = KuaishouAdapter()
         raw_link = "复制打开快手 https://www.kuaishou.com/short-video/3x58pjvr7ripi7c?foo=bar"
@@ -1269,6 +1595,28 @@ class XiaohongshuAdapterTests(unittest.TestCase):
         self.assertEqual(result.title, "小红书新版结构测试")
         self.assertEqual(result.metadata["raw_platform_id"], "66map123")
         self.assertEqual(result.preferred_video.url, "https://cdn.example.com/xhs-map.mp4")
+
+    def test_xiaohongshu_adapter_uses_image_list_as_video_cover(self):
+        adapter = XiaohongshuAdapter()
+        html = """
+        <html><head><title>demo</title></head><body>
+        <script>window.__INITIAL_STATE__={"note":{"noteId":"66cover123","title":"小红书封面兼容测试","user":{"nickname":"测试作者"},"imageList":[{"url":"","urlDefault":"http://sns-webpic-qc.xhscdn.com/demo/cover.jpg","urlPre":"http://sns-webpic-qc.xhscdn.com/demo/cover-preview.jpg","infoList":[{"imageScene":"WB_PRV","url":"http://sns-webpic-qc.xhscdn.com/demo/cover-preview.jpg"},{"imageScene":"WB_DFT","url":"http://sns-webpic-qc.xhscdn.com/demo/cover.jpg"}]}],"video":{"media":{"stream":{"h264":[{"masterUrl":"https://cdn.example.com/xhs-cover.mp4","width":720,"height":1280,"avgBitrate":1745583}]}}}}};</script>
+        </body></html>
+        """
+
+        class FakeResponse:
+            def __init__(self, text: str, url: str = "https://www.xiaohongshu.com/discovery/item/66cover123"):
+                self.text = text
+                self.url = url
+                self.status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        with patch("fetchers.adapters.xiaohongshu.requests.get", return_value=FakeResponse(html)):
+            result = adapter.fetch_media("https://www.xiaohongshu.com/discovery/item/66cover123")
+
+        self.assertEqual(result.cover_url, "https://sns-webpic-qc.xhscdn.com/demo/cover.jpg")
 
     def test_xiaohongshu_adapter_rejects_spoofed_domain(self):
         adapter = XiaohongshuAdapter()
@@ -1719,3 +2067,98 @@ class ChannelsAdapterTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "仅返回封面或文案"):
                     adapter.fetch_media("https://channels.weixin.qq.com/finder-preview/pages/sph?id=A6aw3m5o99")
+
+class SubtitleExtractionTests(unittest.TestCase):
+    def test_common_payload_scanner_collects_nested_subtitle_urls(self):
+        from fetchers.adapters.common import collect_subtitle_tracks_from_payload
+
+        tracks = collect_subtitle_tracks_from_payload(
+            {
+                "video": {"playUrl": "https://cdn.example.com/video.mp4"},
+                "captionInfos": [
+                    {"url": "//cdn.example.com/captions/zh.vtt", "languageCode": "zh-Hans", "name": "中文"},
+                    {"subtitle_url": "https://cdn.example.com/subtitle/en.srt", "lang": "en"},
+                ],
+            },
+            source="unit-test",
+            base_url="https://example.com/watch/1",
+        )
+
+        self.assertEqual(len(tracks), 2)
+        self.assertEqual(tracks[0].url, "https://cdn.example.com/captions/zh.vtt")
+        self.assertEqual(tracks[0].language, "zh-Hans")
+        self.assertEqual(tracks[0].label, "中文")
+        self.assertEqual(tracks[0].format, "vtt")
+        self.assertEqual(tracks[1].format, "srt")
+
+    def test_douyin_adapter_collects_native_subtitle_tracks(self):
+        from fetchers.adapters.douyin import DouyinAdapter
+
+        detail = {
+            "desc": "带字幕的抖音",
+            "author": {"nickname": "作者"},
+            "video": {
+                "play_addr": {"url_list": ["https://cdn.example.com/dy.mp4"], "height": 720},
+                "caption_infos": [{"url": "https://cdn.example.com/subtitle/dy.vtt", "language": "zh"}],
+            },
+        }
+        with patch("fetchers.adapters.douyin.capture_from_share_page", return_value={
+            "final_url": "https://www.iesdouyin.com/share/video/1/",
+            "title": "带字幕的抖音",
+            "media_kind": "video",
+            "video_url": "https://cdn.example.com/dy.mp4",
+            "audio_url": None,
+            "aweme_detail": detail,
+        }):
+            result = DouyinAdapter().fetch_media("https://www.iesdouyin.com/share/video/1/")
+
+        self.assertEqual(len(result.subtitle_tracks), 1)
+        self.assertEqual(result.subtitle_tracks[0].source, "douyin-native")
+
+    def test_kuaishou_adapter_collects_native_subtitle_tracks(self):
+        adapter = KuaishouAdapter()
+        html = 'window.INIT_STATE = {"x":{"photo":{"type":1,"caption":"快手字幕","photoId":"p1","manifest":{"adaptationSet":[{"representation":[{"url":"https://cdn.example.com/ks.mp4","height":720}]}]},"subtitle":{"url":"https://cdn.example.com/subtitle/ks.vtt","language":"zh"}}}}'
+        class Response:
+            url = "https://m.gifshow.com/fw/photo/p1"
+            text = html
+            def raise_for_status(self): pass
+        with patch("fetchers.adapters.kuaishou.requests.get", return_value=Response()):
+            result = adapter.fetch_media("https://m.gifshow.com/fw/photo/p1")
+        self.assertEqual(len(result.subtitle_tracks), 1)
+        self.assertEqual(result.subtitle_tracks[0].source, "kuaishou-native")
+
+    def test_xiaohongshu_adapter_collects_native_subtitle_tracks(self):
+        adapter = XiaohongshuAdapter()
+        html = '<script>window.__INITIAL_STATE__={"note":{"noteId":"n1","title":"小红书字幕","video":{"media":{"stream":{"h264":[{"masterUrl":"https://cdn.example.com/xhs.mp4","height":720}]}}},"subtitleList":[{"url":"https://cdn.example.com/subtitle/xhs.vtt","language":"zh"}]}}</script>'
+        class Response:
+            url = "https://www.xiaohongshu.com/discovery/item/n1"
+            text = html
+            def raise_for_status(self): pass
+        with patch("fetchers.adapters.xiaohongshu.requests.get", return_value=Response()):
+            result = adapter.fetch_media("https://www.xiaohongshu.com/discovery/item/n1")
+        self.assertEqual(len(result.subtitle_tracks), 1)
+        self.assertEqual(result.subtitle_tracks[0].source, "xiaohongshu-native")
+
+    def test_tiktok_adapter_collects_native_subtitle_tracks(self):
+        from fetchers.adapters.tiktok import TiktokAdapter
+
+        payload = {"props": {"pageProps": {"itemInfo": {"itemStruct": {
+            "id": "765", "desc": "TikTok 字幕", "video": {"playAddr": "https://cdn.example.com/tk.mp4", "cover": "https://cdn.example.com/c.jpg", "subtitleInfos": [{"Url": "https://cdn.example.com/subtitle/tk.vtt", "LanguageCodeName": "eng"}]}
+        }}}}}
+        result = TiktokAdapter()._build_structured_result("https://www.tiktok.com/@u/video/765", "https://www.tiktok.com/@u/video/765", payload)
+        self.assertEqual(len(result.subtitle_tracks), 1)
+        self.assertEqual(result.subtitle_tracks[0].source, "tiktok-native")
+
+    def test_x_adapter_collects_native_subtitle_tracks(self):
+        from fetchers.adapters.twitter_x import TwitterXAdapter
+
+        payload = {"props": {"pageProps": {"status": {
+            "rest_id": "1", "text": "X 字幕", "mediaEntities": [{
+                "media_url_https": "https://cdn.example.com/c.jpg",
+                "video_info": {"variants": [{"content_type": "video/mp4", "bitrate": 100, "url": "https://cdn.example.com/x.mp4"}]},
+                "captions": [{"url": "https://cdn.example.com/subtitle/x.vtt", "language": "en"}],
+            }]
+        }}}}
+        result = TwitterXAdapter()._build_structured_result("https://x.com/u/status/1", "https://x.com/u/status/1", payload)
+        self.assertEqual(len(result.subtitle_tracks), 1)
+        self.assertEqual(result.subtitle_tracks[0].source, "x-native")

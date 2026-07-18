@@ -1,5 +1,6 @@
 (function () {
   const resultBox = document.getElementById('convertResultBox');
+  const jumpTasksButton = document.getElementById('convertJumpTasks');
   function escapeHtml(value) {
     return String(value || '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
   }
@@ -13,8 +14,24 @@
     `).join('');
   }
   window.StreamDockConvertResult = {
+    showTaskJump(taskId) {
+      if (!jumpTasksButton) return;
+      jumpTasksButton.hidden = false;
+      jumpTasksButton.dataset.taskId = taskId || '';
+    },
+    hideTaskJump() {
+      if (!jumpTasksButton) return;
+      jumpTasksButton.hidden = true;
+      jumpTasksButton.dataset.taskId = '';
+    },
+    processing(label = '正在转换文件') {
+      if (!resultBox) return;
+      this.hideTaskJump();
+      resultBox.innerHTML = `<strong>${escapeHtml(label)}</strong><span>正在执行本地转换与输出校验，请保持页面打开。</span><div class="convert-inline-progress"><i></i></div>`;
+    },
     waiting() {
       if (!resultBox) return;
+      this.hideTaskJump();
       resultBox.innerHTML = '<strong>等待转换任务</strong><span>选择文件后，这里会显示输出文件或专业工具建议。</span>';
     },
     success(data) {
@@ -37,4 +54,14 @@
       resultBox.innerHTML = `<strong>转换未完成</strong><span>${escapeHtml(message)}</span>${vendorText}`;
     },
   };
+
+  jumpTasksButton?.addEventListener('click', () => {
+    const taskId = jumpTasksButton.dataset.taskId || '';
+    if (window.StreamDockTaskCenter?.openConvertTasks) {
+      window.StreamDockTaskCenter.openConvertTasks(taskId);
+      return;
+    }
+    window.StreamDockConvertTabs?.activate?.('tasks');
+    document.getElementById('convertTaskList')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 })();

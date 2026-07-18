@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
 import httpx
+
+# Importing app in tests must not touch ~/.streamdock/tasks.json.
+os.environ['STREAMDOCK_TASK_STORAGE_PATH'] = ''
 
 from app import app
 from pdf_engine.models import PdfParseMode
@@ -36,8 +40,15 @@ class PdfEngineTests(unittest.IsolatedAsyncioTestCase):
             health = await client.get('/api/pdf/health')
         self.assertEqual(page.status_code, 200)
         self.assertIn('PDF 智能解析', page.text)
+        self.assertIn('aria-label="搜索 PDF 任务"', page.text)
         self.assertEqual(health.status_code, 200)
         self.assertIn('available', health.json())
+
+    def test_pdf_task_list_supports_single_delete_and_filtered_empty_state(self):
+        script = Path('static/js/pdf.js').read_text(encoding='utf-8')
+        self.assertIn('data-delete-pdf-task', script)
+        self.assertIn('PDF 任务记录已删除', script)
+        self.assertIn('没有符合条件的 PDF 任务。', script)
 
     async def test_pdf_analyze_rejects_non_pdf_upload(self):
         transport = httpx.ASGITransport(app=app)

@@ -10,3 +10,11 @@ Pillow>=10
 openpyxl>=3.1
 python-docx>=1.1
 PyYAML>=6
+Markdown>=3.6
+reportlab>=4
+pypdf>=4
+yt-dlp>=2026.7.4
+EbookLib>=0.18
+
+# Optional but recommended for complete subtitles when platforms do not expose native captions.
+faster-whisper>=1.1,<2

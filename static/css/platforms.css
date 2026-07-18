@@ -1,15 +1,20 @@
 .platforms-page {
-  min-height: 100vh;
+  height: calc(100vh - 96px);
+  min-height: 0;
   padding-left: 240px;
   color: var(--ink);
+  overflow: hidden;
 }
+.platform-matrix-shell { height:100%; min-height:0; overflow-y:scroll; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; scrollbar-gutter:stable; }
 
-.platforms-body .container {
+.platforms-body .platforms-layout {
   width: min(1240px, calc(100vw - 336px));
 }
 
 .platforms-workspace {
   padding: 24px 0 64px;
+  height:100%;
+  min-height:0;
 }
 
 .platforms-layout {
@@ -17,6 +22,8 @@
   grid-template-columns: 1fr;
   gap: 0;
   align-items: start;
+  height:100%;
+  min-height:0;
 }
 
 .platform-category-nav {
@@ -314,3 +321,51 @@
   .matrix-row { grid-template-columns: 1fr; gap: 12px; }
   .platform-status { justify-self: start; }
 }
+
+@media (min-width: 981px) {
+  body.platforms-body {
+    overflow-y: auto;
+  }
+  .platforms-page {
+    height: auto;
+    min-height: calc(100vh - 96px);
+    overflow: visible;
+  }
+  .platforms-workspace,
+  .platforms-layout {
+    height: auto;
+    min-height: calc(100vh - 96px);
+  }
+  .platform-matrix-shell {
+    position: static;
+    width: 100%;
+    height: auto;
+    min-height: calc(100vh - 96px);
+    overflow: visible;
+    padding: 24px 0 64px;
+  }
+}
+
+.platform-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin: -4px 0 20px;
+}
+.platform-overview article {
+  min-height: 92px;
+  padding: 18px 20px;
+  border: 1px solid rgba(70,63,56,.10);
+  border-radius: 18px;
+  background: rgba(255,255,255,.38);
+  box-shadow: 0 14px 32px rgba(52,45,38,.06);
+}
+.platform-overview strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #171615;
+  font: 34px/1 var(--serif);
+}
+.platform-overview span { color: #756e65; font-size: 13px; }
+
+.platform-capability-bars{display:grid;gap:10px;margin-top:20px}.platform-capability-bar{display:grid;grid-template-columns:64px minmax(0,1fr)34px;gap:10px;align-items:center;color:#756e65;font-size:12px}.platform-capability-bar i{height:7px;border-radius:999px;background:rgba(45,95,167,.10);overflow:hidden}.platform-capability-bar b{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#5f7fae,#8faf9a)}.platform-capability-bar em{font-style:normal;text-align:right;color:#3d3832;font-weight:700}

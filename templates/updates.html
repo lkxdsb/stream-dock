@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block page_styles %}
+<link rel="stylesheet" href="{{ url_for('static', path='/css/updates.css') }}?v=20260716-labels1" />
+{% endblock %}
+
+{% block page_content %}
+<main class="updates-page">
+  <section class="container updates-hero">
+    <p class="workspace-eyebrow">CHANGELOG</p>
+    <h1>更新日志</h1>
+    <span>记录 StreamDock 已完成、进行中和计划中的产品能力。</span>
+    <div class="updates-focus"><strong>当前版本重点</strong><span>完善本地任务体验、转换能力矩阵和 PDF 结构化结果，让用户从入口到产物都能明确知道下一步。</span></div>
+  </section>
+
+  <section class="container updates-timeline roadmap-board" aria-label="产品时间线">
+    <article class="roadmap-column roadmap-done">
+      <time>2026.07 · 已完成</time>
+      <h2>本地工具工作台</h2>
+      <p>视频解析、文件转换与 PDF 结构化解析形成三个独立工作流。</p>
+      <ul>
+        <li><a href="/use" data-transition-link><strong>视频解析</strong><span>多平台链接识别、队列任务与本地输出。</span><em>视频解析</em></a></li>
+        <li><a href="/convert" data-transition-link><strong>文件转换</strong><span>成熟路径本地执行，复杂路径明确推荐专业工具。</span><em>文件转换</em></a></li>
+        <li><a href="/pdf" data-transition-link><strong>PDF解析</strong><span>文本型与扫描型 PDF 自动判断，输出结构化结果。</span><em>PDF</em></a></li>
+      </ul>
+    </article>
+    <article class="roadmap-column roadmap-active">
+      <time>2026 Q3 · 进行中</time>
+      <h2>质量认证与批量任务</h2>
+      <p>为转换路线补充样例认证、失败降级、批量队列和结果质量报告。</p>
+      <ul>
+        <li><a href="/pdf" data-transition-link><strong>质量报告</strong><span>解析/转换结果展示校验状态和失败建议。</span><em>任务中心</em></a></li>
+        <li><a href="/use" data-transition-link><strong>批量处理</strong><span>多文件、多链接采用可暂停的保守队列。</span><em>批量任务</em></a></li>
+        <li><a href="/convert" data-transition-link><strong>能力矩阵</strong><span>用世界模型展示路径覆盖和本地执行边界。</span><em>文件转换</em></a></li>
+      </ul>
+    </article>
+    <article class="roadmap-column roadmap-plan">
+      <time>2026 Q4 · 计划</time>
+      <h2>桌面化与可复现安装</h2>
+      <p>完善 macOS 应用封装、环境自检和一键安装，让本地能力更容易交付。</p>
+      <ul>
+        <li><a href="/updates" data-transition-link><strong>桌面应用</strong><span>统一入口、菜单栏状态和输出目录管理。</span><em>桌面端</em></a></li>
+        <li><a href="/use" data-transition-link><strong>环境自检</strong><span>FFmpeg、PDF 引擎和转换依赖一键检查。</span><em>本地环境</em></a></li>
+        <li><a href="/updates" data-transition-link><strong>可复现安装</strong><span>降低部署成本，减少本机依赖缺失问题。</span><em>安装部署</em></a></li>
+      </ul>
+    </article>
+  </section>
+</main>
+{% endblock %}

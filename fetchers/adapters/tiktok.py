@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from typing import Any
 from urllib.parse import urlparse
 
@@ -9,13 +11,15 @@ import requests
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.adapters.common import (
     capture_media_with_browser,
+    collect_subtitle_tracks_from_payload,
     ensure_supported_host,
     extract_first_url,
     extract_script_json_by_id,
     get_url_host,
     host_matches,
 )
-from fetchers.models import MediaFetchResult, MediaStream
+from fetchers.downloader import resolve_ytdlp_command
+from fetchers.models import MediaFetchResult, MediaStream, SubtitleTrack
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -56,8 +60,11 @@ class TiktokAdapter(BasePlatformAdapter):
             payload = json.loads(extract_script_json_by_id(response.text, "__NEXT_DATA__"))
             return self._build_structured_result(normalized_link, response.url, payload)
         except Exception:
-            capture = capture_media_with_browser(normalized_link, user_agent=USER_AGENT)
-            return self._build_fallback_result(normalized_link, capture)
+            try:
+                return self._build_ytdlp_result(normalized_link)
+            except Exception:
+                capture = self._capture_with_retries(normalized_link)
+                return self._build_fallback_result(normalized_link, capture)
 
     def _build_structured_result(
         self,
@@ -97,6 +104,12 @@ class TiktokAdapter(BasePlatformAdapter):
             audio_streams=audio_streams,
             preferred_video=video_streams[0],
             preferred_audio=audio_streams[0] if audio_streams else None,
+            subtitle_tracks=collect_subtitle_tracks_from_payload(
+                item,
+                source="tiktok-native",
+                base_url=final_url,
+                default_format="vtt",
+            ),
             metadata={
                 "resolve_method": "next-data",
                 "raw_platform_id": item.get("id"),
@@ -122,11 +135,105 @@ class TiktokAdapter(BasePlatformAdapter):
             audio_streams=audio_streams,
             preferred_video=video_streams[0],
             preferred_audio=audio_streams[0] if audio_streams else None,
+            subtitle_tracks=collect_subtitle_tracks_from_payload(
+                capture,
+                source="tiktok-browser",
+                base_url=capture.get("final_url") or normalized_link,
+                default_format="vtt",
+            ),
             metadata={
                 "resolve_method": "playwright-fallback",
                 "raw_platform_id": self._extract_video_id(normalized_link),
             },
         )
+
+
+    def _extract_ytdlp_info(self, normalized_link: str) -> dict[str, Any]:
+        try:
+            completed = subprocess.run(
+                [*resolve_ytdlp_command(), '--skip-download', '--dump-json', normalized_link],
+                text=True,
+                capture_output=True,
+                timeout=int(os.getenv('STREAMDOCK_YTDLP_METADATA_TIMEOUT', '25')),
+            )
+        except Exception:
+            return {}
+        if completed.returncode != 0 or not completed.stdout.strip():
+            return {}
+        try:
+            return json.loads(completed.stdout)
+        except json.JSONDecodeError:
+            return {}
+
+    def _subtitle_tracks_from_ytdlp_info(self, info: dict[str, Any]) -> list[SubtitleTrack]:
+        tracks: list[SubtitleTrack] = []
+        for source_name, collection in (
+            ('tiktok-ytdlp-subtitle', info.get('subtitles') or {}),
+            ('tiktok-ytdlp-auto-caption', info.get('automatic_captions') or {}),
+        ):
+            if not isinstance(collection, dict):
+                continue
+            for language, entries in collection.items():
+                if not isinstance(entries, list):
+                    continue
+                for entry in entries:
+                    if not isinstance(entry, dict) or not entry.get('url'):
+                        continue
+                    ext = entry.get('ext') or entry.get('format') or 'vtt'
+                    tracks.append(SubtitleTrack(
+                        url=str(entry['url']),
+                        language=str(language),
+                        label=entry.get('name') or str(language),
+                        format=str(ext),
+                        source=source_name,
+                    ))
+                    break
+        return tracks
+
+    def _build_ytdlp_result(self, normalized_link: str) -> MediaFetchResult:
+        video_id = self._extract_video_id(normalized_link)
+        info = self._extract_ytdlp_info(normalized_link)
+        title = str(info.get('title') or info.get('description') or f"tiktok_{video_id or 'video'}").strip()
+        return MediaFetchResult(
+            platform=self.platform_name,
+            content_type="video",
+            title=title or f"tiktok_{video_id or 'video'}",
+            source_url=normalized_link,
+            final_url=normalized_link,
+            cover_url=info.get('thumbnail'),
+            author=info.get('uploader') or info.get('creator'),
+            video_streams=[
+                MediaStream(
+                    url=f"ytdlp:{normalized_link}",
+                    stream_type="video",
+                    container="mp4",
+                    quality_label="yt-dlp",
+                )
+            ],
+            audio_streams=[],
+            preferred_video=MediaStream(
+                url=f"ytdlp:{normalized_link}",
+                stream_type="video",
+                container="mp4",
+                quality_label="yt-dlp",
+            ),
+            preferred_audio=None,
+            subtitle_tracks=self._subtitle_tracks_from_ytdlp_info(info),
+            metadata={
+                "resolve_method": "yt-dlp",
+                "raw_platform_id": video_id,
+                "description": info.get('description'),
+            },
+        )
+
+    def _capture_with_retries(self, normalized_link: str) -> dict[str, Any]:
+        last_error: Exception | None = None
+        for wait_ms in (10_000, 18_000, 26_000):
+            try:
+                return capture_media_with_browser(normalized_link, user_agent=USER_AGENT, wait_ms=wait_ms)
+            except Exception as exc:
+                last_error = exc
+        raise RuntimeError(f"TikTok 页面未捕获到目标视频流：{last_error}")
 
     def _extract_video_id(self, normalized_link: str) -> str | None:
         parts = [part for part in urlparse(normalized_link).path.split("/") if part]

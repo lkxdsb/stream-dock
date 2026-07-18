@@ -5,17 +5,102 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import urllib.request
 from pathlib import Path
 from typing import Any
 
 
 MIN_OUTPUT_FREE_BYTES = int(os.getenv('STREAMDOCK_MIN_OUTPUT_FREE_BYTES', str(256 * 1024 * 1024)))
+COMMON_TOOL_DIRS = (
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/local/sbin',
+    '/opt/local/bin',
+    '/usr/bin',
+    '/bin',
+)
 MEDIA_EXTENSIONS = {
     'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'aiff', 'wma', 'amr',
     'mp4', 'mov', 'mkv', 'webm', 'avi', 'flv', 'm4v', '3gp', 'ts',
 }
 VIDEO_EXTENSIONS = {'mp4', 'mov', 'mkv', 'webm', 'avi', 'flv', 'm4v', '3gp', 'ts'}
 AUDIO_EXTENSIONS = MEDIA_EXTENSIONS - VIDEO_EXTENSIONS
+
+
+def augmented_path(base_path: str | None = None) -> str:
+    parts: list[str] = []
+    seen: set[str] = set()
+    for item in str(base_path or os.environ.get('PATH') or '').split(os.pathsep):
+        if item and item not in seen:
+            parts.append(item)
+            seen.add(item)
+    for item in COMMON_TOOL_DIRS:
+        if item not in seen:
+            parts.append(item)
+            seen.add(item)
+    return os.pathsep.join(parts)
+
+
+def discover_system_proxies() -> dict[str, str]:
+    """Read the OS proxy without letting a lone NO_PROXY hide macOS settings.
+
+    launchd jobs commonly receive ``NO_PROXY`` but not ``HTTP_PROXY``.  On
+    macOS, urllib then treats the environment as authoritative and skips the
+    active System Settings proxy entirely.  Browser capture still works, while
+    requests/ffmpeg time out.  Query the macOS proxy store directly in that
+    case; other platforms keep urllib's normal discovery behavior.
+    """
+    try:
+        if sys.platform == 'darwin' and hasattr(urllib.request, 'getproxies_macosx_sysconf'):
+            raw = urllib.request.getproxies_macosx_sysconf()
+        else:
+            raw = urllib.request.getproxies()
+    except Exception:
+        return {}
+    return {
+        scheme: str(raw.get(scheme) or '').strip()
+        for scheme in ('http', 'https')
+        if str(raw.get(scheme) or '').strip()
+    }
+
+
+def network_subprocess_environment(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Return an environment where network subprocesses inherit OS proxies."""
+    env = dict(os.environ if base_env is None else base_env)
+    discovered: dict[str, str] | None = None
+    for scheme in ('http', 'https'):
+        lower_key = f'{scheme}_proxy'
+        upper_key = lower_key.upper()
+        value = str(env.get(lower_key) or env.get(upper_key) or '').strip()
+        if not value:
+            if discovered is None:
+                discovered = discover_system_proxies()
+            value = str(discovered.get(scheme) or '').strip()
+        if value:
+            # requests accepts either spelling; ffmpeg relies on lowercase
+            # http_proxy for remote HLS inputs, so mirror both explicitly.
+            env[lower_key] = value
+            env[upper_key] = value
+    return env
+
+
+def ensure_system_proxy_environment() -> dict[str, str]:
+    """Hydrate this process once so in-process requests match the browser."""
+    hydrated = network_subprocess_environment()
+    for key in ('http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY'):
+        value = hydrated.get(key)
+        if value and not os.environ.get(key):
+            os.environ[key] = value
+    return hydrated
+
+
+def resolve_tool_path(command: str) -> str:
+    found = shutil.which(command, path=augmented_path())
+    if found:
+        return found
+    return command
 
 
 def format_bytes(value: int) -> str:
@@ -87,7 +172,7 @@ def commit_partial(partial_path: Path, final_path: Path) -> Path:
 
 
 def _ffprobe(path: Path) -> dict[str, Any]:
-    ffprobe = shutil.which('ffprobe')
+    ffprobe = shutil.which('ffprobe', path=augmented_path())
     if not ffprobe:
         raise RuntimeError('缺少 ffprobe，无法校验音视频输出')
     completed = subprocess.run(
@@ -173,7 +258,7 @@ def validate_media_output(path: Path, *, expected_kind: str | None = None) -> di
 def deep_media_quality(path: Path, *, timeout_seconds: int = 180) -> dict[str, Any]:
     """Run optional full-stream anomaly detection without modifying the media."""
     base = validate_media_output(path, expected_kind='video')
-    ffmpeg = shutil.which('ffmpeg')
+    ffmpeg = shutil.which('ffmpeg', path=augmented_path())
     if not ffmpeg:
         raise RuntimeError('缺少 FFmpeg，无法执行深度质量检测')
     command = [
@@ -254,7 +339,7 @@ def environment_health(output_path: str | None = None) -> dict[str, Any]:
         ('FFmpeg', 'ffmpeg', True),
         ('FFprobe', 'ffprobe', True),
     ):
-        found = shutil.which(command)
+        found = shutil.which(command, path=augmented_path())
         checks.append({
             'key': command,
             'name': name,
@@ -272,6 +357,19 @@ def environment_health(output_path: str | None = None) -> dict[str, Any]:
         checks.append({'key': 'openpyxl', 'name': '表格转换', 'status': 'ok', 'detail': 'openpyxl 可用', 'required': False})
     except ImportError:
         checks.append({'key': 'openpyxl', 'name': '表格转换', 'status': 'missing', 'detail': '未安装 openpyxl', 'required': False})
+
+    try:
+        from fetchers.subtitle_asr import asr_engine_status
+        asr_status = asr_engine_status()
+        checks.append({
+            'key': 'subtitle_asr',
+            'name': '语音字幕',
+            'status': 'ok' if asr_status.available else 'missing',
+            'detail': asr_status.detail or ('可用' if asr_status.available else '未安装 Whisper'),
+            'required': False,
+        })
+    except Exception as exc:
+        checks.append({'key': 'subtitle_asr', 'name': '语音字幕', 'status': 'error', 'detail': str(exc), 'required': False})
 
     output = Path(output_path or '~/Downloads/StreamDock').expanduser()
     try:

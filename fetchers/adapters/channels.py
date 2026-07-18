@@ -12,6 +12,7 @@ import requests
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.adapters.common import (
     capture_media_with_browser,
+    collect_subtitle_tracks_from_payload,
     ensure_supported_host,
     extract_first_url,
     extract_script_json_by_id,
@@ -123,6 +124,12 @@ class ChannelsAdapter(BasePlatformAdapter):
                 audio_streams=[preferred_audio] if preferred_audio else [],
                 preferred_video=preferred_video,
                 preferred_audio=preferred_audio,
+                subtitle_tracks=collect_subtitle_tracks_from_payload(
+                    feed,
+                    source="channels-native",
+                    base_url=response.url,
+                    default_format="json",
+                ),
                 metadata={
                     "resolve_method": "embedded-json",
                     "raw_platform_id": feed.get("feedId"),
@@ -305,6 +312,12 @@ class ChannelsAdapter(BasePlatformAdapter):
             audio_streams=[],
             preferred_video=preferred_video,
             preferred_audio=None,
+            subtitle_tracks=collect_subtitle_tracks_from_payload(
+                feed_info,
+                source="channels-preview-api",
+                base_url=final_url,
+                default_format="json",
+            ),
             metadata={
                 "resolve_method": resolve_method,
                 "raw_platform_id": raw_platform_id,
@@ -379,6 +392,12 @@ class ChannelsAdapter(BasePlatformAdapter):
             audio_streams=audio_streams,
             preferred_video=video_streams[0],
             preferred_audio=audio_streams[0] if audio_streams else None,
+            subtitle_tracks=collect_subtitle_tracks_from_payload(
+                capture,
+                source="channels-browser",
+                base_url=capture.get("final_url") or normalized_link,
+                default_format="json",
+            ),
             metadata={
                 "resolve_method": "playwright-fallback",
                 "raw_platform_id": self._extract_feed_id(normalized_link),

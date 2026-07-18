@@ -6,6 +6,12 @@ from pathlib import Path
 from typing import Any
 
 
+VERIFIED_CONVERSION_ROUTES = {
+    'csv:json', 'epub:html', 'lrc:srt', 'md:docx', 'md:html', 'md:pdf',
+    'png:ico', 'rtf:txt', 'txt:docx', 'gz:folder',
+}
+
+
 class ConversionLevel(str, Enum):
     STABLE = 'stable'
     BASIC = 'basic'
@@ -40,6 +46,12 @@ class ConversionCapability:
             'notes': self.notes,
             'vendors': list(self.vendors),
             'key': self.key,
+            'verification': (
+                'verified' if self.key in VERIFIED_CONVERSION_ROUTES
+                else 'engine' if self.level == ConversionLevel.STABLE
+                else 'best-effort' if self.level == ConversionLevel.BASIC
+                else 'vendor'
+            ),
         }
 
 

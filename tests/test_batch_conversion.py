@@ -43,6 +43,41 @@ class BatchConversionTests(unittest.TestCase):
         self.assertEqual(len(result['results']), 2)
         self.assertTrue(all(row['outputPath'] for row in result['results']))
 
+class ConversionRobustnessRegressionTests(unittest.TestCase):
+    def test_gif_to_png_outputs_frame_directory(self):
+        try:
+            from PIL import Image
+        except Exception:
+            self.skipTest('Pillow unavailable')
+        from converters.pipeline import convert_file
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gif = root / 'anim.gif'
+            frames = [Image.new('RGB', (8, 8), color) for color in ('red', 'green')]
+            frames[0].save(gif, save_all=True, append_images=frames[1:], duration=50, loop=0)
+            result = convert_file(gif, gif.name, 'gif', 'png', root / 'out')
+
+            self.assertTrue(result.success, result.error)
+            self.assertTrue(result.output_path.is_dir())
+            self.assertTrue((result.output_path / 'frame_0001.png').is_file())
+            self.assertEqual(result.validation.get('kind'), 'folder')
+
+    def test_targz_validation_recognizes_tarball_not_plain_gz(self):
+        import tarfile
+        from converters.pipeline import convert_file
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            folder = root / 'src'
+            folder.mkdir()
+            (folder / 'a.txt').write_text('ok', encoding='utf-8')
+            result = convert_file(folder, folder.name, 'folder', 'tar.gz', root / 'out')
+
+            self.assertTrue(result.success, result.error)
+            self.assertTrue(tarfile.is_tarfile(result.output_path))
+            self.assertEqual(result.validation.get('detectedFormat'), 'tar.gz')
+
 
 if __name__ == '__main__':
     unittest.main()

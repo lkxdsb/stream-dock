@@ -2,6 +2,7 @@
   const matrix = document.getElementById('platformMatrix');
   const detail = document.getElementById('platformDetail');
   const categoryButtons = Array.from(document.querySelectorAll('[data-platform-category]'));
+  const metricNodes = Array.from(document.querySelectorAll('[data-platform-metric]'));
 
   if (!matrix || !detail || categoryButtons.length === 0) {
     return;
@@ -111,6 +112,20 @@
     '微博': 'weibo', '视频号': 'channels', 'YouTube': 'youtube', 'TikTok': 'tiktok', 'X / Twitter': 'twitter_x',
   };
 
+
+  function updateOverview() {
+    const allPlatforms = Object.values(platforms).flat();
+    const counts = {
+      stable: allPlatforms.filter((item) => ['稳定', '部分'].includes(item.level)).length,
+      login: allPlatforms.filter((item) => item.badges.some((badge) => badge.includes('Cookie') || badge.includes('登录态')) || item.name === '登录态增强').length,
+      experimental: allPlatforms.filter((item) => ['实验', '能力', '受限'].includes(item.level)).length,
+    };
+    metricNodes.forEach((node) => {
+      const key = node.dataset.platformMetric;
+      node.textContent = String(counts[key] ?? 0);
+    });
+  }
+
   function runtimeLabel(item) {
     const status = runtimeStatuses[platformKeys[item.name]];
     if (!status) return item.level;
@@ -161,6 +176,27 @@
     });
   }
 
+
+  function capabilityScores(item) {
+    const badgeText = item.badges.join(' ');
+    const levelScore = item.level === '稳定' ? 92 : item.level === '部分' ? 68 : item.level === '实验' ? 52 : item.level === '受限' ? 38 : 72;
+    const qualityScore = item.quality.includes('最高') || item.quality.includes('多档') ? 86 : item.quality.includes('候选') || item.quality.includes('变体') ? 66 : 52;
+    const loginScore = badgeText.includes('Cookie') || badgeText.includes('登录态') || item.name === '登录态增强' ? 82 : item.limit.includes('登录') || item.limit.includes('权限') ? 46 : 64;
+    const fallbackScore = badgeText.includes('浏览器回退') || item.name === '浏览器回退' ? 88 : item.strategy.includes('回退') ? 72 : 48;
+    return [
+      ['稳定性', levelScore],
+      ['画质能力', qualityScore],
+      ['登录态', loginScore],
+      ['回退链路', fallbackScore],
+    ];
+  }
+
+  function renderCapabilityBars(item) {
+    return `<div class="platform-capability-bars" aria-label="${escapeHtml(item.name)} 能力评分">${capabilityScores(item).map(([label, score]) => `
+      <div class="platform-capability-bar"><span>${escapeHtml(label)}</span><i><b style="width:${score}%"></b></i><em>${score}</em></div>
+    `).join('')}</div>`;
+  }
+
   function renderDetail() {
     const item = (platforms[currentCategory] || [])[currentIndex];
     if (!item) {
@@ -173,6 +209,7 @@
         <div>
           <h3 class="detail-title">${escapeHtml(item.name)}</h3>
           <p class="detail-summary">${escapeHtml(item.summary)}</p>
+          ${renderCapabilityBars(item)}
         </div>
         <ul class="detail-list">
           <li><span>解析策略</span><strong>${escapeHtml(item.strategy)}</strong></li>
@@ -195,6 +232,7 @@
     });
   });
 
+  updateOverview();
   renderMatrix();
   renderDetail();
 

@@ -1,0 +1,10 @@
+.about-page{padding:84px 0 100px;color:var(--ink)}
+.about-intro,.about-workflows,.about-principles{width:min(1180px,calc(100% - 80px));margin:0 auto}
+.about-intro>p,.about-principles p{margin:0 0 20px;color:var(--blue);font-size:12px;font-weight:700;letter-spacing:.22em}
+.about-intro h1{max-width:900px;margin:0;font-family:Georgia,"Songti SC",serif;font-size:clamp(54px,6vw,86px);font-weight:400;line-height:1.08;letter-spacing:-2px}
+.about-intro>span{display:block;max-width:680px;margin-top:30px;color:#716a62;font-size:17px;line-height:1.8}
+.about-intro>div{display:flex;gap:14px;margin-top:34px}.about-intro a{padding:14px 20px;border-radius:13px;background:#171717;color:#fff}.about-intro a+ a{background:#e9e3db;color:#282522}
+.about-workflows{display:grid;grid-template-columns:repeat(3,1fr);margin-top:100px;border-top:1px solid rgba(70,63,56,.14);border-bottom:1px solid rgba(70,63,56,.14)}
+.about-workflows article{min-height:330px;padding:34px 30px}.about-workflows article+article{border-left:1px solid rgba(70,63,56,.14)}.about-workflows em{color:var(--blue);font:normal 13px ui-monospace,monospace}.about-workflows h2{margin:64px 0 16px;font-size:26px}.about-workflows p{min-height:94px;color:#756e66;line-height:1.75}.about-workflows a{color:#34302c;font-weight:700}
+.about-principles{display:grid;grid-template-columns:.8fr 1.2fr;gap:90px;margin-top:100px}.about-principles h2{max-width:440px;margin:0;font-family:Georgia,"Songti SC",serif;font-size:48px;font-weight:400;line-height:1.22}.about-principles dl{margin:0}.about-principles dl>div{display:grid;grid-template-columns:150px 1fr;gap:24px;padding:24px 0;border-top:1px solid rgba(70,63,56,.13)}.about-principles dt{font-weight:750}.about-principles dd{margin:0;color:#756e66;line-height:1.7}
+@media(max-width:800px){.about-page{padding-top:48px}.about-intro,.about-workflows,.about-principles{width:calc(100% - 36px)}.about-workflows{grid-template-columns:1fr}.about-workflows article+article{border-left:0;border-top:1px solid rgba(70,63,56,.14)}.about-principles{grid-template-columns:1fr;gap:40px}.about-intro h1{font-size:48px}}

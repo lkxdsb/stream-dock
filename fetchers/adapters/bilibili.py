@@ -12,7 +12,7 @@ import requests
 
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.adapters.common import host_matches
-from fetchers.models import MediaFetchResult, MediaStream
+from fetchers.models import MediaFetchResult, MediaStream, SubtitleTrack
 
 URL_PATTERN = re.compile(r"https?://[^\s]+")
 INITIAL_STATE_PATTERN = re.compile(r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\});", re.S)
@@ -22,6 +22,7 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 )
 PLAYURL_ENDPOINT = "https://api.bilibili.com/x/player/playurl"
+PLAYER_V2_ENDPOINT = "https://api.bilibili.com/x/player/v2"
 
 MANUAL_COOKIE_ENV = "BILIBILI_COOKIE"
 MANUAL_COOKIE_FILE_ENV = "BILIBILI_COOKIE_FILE"
@@ -210,6 +211,7 @@ class BilibiliAdapter(BasePlatformAdapter):
             playurl_payload.get("accept_description") or [],
         )
         audio_streams = self._build_audio_streams(dash.get("audio") or [])
+        subtitle_tracks = self._fetch_subtitle_tracks(bvid=bvid, cid=cid, referer=final_url, cookies=cookies)
         if not video_streams:
             raise RuntimeError("No Bilibili video streams found in playurl response")
         if not audio_streams:
@@ -239,6 +241,7 @@ class BilibiliAdapter(BasePlatformAdapter):
             audio_streams=audio_streams,
             preferred_video=preferred_video,
             preferred_audio=preferred_audio,
+            subtitle_tracks=subtitle_tracks,
             metadata={
                 "capture_strategy": "web-playurl-cookie" if cookies else "web-playurl",
                 "cookie_source": cookie_source,
@@ -276,6 +279,40 @@ class BilibiliAdapter(BasePlatformAdapter):
         if payload.get("code") != 0:
             raise RuntimeError(f"Bilibili playurl API failed: {payload.get('message') or payload.get('code')}")
         return payload.get("data") or {}
+
+    def _fetch_subtitle_tracks(self, *, bvid: str, cid: int, referer: str, cookies=None) -> list[SubtitleTrack]:
+        try:
+            response = requests.get(
+                PLAYER_V2_ENDPOINT,
+                params={"bvid": bvid, "cid": str(cid)},
+                headers={"User-Agent": USER_AGENT, "Referer": referer},
+                cookies=cookies,
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            return []
+        if payload.get("code") != 0:
+            return []
+        raw_tracks = (((payload.get("data") or {}).get("subtitle") or {}).get("subtitles") or [])
+        tracks: list[SubtitleTrack] = []
+        for item in raw_tracks:
+            url = item.get("subtitle_url") or item.get("subtitleUrl")
+            if not url:
+                continue
+            if str(url).startswith("//"):
+                url = f"https:{url}"
+            tracks.append(
+                SubtitleTrack(
+                    url=str(url),
+                    language=item.get("lan") or item.get("language"),
+                    label=item.get("lan_doc") or item.get("lanDoc") or item.get("title"),
+                    format="json",
+                    source="bilibili-player-v2",
+                )
+            )
+        return tracks
 
     def _build_video_streams(
         self,

@@ -23,6 +23,7 @@ from fetchers.exporters import (
 )
 from fetchers.models import ExportRequest
 from fetchers.pipeline import run_pipeline
+from runtime_checks import ensure_system_proxy_environment
 
 SUPPORTED_OUTPUT_TYPES = set(OUTPUT_FORMATS)
 
@@ -62,10 +63,27 @@ def build_parser() -> argparse.ArgumentParser:
         required=False,
         help="Optional file path containing raw Bilibili cookie header",
     )
+    parser.add_argument(
+        "--saveAssets",
+        action="store_true",
+        help="Also save cover image and subtitle sidecar files when available",
+    )
+    parser.add_argument(
+        "--subtitleStrategy",
+        choices=["native", "native-asr", "native-asr-ocr", "ocr"],
+        default=None,
+        help="Subtitle saving strategy: native tracks, ASR fallback, or OCR fallback",
+    )
+    parser.add_argument(
+        "--deferGeneratedSubtitles",
+        action="store_true",
+        help="Return after the media file is ready and let the app run ASR/OCR in its background subtitle queue",
+    )
     return parser
 
 
 def main() -> int:
+    ensure_system_proxy_environment()
     parser = build_parser()
     args = parser.parse_args()
     if args.bilibiliCookie:
@@ -77,16 +95,34 @@ def main() -> int:
         raw_link=args.link,
         export_request=ExportRequest(output_path=args.outputPath, output_type=args.outputType),
         video_quality=args.videoQuality,
+        save_assets=args.saveAssets,
+        subtitle_strategy=args.subtitleStrategy,
+        defer_generated_subtitles=args.deferGeneratedSubtitles,
         progress_callback=progress,
     )
     log(f"platform: {result['platform']}")
+    if result.get('title'):
+        log(f"title: {result['title']}")
     log(f"normalized link: {result['normalized_link']}")
     log(f"capture strategy: {result['capture_strategy']}")
     log(f"captured media kind: {result['media_kind']}")
     log(f"final page: {result['final_url']}")
+    if result.get('cover_url'):
+        log(f"cover url: {result['cover_url']}")
+    log(f"subtitle count: {result.get('subtitle_count', 0)}")
+    log(f"subtitle pending: {'true' if result.get('subtitle_pending') else 'false'}")
     if result.get("selected_video_quality"):
         log(f"selected video quality: {result['selected_video_quality']}")
     log(f"output file: {result['output_file']}")
+    assets = result.get('assets') or {}
+    if isinstance(assets, dict):
+        if assets.get('cover'):
+            log(f"cover file: {assets['cover']}")
+        for subtitle in assets.get('subtitles') or []:
+            log(f"subtitle file: {subtitle}")
+        for detail in assets.get('subtitleDetails') or []:
+            if isinstance(detail, dict) and detail.get('path'):
+                log(f"subtitle detail: {detail.get('source') or '-'}|{detail.get('quality') or '-'}|{detail.get('path')}")
     return 0
 
 

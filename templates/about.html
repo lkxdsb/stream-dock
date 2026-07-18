@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block page_styles %}<link rel="stylesheet" href="{{ url_for('static', path='/css/about.css') }}?v=20260712-about1" />{% endblock %}
+{% block page_content %}
+<main class="about-page">
+  <section class="about-intro">
+    <p>ABOUT STREAMDOCK</p>
+    <h1>一个在本地完成处理的<br />媒体与文档工具箱。</h1>
+    <span>把分散的平台链接、文件格式与 PDF 内容，收进同一个清晰、可追踪的本地工作流。</span>
+    <div><a href="/use" data-transition-link>开始视频解析</a><a href="/convert" data-transition-link>打开文件转换</a></div>
+  </section>
+
+  <section class="about-workflows" aria-label="核心工作流">
+    <article><em>01</em><h2>视频解析</h2><p>识别平台提供的候选流，按画质、编码与兼容性选择输出，并在完成后校验音视频轨道。</p><a href="/platforms" data-transition-link>查看平台能力 →</a></article>
+    <article><em>02</em><h2>文件转换</h2><p>成熟编码路线直接本地执行；基础文档路线明确提示可能的样式损失；复杂场景不做虚假承诺。</p><a href="/convert" data-transition-link>查看转换矩阵 →</a></article>
+    <article><em>03</em><h2>PDF 解析</h2><p>先分析文本层和扫描特征，再选择快速、OCR 或精准策略，输出结构化 Markdown 与质量报告。</p><a href="/pdf" data-transition-link>进入 PDF 工作台 →</a></article>
+  </section>
+
+  <section class="about-principles">
+    <div><p>PRODUCT PRINCIPLES</p><h2>能力边界，比功能数量更重要。</h2></div>
+    <dl>
+      <div><dt>本地优先</dt><dd>输入、临时文件与结果默认留在你的设备上。</dd></div>
+      <div><dt>结果可验证</dt><dd>不仅生成文件，还检查格式、轨道、分辨率与输出完整性。</dd></div>
+      <div><dt>分级承诺</dt><dd>区分已验证路线、基础路线和专业工具建议，避免把“可运行”写成“高保真”。</dd></div>
+    </dl>
+  </section>
+</main>
+{% endblock %}

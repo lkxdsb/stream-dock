@@ -2,14 +2,23 @@ import unittest
 import subprocess
 import tempfile
 import os
+import io
 from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 
+# App tests must never read, create, or clear the user's real task history.
+os.environ['STREAMDOCK_TASK_STORAGE_PATH'] = ''
+
 from app import FetchRequest, app, task_store
 from tasks.models import TaskKind
 from douyin_fetch import choose_media_capture, merge_streams_to_mp4, validate_output_request
+
+
+class TestIsolationTests(unittest.TestCase):
+    def test_app_uses_in_memory_task_store_during_tests(self):
+        self.assertIsNone(task_store.storage_path)
 
 
 class HomePageTests(unittest.IsolatedAsyncioTestCase):
@@ -80,6 +89,7 @@ class HomePageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('文件转换中心', text)
         self.assertIn('id="convertFileInput"', text)
         self.assertIn('id="convertCapabilityMatrix"', text)
+        self.assertIn('id="convertJumpTasks"', text)
         self.assertIn('/static/css/convert.css', text)
         self.assertIn('/static/js/convert-form.js', text)
 
@@ -119,14 +129,16 @@ class HomePageTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('文件类型', sidebar)
         self.assertNotIn('data-convert-type="document"', sidebar)
 
-    async def test_convert_page_sidebar_exposes_level_and_type_filters(self):
+    async def test_convert_page_uses_world_model_type_filters_without_top_filter_card(self):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
             response = await client.get('/convert')
 
         self.assertEqual(response.status_code, 200)
         html = response.text
-        self.assertIn('data-convert-filter="stable"', html)
+        self.assertNotIn('convert-filter-card', html)
+        self.assertNotIn('data-convert-filter="stable"', html)
+        self.assertIn('convert-world-types', html)
         self.assertIn('data-convert-type="document"', html)
         self.assertIn('data-convert-type="image"', html)
         self.assertIn('data-convert-type="media"', html)
@@ -182,6 +194,10 @@ class HomePageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('id="resultPlatform"', text)
         self.assertIn('id="resultError"', text)
         self.assertIn('id="qualityHint"', text)
+        self.assertIn('id="mediaProbePreview"', text)
+        self.assertIn('id="mediaProbeSummary"', text)
+        self.assertIn('id="mediaProbeDetailGrid"', text)
+        self.assertIn('id="mediaProbeToggle"', text)
         self.assertIn('id="selectOutputDirButton"', text)
         self.assertIn('readonly', text)
         for tab in ['parse', 'downloading', 'completed', 'settings']:
@@ -189,7 +205,60 @@ class HomePageTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(f'data-use-panel="{tab}"', text)
         self.assertIn('id="downloadingTasks"', text)
         self.assertIn('id="completedTasks"', text)
+        self.assertIn('value="skipped"', text)
         self.assertIn('id="settingsForm"', text)
+        self.assertIn('id="recentOpenDirectoryButton"', text)
+        self.assertIn('视频下载完成后立即可用', text)
+
+    def test_task_center_filters_and_detail_drawer_are_interactive(self):
+        script = Path('static/js/task-center.js').read_text(encoding='utf-8')
+        styles = Path('static/css/components.css').read_text(encoding='utf-8')
+
+        self.assertIn("addEventListener('change', rerenderFilteredTasks)", script)
+        self.assertIn("addEventListener('search', rerenderFilteredTasks)", script)
+        self.assertIn('function renderMediaFinished()', script)
+        self.assertIn('没有符合条件的记录。', script)
+        self.assertIn('没有符合条件的转换任务。', script)
+        self.assertIn('function additionalDetailRows(task)', script)
+        self.assertIn('data-delete-task-record', script)
+        self.assertIn('data-delete-detail', script)
+        self.assertIn('function deleteTaskRecord(taskId)', script)
+        self.assertIn('function openConvertTasks(taskId)', script)
+        self.assertIn('function subtitleJobActive(task)', script)
+        self.assertIn('视频已可用，字幕正在后台识别', script)
+        self.assertIn('data-open-directory-card', script)
+        self.assertIn('字幕处理（独立后台任务）', script)
+        self.assertIn('data-task-id', script)
+        self.assertIn('result.author', script)
+        self.assertIn('result.stdout', script)
+        self.assertIn('max-height: 100dvh;', styles)
+        self.assertIn('-webkit-overflow-scrolling: touch;', styles)
+        self.assertIn('white-space: pre-wrap;', styles)
+
+    def test_probe_preview_renders_resource_detail_card(self):
+        script = Path('static/js/use-form.js').read_text(encoding='utf-8')
+        styles = Path('static/css/use.css').read_text(encoding='utf-8')
+
+        self.assertIn('mediaProbeSummary', script)
+        self.assertIn('mediaProbeDetailGrid', script)
+        self.assertIn('将语音识别字幕', script)
+        self.assertIn("document.getElementById('mediaProbeDetails')", script)
+        self.assertIn("setAttribute('aria-expanded'", script)
+        self.assertIn('下载提示', script)
+        self.assertIn('资源大小', script)
+        self.assertIn('stream.filesizeLabel', script)
+        self.assertIn('.media-probe-summary', styles)
+        self.assertIn('.media-probe-detail-grid', styles)
+        self.assertIn('.media-probe-toggle', styles)
+        self.assertIn('object-fit: contain', styles)
+        self.assertIn("frame.style.setProperty('--media-cover-aspect'", script)
+        self.assertIn("frame.style.setProperty('--media-cover-width'", script)
+        self.assertIn("frame.style.setProperty('--media-cover-height'", script)
+        self.assertIn("metrics.orientation === 'square'", script)
+        self.assertIn('aspect-ratio: var(--media-cover-aspect, 16 / 9);', styles)
+        self.assertIn('"cover main facts"', styles)
+        self.assertIn('grid-area: summary;', styles)
+        self.assertNotIn('.media-probe-cover-wrap.is-portrait .media-probe-cover { object-fit: cover; }', styles)
 
     async def test_base_template_loads_split_css_and_use_js_assets(self):
         transport = httpx.ASGITransport(app=app)
@@ -209,6 +278,20 @@ class HomePageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('/static/js/use-tabs.js', use_response.text)
         self.assertIn('/static/css/platforms.css', platforms_response.text)
         self.assertIn('/static/js/platforms.js', platforms_response.text)
+
+    async def test_updates_log_is_a_dedicated_page_not_home_section(self):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            home_response = await client.get('/')
+            updates_response = await client.get('/updates')
+
+        self.assertEqual(home_response.status_code, 200)
+        self.assertEqual(updates_response.status_code, 200)
+        self.assertNotIn('home-updates', home_response.text)
+        self.assertIn('href="/updates"', home_response.text)
+        self.assertIn('StreamDock · 更新日志', updates_response.text)
+        self.assertIn('updates-timeline', updates_response.text)
+        self.assertIn('产品时间线', updates_response.text)
 
     async def test_header_uses_github_octocat_icon_and_page_transition_hooks(self):
         transport = httpx.ASGITransport(app=app)
@@ -294,8 +377,12 @@ class HomePageTests(unittest.IsolatedAsyncioTestCase):
         ]:
             self.assertIn(shared_rule, css)
             self.assertIn(shared_rule, platforms_css)
-        self.assertIn('.use-body .header-inner,\n.platforms-body .header-inner {', header_css)
-        self.assertIn('padding-left: 280px;', header_css)
+        self.assertIn('.use-body .header-inner,\n.platforms-body .header-inner,\n.convert-body .header-inner,\n.pdf-body .header-inner {', header_css)
+        self.assertIn('padding-left: 40px;', header_css)
+        self.assertIn('white-space: nowrap;', header_css)
+        self.assertIn('grid-template-columns: 240px minmax(0, 1fr) 270px;', header_css)
+        self.assertIn('visibility: visible;', header_css)
+        self.assertNotIn('visibility: hidden;', header_css)
         self.assertNotIn('height: 72px;', header_css)
         self.assertIn('width: 240px;', platforms_css)
 
@@ -308,8 +395,8 @@ class HomePageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('.platform-category-nav {\n  position: fixed;', css)
         self.assertIn('top: 0;', css)
         self.assertIn('height: 100vh;', css)
-        self.assertIn('.platforms-body .header-inner {', header_css)
-        self.assertIn('padding-left: 280px;', header_css)
+        self.assertIn('.platforms-body .header-inner,', header_css)
+        self.assertIn('padding-left: 40px;', header_css)
         self.assertIn('platform-category-icon', platforms_html)
 
     def test_platforms_page_removes_top_hero_summary_block(self):
@@ -567,6 +654,39 @@ class BatchMediaApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()['success'])
 
+    async def test_finished_task_delete_api_removes_single_record(self):
+        from tasks.models import TaskStatus
+
+        finished = task_store.create(TaskKind.MEDIA, '已完成记录', {'link': 'https://example.com/done'})
+        other = task_store.create(TaskKind.MEDIA, '保留记录', {'link': 'https://example.com/keep'})
+        task_store.update(finished.id, status=TaskStatus.COMPLETED, result={'outputPath': '/tmp/done.mp4'})
+        task_store.update(other.id, status=TaskStatus.COMPLETED, result={'outputPath': '/tmp/keep.mp4'})
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            response = await client.delete(f'/api/tasks/{finished.id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['deleted'])
+        self.assertIsNone(task_store.get(finished.id))
+        self.assertIsNotNone(task_store.get(other.id))
+
+    async def test_video_record_cannot_be_deleted_while_background_subtitle_is_running(self):
+        from tasks.models import TaskStatus
+
+        task = task_store.create(TaskKind.MEDIA, '视频已完成', {'link': 'https://example.com/video'})
+        task_store.update(task.id, status=TaskStatus.COMPLETED, result={
+            'outputPath': '/tmp/video.mp4',
+            'subtitleJob': {'status': 'running'},
+        })
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            response = await client.delete(f'/api/tasks/{task.id}')
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('字幕仍在后台识别', response.json()['error'])
+        self.assertIsNotNone(task_store.get(task.id))
+
     async def test_fetch_batch_submits_links_to_conservative_queue(self):
         from unittest.mock import patch
 
@@ -684,7 +804,8 @@ class HomePageOptionTests(unittest.IsolatedAsyncioTestCase):
 class ApiResponseShapeTests(unittest.IsolatedAsyncioTestCase):
     def test_quality_selector_submits_stable_label_not_temporary_url(self):
         script = Path('static/js/use-quality.js').read_text(encoding='utf-8')
-        self.assertIn("option.value = stream.qualityLabel || ''", script)
+        self.assertIn("option.dataset.qualityLabel = stream.qualityLabel || ''", script)
+        self.assertIn('selectedQualityLabel', script)
         self.assertNotIn('option.value = stream.url;', script)
 
     async def test_probe_api_returns_video_quality_options(self):
@@ -708,6 +829,7 @@ class ApiResponseShapeTests(unittest.IsolatedAsyncioTestCase):
                     width=576,
                     height=1024,
                     bitrate=927132,
+                    filesize=32 * 1024 * 1024,
                     quality_label='normal_540_0',
                 ),
                 MediaStream(
@@ -717,6 +839,7 @@ class ApiResponseShapeTests(unittest.IsolatedAsyncioTestCase):
                     width=1080,
                     height=1920,
                     bitrate=1509869,
+                    filesize=64 * 1024 * 1024,
                     quality_label='normal_1080_0',
                 ),
             ],
@@ -728,6 +851,7 @@ class ApiResponseShapeTests(unittest.IsolatedAsyncioTestCase):
                 width=1080,
                 height=1920,
                 bitrate=1509869,
+                filesize=64 * 1024 * 1024,
                 quality_label='normal_1080_0',
             ),
             preferred_audio=None,
@@ -747,6 +871,14 @@ class ApiResponseShapeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data['videoStreams'][1]['qualityLabel'], 'normal_1080_0')
         self.assertEqual(data['probeSummary']['qualityCount'], 2)
         self.assertEqual(data['probeSummary']['bestQualityLabel'], 'normal_1080_0')
+        self.assertEqual(data['probeSummary']['bestResolution'], '1080×1920')
+        self.assertEqual(data['probeSummary']['bestContainer'], 'mp4')
+        self.assertEqual(data['probeSummary']['bestBitrateLabel'], '1510 kbps')
+        self.assertEqual(data['probeSummary']['bestFilesizeLabel'], '64MB')
+        self.assertIn('downloadHint', data['probeSummary'])
+        self.assertEqual(data['videoStreams'][1]['host'], 'cdn.example.com')
+        self.assertFalse(data['videoStreams'][1]['isHls'])
+        self.assertEqual(data['videoStreams'][1]['filesizeLabel'], '64MB')
         self.assertEqual(data['probeSummary']['delivery'], 'direct')
         self.assertIn('未登录', data['probeSummary']['accessHint'])
 
@@ -952,6 +1084,7 @@ class ProbeCookieIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data['success'])
         called_env = mocked_run.call_args.kwargs['env']
         self.assertEqual(called_env['BILIBILI_COOKIE'], 'SESSDATA=manual-demo; bili_jct=csrf-demo')
+        self.assertIn('/opt/homebrew/bin', called_env['PATH'].split(':'))
 
     async def test_fetch_api_returns_platform_field_for_expanded_platforms(self):
         from unittest.mock import patch
@@ -990,6 +1123,131 @@ class ProbeCookieIsolationTests(unittest.IsolatedAsyncioTestCase):
         data = response.json()
         self.assertFalse(data['success'])
         self.assertIn('timeout', data['error'].lower())
+
+    def test_queued_media_fetch_defers_generated_subtitles_after_video_is_ready(self):
+        from app import run_media_fetch
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdout = io.StringIO(
+                    '[douyin-fetch] platform: douyin\n'
+                    '[douyin-fetch] title: demo\n'
+                    '[douyin-fetch] subtitle count: 0\n'
+                    '[douyin-fetch] subtitle pending: true\n'
+                    '[douyin-fetch] output file: /tmp/demo.mp4\n'
+                )
+                self.stderr = io.StringIO('')
+                self.returncode = 0
+                self.pid = 12345
+
+            def poll(self):
+                return 0
+
+        fake_process = FakeProcess()
+        with patch('app.subprocess.Popen', return_value=fake_process) as mocked_popen, \
+             patch('app.validate_media_output', return_value={'valid': True}):
+            result = run_media_fetch({
+                '_taskId': 'queued-task',
+                'link': 'https://v.douyin.com/demo/',
+                'outputPath': '/tmp',
+                'outputType': 'mp4',
+                'saveAssets': True,
+                'subtitleStrategy': 'native-asr-ocr',
+            })
+
+        command = mocked_popen.call_args.args[0]
+        self.assertIn('--deferGeneratedSubtitles', command)
+        self.assertTrue(result['success'])
+        self.assertTrue(result['downloadCompleted'])
+        self.assertEqual(result['outputPath'], '/tmp/demo.mp4')
+        self.assertEqual(result['subtitleJob']['status'], 'pending')
+
+
+
+class MediaTaskAssetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_media_task_asset_serves_recorded_cover_file(self):
+        from tasks.models import TaskStatus
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cover = Path(tmp) / 'demo_cover.webp'
+            cover.write_bytes(b'RIFFdemoWEBP')
+            task = task_store.create(TaskKind.MEDIA, 'cover demo', {'link': 'https://example.com/video'})
+            task_store.update(task.id, status=TaskStatus.COMPLETED, result={'assets': {'cover': str(cover), 'subtitles': []}})
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                response = await client.get(f'/api/media/tasks/{task.id}/asset', params={'path': str(cover)})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b'RIFFdemoWEBP')
+
+
+class MediaCoverProxyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cover_proxy_adds_bilibili_referer_and_returns_image(self):
+        class FakeResponse:
+            headers = {'content-type': 'image/jpeg'}
+            content = b'fake-jpeg'
+
+            def raise_for_status(self):
+                return None
+
+        captured = {}
+
+        def fake_get(url, **kwargs):
+            captured['url'] = url
+            captured['headers'] = kwargs.get('headers') or {}
+            return FakeResponse()
+
+        transport = httpx.ASGITransport(app=app)
+        with patch('app.requests.get', side_effect=fake_get):
+            async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                response = await client.get('/api/media/cover-proxy', params={'url': 'https://i0.hdslb.com/bfs/archive/demo.jpg'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers['content-type'], 'image/jpeg')
+        self.assertEqual(response.content, b'fake-jpeg')
+        self.assertEqual(captured['headers']['Referer'], 'https://www.bilibili.com/')
+
+
+    async def test_cover_proxy_adds_douyin_referer_and_sniffs_webp_octet_stream(self):
+        class FakeResponse:
+            headers = {'content-type': 'application/octet-stream'}
+            content = b'RIFFxxxxWEBPpayload'
+
+            def raise_for_status(self):
+                return None
+
+        captured = {}
+
+        def fake_get(url, **kwargs):
+            captured['url'] = url
+            captured['headers'] = kwargs.get('headers') or {}
+            return FakeResponse()
+
+        transport = httpx.ASGITransport(app=app)
+        with patch('app.requests.get', side_effect=fake_get):
+            async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                response = await client.get(
+                    '/api/media/cover-proxy',
+                    params={'url': 'https://p3-sign.douyinpic.com/tos-cn-i-demo/cover.webp?x-signature=demo%3D'},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers['content-type'], 'image/webp')
+        self.assertIn('x-signature=demo%3D', captured['url'])
+        self.assertNotIn('x-signature=demo=', captured['url'])
+        self.assertEqual(captured['headers']['Referer'], 'https://www.douyin.com/')
+
+    def test_cover_proxy_headers_support_xiaohongshu_and_x_cdn_hosts(self):
+        from app import media_cover_headers
+
+        self.assertEqual(
+            media_cover_headers('https://sns-webpic-qc.xhscdn.com/demo/cover.jpg')['Referer'],
+            'https://www.xiaohongshu.com/',
+        )
+        self.assertEqual(
+            media_cover_headers('https://pbs.twimg.com/media/demo.jpg')['Referer'],
+            'https://x.com/',
+        )
 
 
 class OutputFileActionTests(unittest.IsolatedAsyncioTestCase):

@@ -101,7 +101,6 @@ code {
 }
 
 body.is-page-transitioning {
-  pointer-events: none;
   cursor: progress;
 }
 

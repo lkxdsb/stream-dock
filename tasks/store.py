@@ -53,6 +53,15 @@ class TaskStore:
                     created_at=str(row.get('createdAt') or utc_now_iso()),
                     updated_at=str(row.get('updatedAt') or utc_now_iso()),
                 )
+                raw_subtitle_job = (task.result or {}).get('subtitleJob')
+                subtitle_job = dict(raw_subtitle_job) if isinstance(raw_subtitle_job, dict) else {}
+                if task.status == TaskStatus.COMPLETED and subtitle_job.get('status') in {'pending', 'running'}:
+                    subtitle_job.update({
+                        'status': 'interrupted',
+                        'message': '本地服务重启，后台字幕识别已中断；视频文件不受影响',
+                    })
+                    task.result = {**(task.result or {}), 'subtitleJob': subtitle_job}
+                    task.logs = [*task.logs, '后台字幕识别因本地服务重启而中断，视频文件仍可正常使用']
                 if task.status in {TaskStatus.PENDING, TaskStatus.RUNNING}:
                     task.status = TaskStatus.FAILED
                     task.error = '本地服务重启，上次未完成任务已中断'
@@ -129,6 +138,25 @@ class TaskStore:
             self._persist_locked()
             return task
 
+    def patch_result(
+        self,
+        task_id: str,
+        values: dict[str, Any],
+        *,
+        logs: list[str] | None = None,
+    ) -> TaskItem | None:
+        """Atomically merge background-stage fields into an existing task result."""
+        with self._lock:
+            task = self._items.get(task_id)
+            if task is None:
+                return None
+            task.result = {**(task.result or {}), **values}
+            if logs is not None:
+                task.logs = list(logs)
+            task.updated_at = utc_now_iso()
+            self._persist_locked()
+            return task
+
     def clear(self, kind: TaskKind | None = None) -> int:
         with self._lock:
             if kind is None:
@@ -148,9 +176,23 @@ class TaskStore:
         with self._lock:
             task_ids = [
                 task_id for task_id, task in self._items.items()
-                if task.status in finished and (kind is None or task.kind == kind)
+                if (
+                    task.status in finished
+                    and (kind is None or task.kind == kind)
+                    and not (
+                        isinstance((task.result or {}).get('subtitleJob'), dict)
+                        and str((task.result or {})['subtitleJob'].get('status') or '') in {'pending', 'running'}
+                    )
+                )
             ]
             for task_id in task_ids:
                 del self._items[task_id]
             self._persist_locked()
             return len(task_ids)
+
+    def delete(self, task_id: str) -> TaskItem | None:
+        with self._lock:
+            task = self._items.pop(task_id, None)
+            if task is not None:
+                self._persist_locked()
+            return task

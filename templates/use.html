@@ -3,7 +3,7 @@
 {% block body_class_attr %} class="use-body"{% endblock %}
 
 {% block page_styles %}
-<link rel="stylesheet" href="{{ url_for('static', path='/css/use.css') }}?v=20260708-log1" />
+<link rel="stylesheet" href="{{ url_for('static', path='/css/use.css') }}?v=20260716-coverfit4" />
 {% endblock %}
 
 {% block page_content %}
@@ -52,12 +52,39 @@
                   <span>🔗</span>
                   <textarea id="link" name="link" class="link-input use-link-input" rows="2" placeholder="粘贴视频链接或分享文案到这里；多条链接可换行批量提交..."></textarea>
                 </div>
-                <button class="start use-start" id="submitButton" type="submit">开始解析</button>
+                <div class="use-submit-actions">
+                  <button class="start use-start" id="submitButton" type="submit">开始解析</button>
+                  <button class="use-probe-reset" id="probeResetButton" type="button" hidden>取消</button>
+                </div>
               </div>
               <section class="media-probe-preview" id="mediaProbePreview" hidden aria-live="polite">
-                <div><span id="mediaProbePlatform">待识别</span><strong id="mediaProbeTitle">视频信息</strong></div>
+                <div class="media-probe-cover-wrap">
+                  <img id="mediaProbeCover" class="media-probe-cover" src="" alt="视频封面" hidden />
+                  <span id="mediaProbeCoverEmpty">封面</span>
+                </div>
+                <div class="media-probe-main">
+                  <span id="mediaProbePlatform">待识别</span>
+                  <strong id="mediaProbeTitle">视频信息</strong>
+                  <small id="mediaProbeAuthor"></small>
+                </div>
                 <div class="media-probe-facts" id="mediaProbeFacts"></div>
-                <details class="media-stream-details"><summary>高级画质详情</summary><div class="media-stream-table" id="mediaStreamTable"></div></details>
+                <div class="media-probe-actions">
+                  <button
+                    type="button"
+                    class="media-probe-toggle"
+                    id="mediaProbeToggle"
+                    aria-expanded="false"
+                    aria-controls="mediaProbeDetails"
+                    onclick="event.preventDefault();event.stopImmediatePropagation();const d=document.getElementById('mediaProbeDetails');if(d){d.open=!d.open;this.textContent=d.open?'收起详情':'查看详情';this.setAttribute('aria-expanded',d.open?'true':'false');}"
+                  >查看详情</button>
+                  <button type="button" class="media-probe-cancel" id="mediaProbeCancel" hidden>取消</button>
+                </div>
+                <div class="media-probe-summary" id="mediaProbeSummary"></div>
+                <details class="media-stream-details" id="mediaProbeDetails">
+                  <summary>视频资源详情</summary>
+                  <div class="media-probe-detail-grid" id="mediaProbeDetailGrid"></div>
+                  <div class="media-stream-table" id="mediaStreamTable"></div>
+                </details>
               </section>
 
               <div class="fields use-fields">
@@ -98,13 +125,34 @@
                   </div>
                 </div>
 
-                <div class="field field-wide use-field-cookie">
-                  <label for="bilibiliCookie">B站 Cookie（可选）</label>
-                  <div class="cookie-row">
-                    <input id="bilibiliCookie" name="bilibiliCookie" class="select native-input" type="text" value="" placeholder="仅在别人的机器无法读取本地浏览器登录态时填写" />
-                    <button class="gear button-reset use-gear" id="clearLogButton" type="button" aria-label="清空日志">⚙</button>
+                <details class="advanced-options field-wide">
+                  <summary><span>高级选项</span><small>登录态、封面和字幕保存</small></summary>
+                  <div class="advanced-options-body">
+                    <div class="field use-field use-field-cookie">
+                      <label for="bilibiliCookie">B站 Cookie（可选）</label>
+                      <div class="cookie-row">
+                        <input id="bilibiliCookie" name="bilibiliCookie" class="select native-input" type="text" value="" placeholder="仅在别人的机器无法读取本地浏览器登录态时填写" />
+                        <button class="gear button-reset use-gear" id="clearLogButton" type="button" aria-label="清空日志">⚙</button>
+                      </div>
+                    </div>
+
+                    <label class="asset-toggle" for="saveAssets">
+                      <input id="saveAssets" type="checkbox" checked />
+                      <span><strong>同时保存封面和字幕</strong><small>视频下载完成后立即可用；没有原生字幕时，语音识别会转入独立后台任务。</small></span>
+                    </label>
+
+                    <div class="field use-field use-field-subtitle-strategy">
+                      <label for="subtitleStrategy">字幕策略</label>
+                      <select id="subtitleStrategy" name="subtitleStrategy" class="select native-select">
+                        <option value="native-asr-ocr">原生字幕 → 语音识别 → OCR兜底</option>
+                        <option value="native-asr">原生字幕优先，无字幕时语音识别</option>
+                        <option value="native">仅保存平台原生字幕</option>
+                        <option value="ocr">仅 OCR 画面字幕（不推荐）</option>
+                      </select>
+                      <div class="quality-hint">语音识别需要本地 Whisper / faster-whisper；它不会阻塞视频结果，OCR 只作为最后兜底。</div>
+                    </div>
                   </div>
-                </div>
+                </details>
               </div>
             </form>
 
@@ -115,6 +163,7 @@
                 <div>
                   <div class="recent-title" id="recentTitle">等待新的解析任务</div>
                   <div class="recent-meta" id="statusText">复制链接 → 粘贴 → 开始解析</div>
+                  <div class="recent-progress" id="recentProgress" hidden aria-label="解析进度"><i id="recentProgressBar"></i></div>
                   <div id="resultBox" class="result-box" hidden>
                     <div class="result-row"><span>平台</span><code id="resultPlatform">-</code></div>
                     <div class="result-row"><span>输出文件</span><code id="resultPath">-</code></div>
@@ -125,7 +174,7 @@
                 </div>
                 <div>
                   <div class="done" id="statusBadge">• 待执行</div>
-                  <div class="tools"><span>▷</span><span>□</span><span>⋮</span></div>
+                  <div class="tools"><button type="button" id="recentOpenDirectoryButton" class="recent-output-button" hidden>打开目录</button><button type="button" id="recentCancelButton" class="recent-cancel-button" disabled>删除</button><span>▷</span><span>□</span><span>⋮</span></div>
                 </div>
               </div>
             </section>
@@ -158,11 +207,13 @@
                   <option value="all">全部状态</option>
                   <option value="completed">已完成</option>
                   <option value="failed">失败</option>
+                  <option value="skipped">已跳过</option>
                   <option value="cancelled">已取消</option>
                 </select>
               </div>
               <div class="task-toolbar-actions"><button type="button" id="clearMediaFinished">清除历史记录</button></div>
             </div>
+            <div class="task-list-summary" id="mediaFinishedSummary"></div>
             <div class="task-list" id="completedTasks"></div>
             <div class="empty-state" id="completedEmpty">还没有完成记录。</div>
           </section>
@@ -222,10 +273,10 @@
 
 {% block page_scripts %}
 <script src="{{ url_for('static', path='/js/use-logs.js') }}"></script>
-<script src="{{ url_for('static', path='/js/use-result.js') }}"></script>
+<script src="{{ url_for('static', path='/js/use-result.js') }}?v=20260716-cancel1"></script>
 <script src="{{ url_for('static', path='/js/use-quality.js') }}"></script>
-<script src="{{ url_for('static', path='/js/use-tabs.js') }}"></script>
-<script src="{{ url_for('static', path='/js/task-center.js') }}?v=20260711-task2"></script>
+<script src="{{ url_for('static', path='/js/use-tabs.js') }}?v=20260715-hash2"></script>
+<script src="{{ url_for('static', path='/js/task-center.js') }}?v=20260716-journey1"></script>
 <script src="{{ url_for('static', path='/js/health.js') }}?v=20260711-health1"></script>
-<script src="{{ url_for('static', path='/js/use-form.js') }}"></script>
+<script src="{{ url_for('static', path='/js/use-form.js') }}?v=20260716-journey1"></script>
 {% endblock %}

@@ -6,6 +6,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from runtime_checks import resolve_tool_path
+
 FFMPEG_EXPORT_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_FFMPEG_EXPORT_TIMEOUT_SECONDS', str(20 * 60)))
 
 
@@ -55,9 +57,12 @@ def validate_output_request(*, media_kind: str, output_type: str) -> None:
 
 
 def run_ffmpeg(args: list[str]) -> None:
+    command = list(args)
+    if command and command[0] == "ffmpeg":
+        command[0] = resolve_tool_path("ffmpeg")
     try:
         subprocess.run(
-            args,
+            command,
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

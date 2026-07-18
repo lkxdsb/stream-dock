@@ -245,3 +245,87 @@ class DownloaderTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class SubtitleOcrTests(unittest.TestCase):
+    def test_merge_ocr_samples_groups_repeated_text_and_exports_srt(self):
+        from fetchers.subtitle_ocr import cues_to_srt, merge_ocr_samples
+
+        cues = merge_ocr_samples([
+            (0.0, '第一句字幕\n'),
+            (1.0, '第一句字幕'),
+            (2.0, ''),
+            (3.0, 'Second line'),
+        ], interval_seconds=1.0)
+        self.assertEqual(len(cues), 2)
+        self.assertEqual(cues[0].text, '第一句字幕')
+        self.assertEqual((cues[0].start, cues[0].end), (0.0, 2.0))
+        srt = cues_to_srt(cues)
+        self.assertIn('00:00:00,000 --> 00:00:02,000', srt)
+        self.assertIn('Second line', srt)
+
+    def test_ocr_normalizer_filters_latin_noise_for_chinese_subtitles(self):
+        from fetchers.subtitle_ocr import _normalize_ocr_text
+
+        text = _normalize_ocr_text('HB 2 5B nae\n一， TEE ne\nCERES) 至\nSR: ERE / 评分人数: 80万\nI4¢OVO.9 1 FAL - Sa Ene\nQ 第十区电影\nSecond line of English subtitle\n')
+        self.assertIn('评分人数', text)
+        self.assertIn('第十区电影', text)
+        self.assertNotIn('nae', text)
+        self.assertNotIn('I4', text)
+        self.assertIn('Second line of English subtitle', text)
+
+class SubtitleAsrTests(unittest.TestCase):
+    def test_parse_srt_cues_for_cli_fallback(self):
+        from fetchers.subtitle_asr import _parse_srt_cues
+
+        cues = _parse_srt_cues('''1\n00:00:00,000 --> 00:00:01,500\n第一句\n\n2\n00:00:02,000 --> 00:00:03,000\n第二句\n''')
+        self.assertEqual(len(cues), 2)
+        self.assertEqual(cues[0].text, '第一句')
+        self.assertEqual((cues[1].start, cues[1].end), (2.0, 3.0))
+
+    def test_segments_to_cues_supports_dict_segments(self):
+        from fetchers.subtitle_asr import _segments_to_cues
+
+        cues = _segments_to_cues([
+            {'start': 0, 'end': 1.2, 'text': ' 你好 '},
+            {'start': 2, 'end': 1, 'text': 'bad'},
+            {'start': 2, 'end': 3, 'text': ''},
+        ])
+        self.assertEqual(len(cues), 1)
+        self.assertEqual(cues[0].text, '你好')
+
+class NativeSubtitleConversionTests(unittest.TestCase):
+    def test_bilibili_json_subtitle_payload_can_be_exported_as_srt(self):
+        from fetchers.pipeline import _subtitle_json_to_srt
+
+        srt = _subtitle_json_to_srt({
+            'body': [
+                {'from': 0.0, 'to': 1.5, 'content': '第一句'},
+                {'from': 2.0, 'to': 3.25, 'content': '第二句'},
+            ]
+        })
+        self.assertIsNotNone(srt)
+        self.assertIn('00:00:00,000 --> 00:00:01,500', srt or '')
+        self.assertIn('第二句', srt or '')
+
+class MetadataSubtitleFallbackTests(unittest.TestCase):
+    def test_tiktok_metadata_fallback_creates_explanatory_srt_from_url(self):
+        from fetchers.models import MediaFetchResult
+        from fetchers.pipeline import generate_metadata_subtitle_file
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'fallback.srt'
+            result = MediaFetchResult(
+                platform='tiktok',
+                content_type='video',
+                title='tiktok_7653663917918440722',
+                source_url='https://www.tiktok.com/@rxxiiny/video/7653663917918440722?is_from_webapp=1',
+                final_url='https://www.tiktok.com/@rxxiiny/video/7653663917918440722?is_from_webapp=1',
+                cover_url=None,
+                author=None,
+                metadata={},
+            )
+            generated = generate_metadata_subtitle_file(result, target, duration_seconds=10)
+            self.assertEqual(generated, target)
+            text = target.read_text(encoding='utf-8')
+            self.assertIn('@rxxiiny', text)
+            self.assertIn('平台未提供字幕轨', text)

@@ -153,6 +153,29 @@ class ConverterPipelineTests(unittest.TestCase):
             self.assertIn('标题', text)
             self.assertIn('正文内容', text)
 
+    def test_pipeline_converts_chinese_markdown_table_to_html(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / '产品思维.md'
+            source.write_text('# 产品思维\n\n| 序号 | 项目方向 | 简介 |\n| --- | --- | --- |\n| 1 | 推荐系统 | 中文内容可读 |\n', encoding='utf-8')
+            result = convert_file(source, source.name, 'md', 'html', root)
+            self.assertTrue(result.success, result.error)
+            rendered = result.output_path.read_text(encoding='utf-8')
+            self.assertIn('<table>', rendered)
+            self.assertIn('中文内容可读', rendered)
+
+    def test_pipeline_converts_chinese_markdown_table_to_readable_pdf(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / '产品思维.md'
+            source.write_text('# 产品思维\n\n| 序号 | 项目方向 | 简介 |\n| --- | --- | --- |\n| 1 | 推荐系统 | 中文内容可读 |\n', encoding='utf-8')
+            result = convert_file(source, source.name, 'md', 'pdf', root)
+            self.assertTrue(result.success, result.error)
+            from pypdf import PdfReader
+            extracted = '\n'.join(page.extract_text() or '' for page in PdfReader(str(result.output_path)).pages)
+            self.assertIn('产品思维', extracted)
+            self.assertIn('中文内容可读', extracted)
+
     def test_pipeline_converts_rtf_to_txt(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

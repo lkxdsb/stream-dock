@@ -5,14 +5,17 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from runtime_checks import augmented_path, resolve_tool_path
+
 MEDIA_CONVERT_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_MEDIA_CONVERT_TIMEOUT_SECONDS', str(20 * 60)))
 
 
 def convert_media(source: str, target: str, input_path: Path, output_path: Path) -> list[str]:
-    if not shutil.which('ffmpeg'):
+    ffmpeg = resolve_tool_path('ffmpeg')
+    if not shutil.which('ffmpeg', path=augmented_path()):
         raise RuntimeError('缺少 ffmpeg，无法处理音视频转换')
 
-    cmd = ['ffmpeg', '-y', '-i', str(input_path)]
+    cmd = [ffmpeg, '-y', '-i', str(input_path)]
     if target in {'mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus'}:
         cmd += ['-vn']
         if target == 'mp3':
@@ -30,7 +33,8 @@ def convert_media(source: str, target: str, input_path: Path, output_path: Path)
     cmd.append(str(output_path))
 
     try:
-        completed = subprocess.run(cmd, text=True, capture_output=True, timeout=MEDIA_CONVERT_TIMEOUT_SECONDS)
+        env = {**os.environ, 'PATH': augmented_path()}
+        completed = subprocess.run(cmd, text=True, capture_output=True, timeout=MEDIA_CONVERT_TIMEOUT_SECONDS, env=env)
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f'ffmpeg 转换超时，已停止任务（{MEDIA_CONVERT_TIMEOUT_SECONDS} 秒）') from exc
     if completed.returncode != 0:

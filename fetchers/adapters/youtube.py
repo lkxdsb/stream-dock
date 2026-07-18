@@ -16,7 +16,7 @@ from fetchers.adapters.common import (
     get_url_host,
     host_matches,
 )
-from fetchers.models import MediaFetchResult, MediaStream
+from fetchers.models import MediaFetchResult, MediaStream, SubtitleTrack
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -64,6 +64,7 @@ class YoutubeAdapter(BasePlatformAdapter):
             )
             response.raise_for_status()
             payload = self._extract_player_response(response.text)
+            self._ensure_playable(payload)
             video_details = payload.get("videoDetails") or {}
             streaming_data = payload.get("streamingData") or {}
 
@@ -80,6 +81,7 @@ class YoutubeAdapter(BasePlatformAdapter):
 
             preferred_video = max(video_streams, key=lambda s: ((s.height or 0), (s.width or 0), (s.bitrate or 0)))
             preferred_audio = max(audio_streams, key=lambda s: (s.bitrate or 0)) if audio_streams else None
+            subtitle_tracks = self._build_subtitle_tracks(payload)
 
             return MediaFetchResult(
                 platform=self.platform_name,
@@ -93,12 +95,15 @@ class YoutubeAdapter(BasePlatformAdapter):
                 audio_streams=audio_streams,
                 preferred_video=preferred_video,
                 preferred_audio=preferred_audio,
+                subtitle_tracks=subtitle_tracks,
                 metadata={
                     "resolve_method": "embedded-json",
                     "raw_platform_id": video_details.get("videoId") or self._extract_video_id_from_watch_url(normalized_link),
                 },
             )
-        except Exception:
+        except Exception as exc:
+            if "YouTube 需要登录或验证" in str(exc):
+                return self._build_ytdlp_chrome_result(normalized_link)
             capture = capture_media_with_browser(normalized_link, user_agent=USER_AGENT)
             return self._build_fallback_result(normalized_link, capture)
 
@@ -107,6 +112,16 @@ class YoutubeAdapter(BasePlatformAdapter):
         if not match:
             raise RuntimeError("Failed to locate ytInitialPlayerResponse anchor")
         return json.loads(extract_balanced_json_after(html[match.start():], "ytInitialPlayerResponse", "{"))
+
+    def _ensure_playable(self, payload: dict[str, Any]) -> None:
+        status = payload.get("playabilityStatus") or {}
+        status_code = status.get("status")
+        if not status_code or status_code == "OK":
+            return
+        reason = status.get("reason") or status_code
+        if status_code in {"LOGIN_REQUIRED", "AGE_CHECK_REQUIRED"} or "sign in" in str(reason).lower():
+            raise RuntimeError(f"YouTube 需要登录或验证：{reason}")
+        raise RuntimeError(f"YouTube 当前不可播放：{reason}")
 
     def _build_streams(self, raw_streams: list[dict[str, Any]], *, expected_type: str) -> list[MediaStream]:
         streams: list[MediaStream] = []
@@ -134,6 +149,45 @@ class YoutubeAdapter(BasePlatformAdapter):
             )
             seen_urls.add(stream_url)
         return streams
+
+    def _build_subtitle_tracks(self, payload: dict[str, Any]) -> list[SubtitleTrack]:
+        caption_tracks = (
+            ((payload.get("captions") or {}).get("playerCaptionsTracklistRenderer") or {}).get("captionTracks")
+            or []
+        )
+        tracks: list[SubtitleTrack] = []
+        for item in caption_tracks:
+            base_url = item.get("baseUrl")
+            if not base_url:
+                continue
+            tracks.append(
+                SubtitleTrack(
+                    url=self._replace_query_param(str(base_url), "fmt", "vtt"),
+                    language=item.get("languageCode"),
+                    label=self._caption_label(item),
+                    format="vtt",
+                    source="youtube-captions",
+                )
+            )
+        return tracks
+
+    def _caption_label(self, item: dict[str, Any]) -> str | None:
+        name = item.get("name") or {}
+        if isinstance(name, dict):
+            simple = name.get("simpleText")
+            if simple:
+                return str(simple)
+            runs = name.get("runs") or []
+            text = "".join(str(run.get("text") or "") for run in runs if isinstance(run, dict)).strip()
+            if text:
+                return text
+        return item.get("languageCode")
+
+    def _replace_query_param(self, url: str, key: str, value: str) -> str:
+        parts = urlsplit(url)
+        query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != key]
+        query.append((key, value))
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
     def _parse_mime_type(self, mime_type: str) -> tuple[str | None, str | None]:
         media_type, _, params = mime_type.partition(";")
@@ -192,6 +246,8 @@ class YoutubeAdapter(BasePlatformAdapter):
             return None
 
     def _build_fallback_result(self, normalized_link: str, capture: dict[str, Any]) -> MediaFetchResult:
+        if not capture.get("video_url"):
+            raise RuntimeError("No YouTube video stream found")
         video_streams = [
             MediaStream(
                 url=capture["video_url"],
@@ -225,6 +281,32 @@ class YoutubeAdapter(BasePlatformAdapter):
             metadata={
                 "resolve_method": "playwright-fallback",
                 "raw_platform_id": self._extract_video_id_from_watch_url(normalized_link),
+            },
+        )
+
+    def _build_ytdlp_chrome_result(self, normalized_link: str) -> MediaFetchResult:
+        video_id = self._extract_video_id_from_watch_url(normalized_link)
+        stream = MediaStream(
+            url=f"ytdlp+chrome:{normalized_link}",
+            stream_type="video",
+            container="mp4",
+            quality_label="yt-dlp + Chrome Cookie",
+        )
+        return MediaFetchResult(
+            platform=self.platform_name,
+            content_type="video",
+            title=f"youtube_{video_id or 'video'}",
+            source_url=normalized_link,
+            final_url=normalized_link,
+            cover_url=None,
+            author=None,
+            video_streams=[stream],
+            audio_streams=[],
+            preferred_video=stream,
+            preferred_audio=None,
+            metadata={
+                "resolve_method": "yt-dlp-chrome-cookies",
+                "raw_platform_id": video_id,
             },
         )
 

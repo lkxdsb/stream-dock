@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import time
 import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
@@ -8,13 +10,114 @@ from urllib.parse import urlparse
 import requests
 from typing import Callable
 
+from runtime_checks import augmented_path, network_subprocess_environment, resolve_tool_path
+
 HLS_DOWNLOAD_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_HLS_DOWNLOAD_TIMEOUT_SECONDS', str(20 * 60)))
+YTDLP_DOWNLOAD_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_YTDLP_DOWNLOAD_TIMEOUT_SECONDS', str(20 * 60)))
 DownloadProgress = Callable[[float | None], None]
 
 
 def is_hls_url(url: str) -> bool:
     lowered = urlparse(url).path.lower()
     return lowered.endswith(".m3u8")
+
+
+def is_ytdlp_url(url: str) -> bool:
+    return str(url or "").startswith("ytdlp:") or str(url or "").startswith("ytdlp+chrome:")
+
+
+def resolve_ytdlp_command() -> list[str]:
+    ytdlp_binary = resolve_tool_path("yt-dlp")
+    if Path(ytdlp_binary).exists():
+        return [ytdlp_binary]
+    candidates = [
+        os.getenv("STREAMDOCK_YTDLP_PYTHON"),
+        sys.executable,
+        "/opt/anaconda3/envs/jj/bin/python",
+        "/opt/anaconda3/bin/python",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            completed = subprocess.run(
+                [candidate, "-c", "import yt_dlp"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        except Exception:
+            continue
+        if completed.returncode == 0:
+            return [candidate, "-m", "yt_dlp"]
+    return [sys.executable, "-m", "yt_dlp"]
+
+
+def download_with_ytdlp(
+    url: str,
+    destination: Path,
+    *,
+    progress_callback: DownloadProgress | None = None,
+) -> Path:
+    if progress_callback:
+        progress_callback(None)
+    use_chrome_cookies = url.startswith("ytdlp+chrome:")
+    source_url = url.split(":", 1)[1]
+    command = [
+        *resolve_ytdlp_command(),
+        "--no-playlist",
+        "--extractor-retries",
+        "3",
+        "--retries",
+        "3",
+        "--sleep-requests",
+        "1",
+    ]
+    if use_chrome_cookies:
+        command.extend([
+            "--cookies-from-browser",
+            "chrome",
+            "--js-runtimes",
+            "deno",
+            "--remote-components",
+            "ejs:github",
+        ])
+    command.extend([
+        "-f",
+        "best[ext=mp4]/best",
+        "--merge-output-format",
+        "mp4",
+        "-o",
+        str(destination),
+        source_url,
+    ])
+    last_error = ""
+    for attempt in range(3):
+        try:
+            child_env = network_subprocess_environment()
+            child_env["PATH"] = augmented_path(child_env.get("PATH"))
+            subprocess.run(
+                command,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
+                env=child_env,
+            )
+            break
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f'yt-dlp 下载超时，已停止任务（{YTDLP_DOWNLOAD_TIMEOUT_SECONDS} 秒）') from exc
+        except subprocess.CalledProcessError as exc:
+            last_error = (exc.stderr or "").strip()
+            if attempt < 2:
+                time.sleep(2)
+                continue
+            tail = "\n".join(last_error.splitlines()[-8:])
+            raise RuntimeError(f"yt-dlp 下载失败：{tail or exc}") from exc
+    if progress_callback:
+        progress_callback(100)
+    return destination
 
 
 def download_hls_media(
@@ -28,26 +131,38 @@ def download_hls_media(
     if progress_callback:
         progress_callback(None)
     headers = f"User-Agent: {user_agent}\r\nReferer: {referer}\r\n"
-    try:
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-headers",
-                headers,
-                "-i",
-                url,
-                "-c",
-                "copy",
-                str(destination),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=HLS_DOWNLOAD_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f'HLS 下载超时，已停止任务（{HLS_DOWNLOAD_TIMEOUT_SECONDS} 秒）') from exc
+    command = [
+        resolve_tool_path("ffmpeg"),
+        "-y",
+        "-headers",
+        headers,
+        "-i",
+        url,
+        "-c",
+        "copy",
+        str(destination),
+    ]
+    last_error = ""
+    for attempt in range(2):
+        try:
+            completed = subprocess.run(
+                command,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=HLS_DOWNLOAD_TIMEOUT_SECONDS,
+                env=network_subprocess_environment(),
+            )
+            break
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f'HLS 下载超时，已停止任务（{HLS_DOWNLOAD_TIMEOUT_SECONDS} 秒）') from exc
+        except subprocess.CalledProcessError as exc:
+            last_error = (exc.stderr or "").strip()
+            if attempt == 0:
+                continue
+            tail = "\n".join(last_error.splitlines()[-8:])
+            raise RuntimeError(f"HLS 下载失败：{tail or exc}") from exc
     if progress_callback:
         progress_callback(100)
     return destination
@@ -65,6 +180,12 @@ def download_media(
         "User-Agent": user_agent,
         "Referer": referer,
     }
+    if is_ytdlp_url(url):
+        return download_with_ytdlp(
+            url,
+            destination,
+            progress_callback=progress_callback,
+        )
     if is_hls_url(url):
         return download_hls_media(
             url,

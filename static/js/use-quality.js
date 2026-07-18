@@ -35,32 +35,54 @@
     qualityPreset.disabled = true;
   }
 
-  function formatQualityOption(stream) {
-    const quality = stream.qualityLabel || '未命名清晰度';
-    const size = stream.height ? `${stream.height}P` : '';
-    const bitrate = stream.bitrate ? `${Math.round(stream.bitrate / 1000)} kbps` : '';
-    return [quality, size, bitrate].filter(Boolean).join(' · ');
+  function friendlyResolution(stream) {
+    const height = Number(stream?.height || 0);
+    if (height >= 2160) return '4K';
+    if (height >= 1440) return '2K';
+    if (height >= 1080) return '1080P';
+    if (height >= 720) return '720P';
+    if (height >= 480) return '480P';
+    return height ? `${height}P` : '清晰度未知';
   }
 
-  function renderQualityOptions(streams, preferredQuality) {
+  const strategyLabels = {
+    best_quality: '最高画质',
+    best_compatibility: '兼容优先',
+    smallest_size: '小体积',
+  };
+
+  function renderQualityOptions(recommendations, preferredStrategy = 'best_quality') {
     if (!qualityPreset) {
       return;
     }
     qualityPreset.innerHTML = '';
-    (streams || []).forEach((stream) => {
+    Object.entries(strategyLabels).forEach(([strategy, label]) => {
+      const stream = recommendations?.[strategy]?.stream;
+      if (!stream?.qualityLabel) return;
       const option = document.createElement('option');
-      // 提交稳定的画质标识，不提交探测时带签名的临时 CDN URL。
-      // 后端会在真正下载前重新解析，URL 可能已经变化，而 qualityLabel 保持稳定。
-      option.value = stream.qualityLabel || '';
+      option.value = strategy;
       option.dataset.qualityLabel = stream.qualityLabel || '';
-      option.dataset.streamUrl = stream.url || '';
-      option.textContent = formatQualityOption(stream);
-      if (stream.qualityLabel === preferredQuality) {
-        option.selected = true;
-      }
+      option.textContent = [label, friendlyResolution(stream), stream.codec?.toUpperCase()].filter(Boolean).join(' · ');
+      option.selected = strategy === preferredStrategy;
       qualityPreset.appendChild(option);
     });
-    qualityPreset.disabled = !(streams || []).length;
+    qualityPreset.disabled = qualityPreset.options.length === 0;
+  }
+
+  function selectedQualityLabel() {
+    return qualityPreset?.selectedOptions?.[0]?.dataset?.qualityLabel || '';
+  }
+
+  function selectManualStream(stream) {
+    if (!qualityPreset || !stream?.qualityLabel) return;
+    qualityPreset.querySelectorAll('option[data-manual="true"]').forEach((item) => item.remove());
+    const option = document.createElement('option');
+    option.value = 'manual';
+    option.dataset.manual = 'true';
+    option.dataset.qualityLabel = stream.qualityLabel;
+    option.textContent = `手动选择 · ${friendlyResolution(stream)} · ${(stream.codec || '编码未知').toUpperCase()}`;
+    qualityPreset.appendChild(option);
+    option.selected = true;
   }
 
   function formatProbeHint(summary) {
@@ -129,13 +151,13 @@
       throw new Error(data.error || data.detail || '清晰度识别失败');
     }
 
-    let preferredQuality = data.preferredVideoQuality || '';
+    let preferredStrategy = 'best_quality';
     try {
       const settings = JSON.parse(window.localStorage.getItem('streamdock.settings.v1') || '{}');
       const strategy = settings.qualityMode === 'best' ? 'best_quality' : (settings.qualityMode || 'best_quality');
-      if (strategy !== 'manual') preferredQuality = data.recommendations?.[strategy]?.stream?.qualityLabel || preferredQuality;
+      if (strategyLabels[strategy]) preferredStrategy = strategy;
     } catch (_error) {}
-    renderQualityOptions(data.videoStreams || [], preferredQuality);
+    renderQualityOptions(data.recommendations || {}, preferredStrategy);
     setQualityHint(formatProbeHint(data.probeSummary));
     lastProbeLink = normalizedLink;
     lastProbePlatform = data.platform || '';
@@ -143,7 +165,7 @@
     lastProbeCookieKey = currentCookieKey;
     if (!silent) {
       logs?.renderLogs([
-        `已识别 ${data.platform || 'unknown'} 可选清晰度：${(data.videoStreams || []).length} 档`,
+        `已识别 ${data.platform || 'unknown'}，已整理为 ${qualityPreset.options.length} 种画质策略`,
         formatProbeHint(data.probeSummary),
       ]);
     }
@@ -213,6 +235,9 @@
     resetQualityOptions,
     setQualityHint,
     invalidateProbeCache,
+    selectedQualityLabel,
+    selectManualStream,
+    friendlyResolution,
     qualityPreset,
   };
 })();

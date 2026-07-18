@@ -73,6 +73,10 @@ def convert_file(input_path: Path, input_name: str, source: str, target: str, ou
     try:
         prepare_output_directory(output_dir)
         output_path = build_output_path(input_name, output_dir, target, naming_strategy=naming_strategy)
+        if source == 'gif' and target == 'png':
+            # GIF → PNG 会导出多帧，因此输出是一个帧目录而不是单个 PNG 文件。
+            # 复用 folder 命名逻辑，避免生成看似单文件的 “*.png” 目录。
+            output_path = build_output_path(input_name, output_dir, 'folder', naming_strategy=naming_strategy)
         partial_path = partial_output_path(output_path)
         cleanup_partial(partial_path)
         if source in {'csv', 'tsv', 'json', 'ndjson', 'yaml', 'xml', 'toml'} or (source == 'xlsx' and target in {'csv', 'json', 'tsv'}) or (source == 'txt' and target in {'csv', 'xlsx'}):
@@ -87,7 +91,8 @@ def convert_file(input_path: Path, input_name: str, source: str, target: str, ou
             logs += convert_archive(source, target, input_path, partial_path)
         else:
             logs += convert_document_basic(source, target, input_path, partial_path)
-        validation = validate_general_output(partial_path, target=target)
+        validation_target = 'folder' if source == 'gif' and target == 'png' else target
+        validation = validate_general_output(partial_path, target=validation_target)
         commit_partial(partial_path, output_path)
     except Exception as exc:
         if partial_path is not None:

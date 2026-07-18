@@ -3,7 +3,7 @@
 {% block body_class_attr %} class="platforms-body"{% endblock %}
 
 {% block page_styles %}
-<link rel="stylesheet" href="{{ url_for('static', path='/css/platforms.css') }}?v=20260708-icons1" />
+<link rel="stylesheet" href="{{ url_for('static', path='/css/platforms.css') }}?v=20260715-overview1" />
 {% endblock %}
 
 {% block page_content %}
@@ -40,6 +40,12 @@
           <p class="workspace-description">点击任意平台查看当前解析策略与限制说明。</p>
         </div>
 
+        <section class="platform-overview" aria-label="平台能力概览">
+          <article><strong data-platform-metric="stable">0</strong><span>稳定支持</span></article>
+          <article><strong data-platform-metric="login">0</strong><span>登录态增强</span></article>
+          <article><strong data-platform-metric="experimental">0</strong><span>实验链路</span></article>
+        </section>
+
         <div class="matrix-table" id="platformMatrix" aria-live="polite">
           <noscript>请启用 JavaScript 查看可交互的平台能力矩阵。</noscript>
         </div>
@@ -54,5 +60,5 @@
 {% endblock %}
 
 {% block page_scripts %}
-<script src="{{ url_for('static', path='/js/platforms.js') }}?v=20260711-status1"></script>
+<script src="{{ url_for('static', path='/js/platforms.js') }}?v=20260715-overview1"></script>
 {% endblock %}

@@ -3,7 +3,7 @@
 {% block body_class_attr %} class="convert-body"{% endblock %}
 
 {% block page_styles %}
-<link rel="stylesheet" href="{{ url_for('static', path='/css/convert.css') }}?v=20260708-world3" />
+<link rel="stylesheet" href="{{ url_for('static', path='/css/convert.css') }}?v=20260715-taskjump1" />
 {% endblock %}
 
 {% block page_content %}
@@ -105,7 +105,10 @@
               </div>
             </article>
             <article class="convert-card">
-              <h2>运行日志</h2>
+              <div class="convert-card-heading">
+                <h2>运行日志</h2>
+                <button class="convert-log-task-link" id="convertJumpTasks" type="button" hidden>查看转换任务</button>
+              </div>
               <pre class="convert-log" id="convertLogOutput">等待执行...</pre>
             </article>
           </section>
@@ -146,68 +149,23 @@
             <p class="workspace-description" id="convertWorkspaceDescription">查看全部格式能力，确认哪些路径可本地执行，哪些建议专业工具。</p>
           </header>
 
-          <section class="convert-card convert-filter-card" aria-label="能力矩阵筛选">
-            <div class="convert-filter-block">
-              <span>能力等级</span>
-              <div class="convert-filter-row">
-                <button class="convert-filter-chip active" type="button" data-convert-filter="all">全部 <em data-count-for="all">0</em></button>
-                <button class="convert-filter-chip" type="button" data-convert-filter="stable">本地稳定 <em data-count-for="stable">0</em></button>
-                <button class="convert-filter-chip" type="button" data-convert-filter="basic">本地基础 <em data-count-for="basic">0</em></button>
-                <button class="convert-filter-chip" type="button" data-convert-filter="vendor">推荐厂商 <em data-count-for="vendor">0</em></button>
-              </div>
-            </div>
-            <div class="convert-filter-block">
-              <span>文件类型</span>
-              <div class="convert-filter-row">
-                <button class="convert-filter-chip active" type="button" data-convert-type="all">全部类型 <em data-count-for="type-all">0</em></button>
-                <button class="convert-filter-chip" type="button" data-convert-type="document">文档 <em data-count-for="document">0</em></button>
-                <button class="convert-filter-chip" type="button" data-convert-type="image">图片 <em data-count-for="image">0</em></button>
-                <button class="convert-filter-chip" type="button" data-convert-type="media">音视频 <em data-count-for="media">0</em></button>
-                <button class="convert-filter-chip" type="button" data-convert-type="subtitle">字幕 <em data-count-for="subtitle">0</em></button>
-                <button class="convert-filter-chip" type="button" data-convert-type="archive">压缩包 <em data-count-for="archive">0</em></button>
-              </div>
-            </div>
-          </section>
-
           <section class="convert-matrix-section" aria-label="转换能力矩阵">
             <section class="convert-card convert-world-card" aria-label="转换能力世界模型">
-              <div class="convert-world-rail" aria-hidden="true">
-                <span class="rail-active">◆</span>
-                <span>◇</span>
-                <span>◎</span>
-              </div>
-
               <section class="convert-world-map">
-                <div class="convert-world-summary">
-                  <strong>Conversion World Model™</strong>
-                  <span><b id="convertOrbitTotal">0</b> total routes</span>
-                  <small>5 file type clusters</small>
-                </div>
-
                 <div class="convert-world-cloud" id="convertWorldCloud" aria-label="动态转换能力节点云">
                   <canvas id="convertWorldCanvas"></canvas>
                 </div>
 
-
-                <div class="convert-world-search">
-                  <p>CONVERSION SEARCH ENGINE™</p>
-                  <div class="convert-world-pills">
-                    <button class="active" type="button" data-convert-type="all">All</button>
-                    <button type="button" data-convert-type="document">Document</button>
-                    <button type="button" data-convert-type="image">Image</button>
-                    <button type="button" data-convert-type="media">Media</button>
-                    <button type="button" data-convert-type="subtitle">Subtitle</button>
-                    <button type="button" data-convert-type="archive">Archive</button>
-                  </div>
-                  <label>
-                    <input id="convertWorldSearchInput" type="search" placeholder="Search formats or ask a question..." />
-                    <span>➤</span>
-                  </label>
-                </div>
               </section>
 
               <aside class="convert-world-panel">
                 <h2>Details panel</h2>
+                <div class="convert-world-guide">球体展示格式节点与当前筛选路径的视觉关系；下方路线列表为完整路径清单。点击类型会聚焦高亮，并将对应节点旋转到正面。</div>
+                <div class="convert-world-stats" aria-label="转换能力统计">
+                  <span><strong data-count-for="stable">0</strong>成熟引擎</span>
+                  <span><strong data-count-for="basic">0</strong>基础转换</span>
+                  <span><strong data-count-for="vendor">0</strong>专业工具</span>
+                </div>
                 <p>NODE TYPES</p>
                 <div class="convert-world-types">
                   <button class="active" type="button" data-convert-type="all"><span>Select all</span><strong data-count-for="type-all">0</strong></button>
@@ -389,12 +347,12 @@
 {% endblock %}
 
 {% block page_scripts %}
-<script src="{{ url_for('static', path='/js/convert-tabs.js') }}"></script>
+<script src="{{ url_for('static', path='/js/convert-tabs.js') }}?v=20260715-hash2"></script>
 <script src="{{ url_for('static', path='/js/convert-logs.js') }}"></script>
-<script src="{{ url_for('static', path='/js/convert-result.js') }}?v=20260708-batchfix1"></script>
-<script src="{{ url_for('static', path='/js/convert-capabilities.js') }}?v=20260708-world3"></script>
+<script src="{{ url_for('static', path='/js/convert-result.js') }}?v=20260715-taskjump1"></script>
+<script src="{{ url_for('static', path='/js/convert-capabilities.js') }}?v=20260715-matrixfilter1"></script>
 <script src="{{ url_for('static', path='/js/convert-settings.js') }}?v=20260707-settings1"></script>
-<script src="{{ url_for('static', path='/js/task-center.js') }}?v=20260711-task2"></script>
+<script src="{{ url_for('static', path='/js/task-center.js') }}?v=20260716-journey2"></script>
 <script src="{{ url_for('static', path='/js/health.js') }}?v=20260711-health1"></script>
-<script src="{{ url_for('static', path='/js/convert-form.js') }}?v=20260708-filelist3"></script>
+<script src="{{ url_for('static', path='/js/convert-form.js') }}?v=20260715-taskjump1"></script>
 {% endblock %}

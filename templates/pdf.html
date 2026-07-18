@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block body_class_attr %} class="pdf-body"{% endblock %}
-{% block page_styles %}<link rel="stylesheet" href="{{ url_for('static', path='/css/pdf.css') }}?v=20260712-pdf3" />{% endblock %}
+{% block page_styles %}<link rel="stylesheet" href="{{ url_for('static', path='/css/pdf.css') }}?v=20260715-unified2" />{% endblock %}
 {% block page_content %}
 <main class="pdf-page">
   <aside class="pdf-sidebar">
@@ -14,24 +14,29 @@
   </aside>
   <section class="pdf-main">
     <section class="pdf-panel active" data-pdf-panel="workbench">
-      <header class="pdf-heading"><p>DOCUMENT INTELLIGENCE</p><h1>PDF 智能解析</h1><span>文件仅在本机处理，自动区分文本型与扫描型 PDF。</span></header>
+      <header class="pdf-heading"><div><p>DOCUMENT INTELLIGENCE</p><h1>PDF 智能解析</h1></div><span>文件仅在本机处理，自动区分文本型与扫描型 PDF。</span></header>
+      <section class="pdf-flow-steps" aria-label="PDF 解析流程">
+        <article><i>01</i><strong>上传 PDF</strong><span>读取页数、文本层和扫描特征。</span></article>
+        <article><i>02</i><strong>选择策略</strong><span>自动判断快速、OCR 或精准模式。</span></article>
+        <article><i>03</i><strong>导出结构</strong><span>生成 Markdown、JSON 和质量报告。</span></article>
+      </section>
       <section class="pdf-card">
         <div class="pdf-drop" id="pdfDropZone"><input id="pdfFileInput" type="file" accept="application/pdf,.pdf" hidden /><div><strong id="pdfFileTitle">选择或拖入 PDF</strong><span id="pdfFileMeta">先分析文档特征，再决定快速、OCR 或精准模式。</span></div><button id="pdfPickButton" type="button">选择文件</button></div>
         <div class="pdf-analysis" id="pdfAnalysis" hidden></div>
         <div class="pdf-fields"><label><span>解析模式</span><select id="pdfMode"><option value="auto">自动判断（支持质量回退）</option><option value="fast">快速解析</option><option value="ocr">扫描件 OCR</option><option value="precise">精准混合解析</option></select></label><label class="pdf-path"><span>保存到</span><div><input id="pdfOutputPath" value="~/Downloads/StreamDock" readonly /><button id="pdfSelectDir" type="button">选择目录</button></div></label></div>
-        <div class="pdf-actions"><button id="pdfAnalyzeButton" type="button" disabled>分析文档</button><button id="pdfParseButton" type="button" disabled>开始解析</button><button id="pdfCancelButton" class="secondary" type="button" hidden>取消任务</button><span id="pdfStatus">请先选择 PDF 文件。</span></div>
+        <div class="pdf-step-hint" id="pdfStepHint"><i>1</i><span>先选择 PDF 文件，再分析文档特征，最后开始本地解析。</span></div><div class="pdf-actions"><button id="pdfAnalyzeButton" type="button" disabled title="请先选择 PDF 文件">分析文档</button><button id="pdfParseButton" type="button" disabled title="请先完成文档分析">开始解析</button><button id="pdfCancelButton" class="secondary" type="button" hidden>取消任务</button><span id="pdfStatus">请先选择 PDF 文件。</span></div>
       </section>
-      <section class="pdf-status-grid"><article class="pdf-card"><h2>最近结析</h2><div id="pdfResult">等待解析任务。</div><pre class="pdf-preview" id="pdfPreview" hidden></pre></article><article class="pdf-card"><h2>本地引擎</h2><div id="pdfHealth">正在检查独立 PDF 解析环境...</div></article></section>
+      <section class="pdf-status-grid"><article class="pdf-card"><h2>最近解析</h2><div id="pdfResult">等待解析任务。</div><pre class="pdf-preview" id="pdfPreview" hidden></pre></article><article class="pdf-card system-health-card pdf-engine-card"><div class="system-health-head"><div><h2>本地引擎</h2><span>检查 PDF 解析引擎与版本状态。</span></div><button id="pdfHealthRefresh" type="button">重新检查</button></div><div class="system-health-list pdf-health-list" id="pdfHealth"><div class="system-health-item"><span>正在检查独立 PDF 解析环境...</span></div></div></article></section>
     </section>
 
     <section class="pdf-panel" data-pdf-panel="tasks" hidden>
-      <header class="pdf-heading"><p>LOCAL TASKS</p><h1>PDF 任务</h1><span>查看本地解析阶段、质量结果与失败原因。</span></header>
-      <div class="pdf-toolbar"><input id="pdfTaskSearch" type="search" placeholder="搜索文件名"><select id="pdfTaskFilter"><option value="all">全部状态</option><option value="running">处理中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option></select><button id="pdfClearFinished" type="button">清理已结束</button></div>
+      <header class="pdf-heading"><div><p>LOCAL TASKS</p><h1>PDF 任务</h1></div><span>查看本地解析阶段、质量结果与失败原因。</span></header>
+      <div class="pdf-toolbar"><input id="pdfTaskSearch" type="search" placeholder="搜索文件名" aria-label="搜索 PDF 任务"><select id="pdfTaskFilter" aria-label="筛选 PDF 任务状态"><option value="all">全部状态</option><option value="running">处理中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option></select><button id="pdfClearFinished" type="button">清理已结束</button></div>
       <div class="pdf-task-list" id="pdfTaskList"></div><div class="pdf-empty" id="pdfTaskEmpty">暂无 PDF 任务。</div>
     </section>
 
     <section class="pdf-panel" data-pdf-panel="results" hidden>
-      <header class="pdf-heading"><p>STRUCTURED RESULT</p><h1>结构化结果</h1><span>按目录阅读 Markdown，查看质量与导出全部产物。</span></header>
+      <header class="pdf-heading"><div><p>STRUCTURED RESULT</p><h1>结构化结果</h1></div><span>按目录阅读 Markdown，查看质量与导出全部产物。</span></header>
       <section class="pdf-result-browser">
         <aside><h2>文档与目录</h2><select id="pdfResultTask"></select><nav id="pdfResultToc"></nav></aside>
         <article><div class="pdf-result-head"><strong id="pdfResultTitle">请选择已完成任务</strong><button id="pdfArchiveResult" type="button" disabled>导出 ZIP</button></div><pre id="pdfResultPreview">暂无结构化内容。</pre></article>
@@ -41,4 +46,4 @@
   </section>
 </main>
 {% endblock %}
-{% block page_scripts %}<script src="{{ url_for('static', path='/js/pdf.js') }}?v=20260712-pdf3"></script>{% endblock %}
+{% block page_scripts %}<script src="{{ url_for('static', path='/js/pdf.js') }}?v=20260716-journey1"></script>{% endblock %}

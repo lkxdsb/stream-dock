@@ -17,6 +17,15 @@ class MediaStream:
 
 
 @dataclass(frozen=True)
+class SubtitleTrack:
+    url: str
+    language: str | None = None
+    label: str | None = None
+    format: str | None = None
+    source: str | None = None
+
+
+@dataclass(frozen=True)
 class MediaFetchResult:
     platform: str
     content_type: str
@@ -29,6 +38,7 @@ class MediaFetchResult:
     audio_streams: list[MediaStream] = field(default_factory=list)
     preferred_video: MediaStream | None = None
     preferred_audio: MediaStream | None = None
+    subtitle_tracks: list[SubtitleTrack] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
 
 

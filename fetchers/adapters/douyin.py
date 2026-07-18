@@ -1,17 +1,29 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import browser_cookie3
+import requests
 from playwright.sync_api import BrowserContext, sync_playwright
 
 from fetchers.adapters.base import BasePlatformAdapter
-from fetchers.adapters.common import host_matches
+from fetchers.adapters.common import collect_subtitle_tracks_from_payload, extract_balanced_json_after, host_matches
 from fetchers.models import MediaFetchResult, MediaStream
 
 URL_PATTERN = re.compile(r"https?://[^\s]+")
+AWEME_ID_PATTERN = re.compile(r"/(?:video|share/video)/(\d+)")
+ROUTER_DATA_PATTERN = re.compile(r"window\._ROUTER_DATA\s*=")
+SUPPORTED_HOSTS = ("v.douyin.com", "www.douyin.com", "douyin.com", "www.iesdouyin.com", "iesdouyin.com")
+PROBE_NAVIGATION_TIMEOUT_MS = 30_000
+PROBE_WAIT_MS = 6_000
+MOBILE_USER_AGENT = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+    "Mobile/15E148 Safari/604.1"
+)
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
@@ -23,6 +35,150 @@ def extract_first_url(raw_text: str) -> str:
     if not match:
         raise ValueError("No URL found in input link text")
     return match.group(0)
+
+
+def has_aweme_reference(url: str) -> bool:
+    if AWEME_ID_PATTERN.search(url):
+        return True
+    query = parse_qs(urlparse(url).query)
+    return bool(query.get("modal_id") or query.get("aweme_id"))
+
+
+def is_douyin_generic_landing_url(url: str) -> bool:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower().split(":", 1)[0]
+    path = (parsed.path or "/").strip("/")
+    return host_matches(host, ("www.douyin.com", "douyin.com")) and path in {"", "jingxuan"}
+
+
+def resolve_share_link(url: str) -> str:
+    """Resolve Douyin short share links quickly before opening Playwright.
+
+    Opening v.douyin.com directly in a browser can wait for a long anti-bot
+    bootstrap path. A normal HTTP redirect is enough to obtain the canonical
+    /video/{id} URL and avoids front-end probe requests hanging for two
+    minutes before the browser navigation timeout expires.
+    """
+    try:
+        response = requests.get(
+            url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=12,
+            allow_redirects=False,
+        )
+        location = response.headers.get("location") or ""
+        if location and host_matches(urlparse(location).netloc.lower().split(":", 1)[0], SUPPORTED_HOSTS):
+            # Some Douyin short links resolve to the generic home page when the
+            # link is expired or the request is challenged. Do not treat that as
+            # a valid video URL; otherwise the probe captures the homepage demo
+            # video and the cover naturally stays empty/broken.
+            if has_aweme_reference(location):
+                return location
+    except Exception:
+        pass
+    match = AWEME_ID_PATTERN.search(url)
+    if match:
+        return f"https://www.iesdouyin.com/share/video/{match.group(1)}/"
+    return url
+
+
+def extract_aweme_id(url: str) -> str | None:
+    match = AWEME_ID_PATTERN.search(url)
+    return match.group(1) if match else None
+
+
+def first_url(urls: Any) -> str | None:
+    if isinstance(urls, list):
+        return next((str(url) for url in urls if url), None)
+    if isinstance(urls, str) and urls:
+        return urls
+    return None
+
+
+def quality_label_from_url_or_video(url: str | None, video: dict[str, Any]) -> tuple[str | None, int | None]:
+    height: int | None = None
+    if url:
+        ratio = (parse_qs(urlparse(url).query).get("ratio") or [""])[0].lower()
+        match = re.search(r"(\d{3,4})p", ratio)
+        if match:
+            height = int(match.group(1))
+    if height is None:
+        raw_height = video.get("height")
+        if isinstance(raw_height, int) and raw_height > 0:
+            height = raw_height
+    return (f"{height}P" if height else None), height
+
+
+def extract_router_data_json(html: str) -> str:
+    match = ROUTER_DATA_PATTERN.search(html)
+    if not match:
+        raise RuntimeError("Failed to locate anchor: window._ROUTER_DATA")
+    return extract_balanced_json_after(html[match.start():], "=", "{")
+
+
+def fetch_share_page_detail(link: str) -> dict[str, Any]:
+    aweme_id = extract_aweme_id(link)
+    candidates = [link]
+    if aweme_id:
+        candidates.extend([
+            f"https://www.iesdouyin.com/share/video/{aweme_id}/",
+            f"https://www.douyin.com/share/video/{aweme_id}/",
+        ])
+
+    last_error: Exception | None = None
+    for url in dict.fromkeys(candidates):
+        try:
+            response = requests.get(
+                url,
+                headers={
+                    "User-Agent": MOBILE_USER_AGENT,
+                    "Referer": "https://www.douyin.com/",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                },
+                timeout=18,
+                allow_redirects=True,
+            )
+            response.raise_for_status()
+            raw_json = extract_router_data_json(response.text)
+            data = json.loads(raw_json)
+            loader = data.get("loaderData") or {}
+            page_data = loader.get("video_(id)/page") or loader.get("video_(id)\\u002Fpage") or {}
+            info = page_data.get("videoInfoRes") or {}
+            items = info.get("item_list") or []
+            detail = next((item for item in items if isinstance(item, dict)), None)
+            if detail:
+                return detail
+        except Exception as exc:
+            last_error = exc
+            continue
+    raise RuntimeError(f"分享页结构化数据解析失败：{last_error}")
+
+
+def capture_from_share_page(link: str) -> dict[str, Any]:
+    detail = fetch_share_page_detail(link)
+    video = detail.get("video") or {}
+    play_addr = video.get("play_addr") or {}
+    video_url = first_url(play_addr.get("url_list"))
+    if not video_url:
+        for item in video.get("bit_rate") or []:
+            video_url = first_url((item.get("play_addr") or {}).get("url_list"))
+            if video_url:
+                break
+    if not video_url:
+        raise RuntimeError("分享页未返回可用视频地址")
+    author = detail.get("author") or {}
+    cover = video.get("cover") or {}
+    return {
+        "final_url": link,
+        "title": detail.get("desc") or "抖音视频",
+        "media_url": video_url,
+        "media_kind": "video",
+        "video_url": video_url,
+        "audio_url": None,
+        "aweme_detail": detail,
+        "cover_url": first_url(cover.get("url_list")),
+        "author": author.get("nickname") if isinstance(author, dict) else None,
+    }
 
 
 def classify_media_url(url: str | None) -> str | None:
@@ -92,6 +248,12 @@ def enrich_capture_if_missing_audio(
 ) -> tuple[dict[str, Any], str]:
     if capture.get("media_kind") != "video" or capture.get("audio_url"):
         return capture, strategy
+    # The mobile share page usually returns a directly playable mp4/playwm URL,
+    # where audio is already muxed into the video. Do not open a PC browser only
+    # to look for a separated audio request; that path is currently the source
+    # of long "quality recognition" waits on Douyin pages.
+    if strategy == "share-page":
+        return capture, strategy
 
     retry_candidates: list[tuple[str, Any]] = []
     if strategy == "no-login":
@@ -140,7 +302,14 @@ def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int
 
     page.on("request", on_request)
     page.on("response", on_response)
-    page.goto(link, wait_until="domcontentloaded", timeout=120_000)
+    try:
+        page.goto(link, wait_until="commit", timeout=PROBE_NAVIGATION_TIMEOUT_MS)
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=8_000)
+        except Exception:
+            pass
+    except Exception as exc:
+        raise TimeoutError(f"抖音页面打开超时或被平台拦截：{exc}") from exc
     page.wait_for_timeout(wait_ms)
 
     video_sources = page.evaluate(
@@ -165,7 +334,29 @@ def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int
     )
 
 
-def capture_media_no_login(link: str, wait_ms: int = 10_000) -> dict[str, Any]:
+
+def is_generic_home_capture(capture: dict[str, Any]) -> bool:
+    if not is_douyin_generic_landing_url(str(capture.get("final_url") or "")):
+        return False
+    if capture.get("aweme_detail"):
+        return False
+    title = str(capture.get("title") or "")
+    video_url = str(capture.get("video_url") or capture.get("media_url") or "")
+    return (
+        "抖音精选电脑版" in title
+        or "douyin-pc-web" in video_url
+        or not capture.get("cover_url")
+    )
+
+
+def raise_if_generic_home_capture(capture: dict[str, Any]) -> None:
+    if is_generic_home_capture(capture):
+        raise RuntimeError(
+            "抖音短链只跳转到首页，无法识别具体视频。请在抖音中重新复制视频分享链接，"
+            "或确认该链接没有过期/被平台限制。"
+        )
+
+def capture_media_no_login(link: str, wait_ms: int = PROBE_WAIT_MS) -> dict[str, Any]:
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome", headless=True)
         context = browser.new_context(
@@ -203,7 +394,7 @@ def load_chrome_cookies_for_douyin() -> list[dict[str, Any]]:
     return cookies
 
 
-def capture_media_with_chrome_cookies(link: str, wait_ms: int = 10_000) -> dict[str, Any]:
+def capture_media_with_chrome_cookies(link: str, wait_ms: int = PROBE_WAIT_MS) -> dict[str, Any]:
     cookies = load_chrome_cookies_for_douyin()
     if not cookies:
         raise RuntimeError("No Douyin cookies found in Chrome")
@@ -224,7 +415,7 @@ def capture_media_with_chrome_cookies(link: str, wait_ms: int = 10_000) -> dict[
 
 class DouyinAdapter(BasePlatformAdapter):
     platform_name = "douyin"
-    supported_hosts = ("v.douyin.com", "www.douyin.com", "douyin.com")
+    supported_hosts = SUPPORTED_HOSTS
     download_user_agent = USER_AGENT
     download_referer = "https://www.douyin.com/"
 
@@ -237,21 +428,30 @@ class DouyinAdapter(BasePlatformAdapter):
         return host_matches(host, self.supported_hosts)
 
     def normalize_link(self, raw_link: str) -> str:
-        return extract_first_url(raw_link)
+        return resolve_share_link(extract_first_url(raw_link))
 
     def fetch_media(self, normalized_link: str) -> MediaFetchResult:
         try:
-            capture = capture_media_no_login(normalized_link)
-            strategy = "no-login"
-        except Exception as no_login_error:
+            capture = capture_from_share_page(normalized_link)
+            raise_if_generic_home_capture(capture)
+            strategy = "share-page"
+        except Exception as share_error:
             try:
-                capture = capture_media_with_chrome_cookies(normalized_link)
-                strategy = "chrome-cookies"
-            except Exception as cookie_error:
-                raise RuntimeError(
-                    "Capture failed in both strategies: "
-                    f"no-login=({no_login_error}); chrome-cookies=({cookie_error})"
-                )
+                capture = capture_media_no_login(normalized_link)
+                raise_if_generic_home_capture(capture)
+                strategy = "no-login"
+            except Exception as no_login_error:
+                try:
+                    capture = capture_media_with_chrome_cookies(normalized_link)
+                    raise_if_generic_home_capture(capture)
+                    strategy = "chrome-cookies"
+                except Exception as cookie_error:
+                    raise RuntimeError(
+                        "Capture failed in all strategies: "
+                        f"share-page=({share_error}); "
+                        f"no-login=({no_login_error}); "
+                        f"chrome-cookies=({cookie_error})"
+                    )
 
         capture, strategy = enrich_capture_if_missing_audio(
             capture,
@@ -260,6 +460,7 @@ class DouyinAdapter(BasePlatformAdapter):
             no_login_capturer=capture_media_no_login,
             cookie_capturer=capture_media_with_chrome_cookies,
         )
+        raise_if_generic_home_capture(capture)
 
         preferred_video = None
         preferred_audio = None
@@ -289,12 +490,18 @@ class DouyinAdapter(BasePlatformAdapter):
             title=title,
             source_url=normalized_link,
             final_url=capture["final_url"],
-            cover_url=None,
-            author=None,
+            cover_url=capture.get("cover_url"),
+            author=capture.get("author"),
             video_streams=video_streams,
             audio_streams=audio_streams,
             preferred_video=preferred_video,
             preferred_audio=preferred_audio,
+            subtitle_tracks=collect_subtitle_tracks_from_payload(
+                capture.get("aweme_detail"),
+                source="douyin-native",
+                base_url=capture.get("final_url") or normalized_link,
+                default_format="json",
+            ),
             metadata={
                 "capture_strategy": strategy,
                 "media_kind": capture["media_kind"],
@@ -329,4 +536,18 @@ class DouyinAdapter(BasePlatformAdapter):
                 )
             )
             seen_urls.add(stream_url)
+        play_url = first_url((video.get("play_addr") or {}).get("url_list"))
+        if play_url and play_url not in seen_urls:
+            quality_label, height = quality_label_from_url_or_video(play_url, video)
+            streams.append(
+                MediaStream(
+                    url=play_url,
+                    stream_type="video",
+                    container="mp4",
+                    width=None,
+                    height=height,
+                    quality_label=quality_label,
+                )
+            )
+            seen_urls.add(play_url)
         return streams

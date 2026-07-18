@@ -23,7 +23,9 @@
   function setBatch(data) { window.StreamDockConvertResult?.batch(data); }
 
   function optionLabel(item) {
-    const level = item.level === 'stable' ? '稳定' : item.level === 'basic' ? '基础' : '推荐厂商';
+    const level = item.verification === 'verified' ? '样例已验证'
+      : item.level === 'stable' ? '成熟引擎'
+        : item.level === 'basic' ? '基础转换' : '推荐厂商';
     return `${item.target.toUpperCase()} · ${level}`;
   }
 
@@ -288,6 +290,7 @@
 
     const label = `${currentSource.toUpperCase()} → ${outputType.value.toUpperCase()}`;
     setLog([batchMode ? '开始批量转换...' : '开始转换...', label, `文件数量：${selectedFiles.length}`]);
+    window.StreamDockConvertResult?.processing?.(batchMode ? `正在转换 ${selectedFiles.length} 个文件` : `正在转换 ${selectedFiles[0]?.name || '文件'}`);
     startButton.disabled = true;
     startButton.textContent = batchMode ? '批量转换中...' : '转换中...';
     try {
@@ -295,8 +298,13 @@
       const data = await response.json();
       setLog(data.logs || []);
       if (data.success) {
-        if (batchMode) setBatch(data);
-        else setSuccess(data);
+        if (batchMode) {
+          setBatch(data);
+          window.StreamDockConvertResult?.showTaskJump?.(data.tasks?.[0]?.id || '');
+        } else {
+          setSuccess(data);
+          window.StreamDockConvertResult?.showTaskJump?.(data.task?.id || '');
+        }
         if (['open', 'highlight', 'open-folder'].includes(convertSettings.afterDoneAction)) {
           const openForm = new FormData();
           openForm.append('path', data.outputPath || outputPath.value || '~/Downloads/StreamDock');
@@ -304,6 +312,7 @@
         }
       } else {
         setError(data.error || '转换失败', data.vendorRecommendations);
+        if (data.task?.id) window.StreamDockConvertResult?.showTaskJump?.(data.task.id);
       }
       window.StreamDockTaskCenter?.refreshNow?.();
     } catch (error) {
