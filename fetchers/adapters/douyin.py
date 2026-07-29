@@ -11,10 +11,10 @@ from playwright.sync_api import BrowserContext, sync_playwright
 
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.adapters.common import collect_subtitle_tracks_from_payload, extract_balanced_json_after, host_matches
-from fetchers.models import MediaFetchResult, MediaStream
+from fetchers.models import ImageAsset, MediaFetchResult, MediaStream
 
 URL_PATTERN = re.compile(r"https?://[^\s]+")
-AWEME_ID_PATTERN = re.compile(r"/(?:video|share/video)/(\d+)")
+AWEME_ID_PATTERN = re.compile(r"/(?:(?:share/)?(?:video|note))/(\d+)")
 ROUTER_DATA_PATTERN = re.compile(r"window\._ROUTER_DATA\s*=")
 SUPPORTED_HOSTS = ("v.douyin.com", "www.douyin.com", "douyin.com", "www.iesdouyin.com", "iesdouyin.com")
 PROBE_NAVIGATION_TIMEOUT_MS = 30_000
@@ -42,6 +42,11 @@ def has_aweme_reference(url: str) -> bool:
         return True
     query = parse_qs(urlparse(url).query)
     return bool(query.get("modal_id") or query.get("aweme_id"))
+
+
+def aweme_kind_from_url(url: str) -> str | None:
+    match = re.search(r"/(?:(?:share/)?(video|note))/\d+", url)
+    return match.group(1) if match else None
 
 
 def is_douyin_generic_landing_url(url: str) -> bool:
@@ -78,7 +83,8 @@ def resolve_share_link(url: str) -> str:
         pass
     match = AWEME_ID_PATTERN.search(url)
     if match:
-        return f"https://www.iesdouyin.com/share/video/{match.group(1)}/"
+        kind = aweme_kind_from_url(url) or "video"
+        return f"https://www.iesdouyin.com/share/{kind}/{match.group(1)}/"
     return url
 
 
@@ -120,10 +126,14 @@ def fetch_share_page_detail(link: str) -> dict[str, Any]:
     aweme_id = extract_aweme_id(link)
     candidates = [link]
     if aweme_id:
-        candidates.extend([
-            f"https://www.iesdouyin.com/share/video/{aweme_id}/",
-            f"https://www.douyin.com/share/video/{aweme_id}/",
-        ])
+        preferred_kind = aweme_kind_from_url(link)
+        kinds = [preferred_kind] if preferred_kind else []
+        kinds.extend(kind for kind in ("note", "video") if kind not in kinds)
+        for kind in kinds:
+            candidates.extend([
+                f"https://www.iesdouyin.com/share/{kind}/{aweme_id}/",
+                f"https://www.douyin.com/share/{kind}/{aweme_id}/",
+            ])
 
     last_error: Exception | None = None
     for url in dict.fromkeys(candidates):
@@ -142,12 +152,13 @@ def fetch_share_page_detail(link: str) -> dict[str, Any]:
             raw_json = extract_router_data_json(response.text)
             data = json.loads(raw_json)
             loader = data.get("loaderData") or {}
-            page_data = loader.get("video_(id)/page") or loader.get("video_(id)\\u002Fpage") or {}
-            info = page_data.get("videoInfoRes") or {}
-            items = info.get("item_list") or []
-            detail = next((item for item in items if isinstance(item, dict)), None)
-            if detail:
-                return detail
+            for page_key in ("note_(id)/page", "note_(id)\\u002Fpage", "video_(id)/page", "video_(id)\\u002Fpage"):
+                page_data = loader.get(page_key) or {}
+                info = page_data.get("videoInfoRes") or {}
+                items = info.get("item_list") or []
+                detail = next((item for item in items if isinstance(item, dict)), None)
+                if detail:
+                    return detail
         except Exception as exc:
             last_error = exc
             continue
@@ -156,6 +167,21 @@ def fetch_share_page_detail(link: str) -> dict[str, Any]:
 
 def capture_from_share_page(link: str) -> dict[str, Any]:
     detail = fetch_share_page_detail(link)
+    images = detail.get("images") or []
+    author = detail.get("author") or {}
+    if images:
+        cover = next((item for item in images if isinstance(item, dict)), {})
+        return {
+            "final_url": link,
+            "title": detail.get("desc") or "抖音图文",
+            "media_url": None,
+            "media_kind": "images",
+            "video_url": None,
+            "audio_url": None,
+            "aweme_detail": detail,
+            "cover_url": first_url((cover or {}).get("url_list")),
+            "author": author.get("nickname") if isinstance(author, dict) else None,
+        }
     video = detail.get("video") or {}
     play_addr = video.get("play_addr") or {}
     video_url = first_url(play_addr.get("url_list"))
@@ -166,7 +192,6 @@ def capture_from_share_page(link: str) -> dict[str, Any]:
                 break
     if not video_url:
         raise RuntimeError("分享页未返回可用视频地址")
-    author = detail.get("author") or {}
     cover = video.get("cover") or {}
     return {
         "final_url": link,
@@ -453,26 +478,29 @@ class DouyinAdapter(BasePlatformAdapter):
                         f"chrome-cookies=({cookie_error})"
                     )
 
-        capture, strategy = enrich_capture_if_missing_audio(
-            capture,
-            link=normalized_link,
-            strategy=strategy,
-            no_login_capturer=capture_media_no_login,
-            cookie_capturer=capture_media_with_chrome_cookies,
-        )
+        if capture.get("media_kind") != "images":
+            capture, strategy = enrich_capture_if_missing_audio(
+                capture,
+                link=normalized_link,
+                strategy=strategy,
+                no_login_capturer=capture_media_no_login,
+                cookie_capturer=capture_media_with_chrome_cookies,
+            )
         raise_if_generic_home_capture(capture)
 
         preferred_video = None
         preferred_audio = None
-        video_streams = self._build_video_streams(capture.get("aweme_detail"))
+        is_image_collection = capture.get("media_kind") == "images"
+        video_streams = [] if is_image_collection else self._build_video_streams(capture.get("aweme_detail"))
         audio_streams: list[MediaStream] = []
+        image_assets = self._build_image_assets(capture.get("aweme_detail"))
 
         if video_streams:
             preferred_video = max(
                 video_streams,
                 key=lambda s: ((s.height or 0), (s.width or 0), (s.bitrate or 0)),
             )
-        elif capture.get("video_url"):
+        elif capture.get("video_url") and not is_image_collection:
             preferred_video = MediaStream(url=capture["video_url"], stream_type="video", container="mp4")
             video_streams.append(preferred_video)
         if capture.get("audio_url"):
@@ -496,6 +524,7 @@ class DouyinAdapter(BasePlatformAdapter):
             audio_streams=audio_streams,
             preferred_video=preferred_video,
             preferred_audio=preferred_audio,
+            image_assets=image_assets,
             subtitle_tracks=collect_subtitle_tracks_from_payload(
                 capture.get("aweme_detail"),
                 source="douyin-native",
@@ -505,8 +534,90 @@ class DouyinAdapter(BasePlatformAdapter):
             metadata={
                 "capture_strategy": strategy,
                 "media_kind": capture["media_kind"],
+                "aweme_id": extract_aweme_id(capture.get("final_url") or normalized_link),
+                "image_count": len(image_assets),
             },
         )
+
+    def _build_image_assets(self, aweme_detail: dict[str, Any] | None) -> list[ImageAsset]:
+        if not aweme_detail:
+            return []
+        assets: list[ImageAsset] = []
+        seen_urls: set[str] = set()
+        bitrate_candidates: dict[str, list[str]] = {}
+        for bitrate in aweme_detail.get("img_bitrate") or []:
+            if not isinstance(bitrate, dict):
+                continue
+            for nested in bitrate.get("images") or []:
+                if not isinstance(nested, dict):
+                    continue
+                uri = str(nested.get("uri") or "")
+                if not uri:
+                    continue
+                bitrate_candidates.setdefault(uri, []).extend(
+                    str(url) for url in (nested.get("url_list") or []) if url
+                )
+
+        def candidate_score(url: str) -> tuple[int, int]:
+            path = urlparse(url).path.lower()
+            if "-water:" in path:
+                return (-1, 0)
+            if re.search(r"~q\d+\.(?:png|jpe?g|webp)$", path):
+                transform_score = 500
+            elif "lqen-new" in path:
+                transform_score = 300
+            elif "resize" in path:
+                transform_score = 200
+            elif "shrink" in path:
+                transform_score = 100
+            else:
+                transform_score = 400
+            format_score = 30 if path.endswith(".png") else 20 if path.endswith((".jpg", ".jpeg")) else 10
+            return (transform_score, format_score)
+
+        for item in aweme_detail.get("images") or []:
+            if not isinstance(item, dict):
+                continue
+            uri = str(item.get("uri") or "")
+            # The top-level url_list can be a 1440px display derivative.
+            # img_bitrate also carries an unscaled "~q80" source (currently
+            # 2160px for the reported real-world note). Prefer that source,
+            # while keeping CDN/format alternatives for integrity fallback.
+            raw_candidates = [
+                *(str(url) for url in (item.get("url_list") or []) if url),
+                *bitrate_candidates.get(uri, []),
+            ]
+            candidates = sorted(
+                dict.fromkeys(
+                    candidate for candidate in raw_candidates
+                    if candidate_score(candidate)[0] >= 0
+                ),
+                key=candidate_score,
+                reverse=True,
+            )
+            url = next((candidate for candidate in candidates if candidate not in seen_urls), None)
+            if not url:
+                continue
+            path = urlparse(url).path.lower()
+            image_format = (
+                "png" if path.endswith(".png")
+                else "jpg" if path.endswith((".jpg", ".jpeg"))
+                else "webp" if path.endswith(".webp")
+                else None
+            )
+            assets.append(
+                ImageAsset(
+                    url=url,
+                    alternate_urls=[candidate for candidate in candidates if candidate != url],
+                    width=item.get("width"),
+                    height=item.get("height"),
+                    format=image_format,
+                    quality_label="full-resolution-source",
+                    watermarked=False,
+                )
+            )
+            seen_urls.add(url)
+        return assets
 
     def _build_video_streams(self, aweme_detail: dict[str, Any] | None) -> list[MediaStream]:
         if not aweme_detail:

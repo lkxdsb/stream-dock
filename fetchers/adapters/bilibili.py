@@ -211,10 +211,25 @@ class BilibiliAdapter(BasePlatformAdapter):
             playurl_payload.get("accept_description") or [],
         )
         audio_streams = self._build_audio_streams(dash.get("audio") or [])
+        stream_layout = "dash"
+        if not video_streams:
+            durl_items = playurl_payload.get("durl") or []
+            self._reject_truncated_preview(
+                durl_items=durl_items,
+                expected_duration_ms=playurl_payload.get("timelength"),
+                is_upower_exclusive=bool(video_data.get("is_upower_exclusive")),
+            )
+            video_streams = self._build_progressive_streams(
+                durl_items,
+                quality=playurl_payload.get("quality"),
+                support_formats=playurl_payload.get("support_formats") or [],
+                container=playurl_payload.get("format"),
+            )
+            stream_layout = "progressive"
         subtitle_tracks = self._fetch_subtitle_tracks(bvid=bvid, cid=cid, referer=final_url, cookies=cookies)
         if not video_streams:
             raise RuntimeError("No Bilibili video streams found in playurl response")
-        if not audio_streams:
+        if stream_layout == "dash" and not audio_streams:
             raise RuntimeError("No Bilibili audio streams found in playurl response")
 
         preferred_video = max(
@@ -227,7 +242,11 @@ class BilibiliAdapter(BasePlatformAdapter):
                 stream.bitrate or 0,
             ),
         )
-        preferred_audio = max(audio_streams, key=lambda stream: (stream.bitrate or 0, stream.quality_label or ""))
+        preferred_audio = (
+            max(audio_streams, key=lambda stream: (stream.bitrate or 0, stream.quality_label or ""))
+            if audio_streams
+            else None
+        )
 
         return MediaFetchResult(
             platform=self.platform_name,
@@ -246,6 +265,7 @@ class BilibiliAdapter(BasePlatformAdapter):
                 "capture_strategy": "web-playurl-cookie" if cookies else "web-playurl",
                 "cookie_source": cookie_source,
                 "media_kind": "video",
+                "stream_layout": stream_layout,
                 "bvid": bvid,
                 "cid": cid,
             },
@@ -360,6 +380,68 @@ class BilibiliAdapter(BasePlatformAdapter):
                 )
             )
         return streams
+
+    def _build_progressive_streams(
+        self,
+        raw_streams: list[dict[str, Any]],
+        *,
+        quality: int | None,
+        support_formats: list[dict[str, Any]],
+        container: str | None,
+    ) -> list[MediaStream]:
+        # A durl entry is a muxed file (video + audio), unlike separate DASH tracks.
+        # Multiple entries represent byte-independent media segments and need a concat
+        # pipeline, so do not expose only the first segment as if it were complete.
+        if len(raw_streams) != 1:
+            return []
+        item = raw_streams[0]
+        stream_url = item.get("url")
+        if not stream_url:
+            return []
+        format_info = next(
+            (entry for entry in support_formats if entry.get("quality") == quality),
+            {},
+        )
+        quality_label = (
+            format_info.get("new_description")
+            or format_info.get("display_desc")
+            or (str(quality) if quality is not None else None)
+        )
+        return [
+            MediaStream(
+                url=str(stream_url),
+                stream_type="video",
+                container=str(container or "mp4").split(",", 1)[0],
+                filesize=item.get("size"),
+                quality_label=quality_label,
+            )
+        ]
+
+    def _reject_truncated_preview(
+        self,
+        *,
+        durl_items: list[dict[str, Any]],
+        expected_duration_ms: int | None,
+        is_upower_exclusive: bool,
+    ) -> None:
+        try:
+            expected = int(expected_duration_ms or 0)
+            available = sum(int(item.get("length") or 0) for item in durl_items)
+        except (TypeError, ValueError):
+            return
+        if expected <= 0 or available <= 0 or available >= expected * 0.9:
+            return
+        available_seconds = max(1, round(available / 1000))
+        expected_seconds = max(1, round(expected / 1000))
+        if is_upower_exclusive:
+            raise RuntimeError(
+                "Bilibili UP 主专属内容未解锁："
+                f"当前登录态仅返回 {available_seconds} 秒试看流，完整视频约 {expected_seconds} 秒，无权访问完整资源"
+            )
+        raise RuntimeError(
+            "Bilibili 仅返回了截断的试看流："
+            f"可用 {available_seconds} 秒，完整视频约 {expected_seconds} 秒，需要登录态或内容权限"
+        )
 
     def _quality_value(self, stream: MediaStream) -> int:
         if not stream.quality_label:

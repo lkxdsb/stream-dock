@@ -3,16 +3,20 @@ from __future__ import annotations
 import re
 import os
 import tempfile
+import shutil
+import zipfile
+import hashlib
 from urllib.parse import urlparse
 from pathlib import Path
 from typing import Callable
 
 import requests
+from PIL import Image
 
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.downloader import download_media
 from fetchers.exporters import export_media, is_video_output, validate_output_request
-from fetchers.models import ExportRequest, MediaFetchResult, MediaStream, ResolvedMediaSelection, SubtitleTrack
+from fetchers.models import ExportRequest, ImageAsset, MediaFetchResult, MediaStream, ResolvedMediaSelection, SubtitleTrack
 from fetchers.subtitle_asr import asr_available, generate_asr_subtitle_file
 from fetchers.subtitle_ocr import OcrSubtitleCue, cues_to_srt, generate_ocr_subtitle_file, ocr_available
 from runtime_checks import cleanup_partial, commit_partial, partial_output_path, prepare_output_directory, validate_media_output
@@ -205,6 +209,112 @@ def probe_media(raw_link: str, adapter: BasePlatformAdapter | None = None) -> Me
     return selected_adapter.fetch_media(normalized_link)
 
 
+def download_image_collection(
+    fetch_result: MediaFetchResult,
+    *,
+    output_dir: Path,
+    base_name: str,
+    user_agent: str,
+    referer: str,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[Path, list[str], dict[str, object]]:
+    images = list(fetch_result.image_assets)
+    if not images:
+        raise ValueError("图文作品未返回可下载图片")
+
+    archive_path = available_output_path(output_dir, f"{base_name}_images", "zip")
+    image_dir = archive_path.with_suffix("")
+    if image_dir.exists():
+        image_dir = output_dir / f"{image_dir.name}_{os.urandom(3).hex()}"
+    image_dir.mkdir(parents=True, exist_ok=False)
+    saved: list[str] = []
+    saved_hashes: set[str] = set()
+    image_details: list[dict[str, object]] = []
+    try:
+        for index, image in enumerate(images, start=1):
+            if progress_callback:
+                start = 20 + ((index - 1) / len(images)) * 62
+                progress_callback(start, f"正在下载第 {index}/{len(images)} 张无水印图片")
+            headers = {"User-Agent": user_agent, "Referer": referer}
+            candidate_urls = list(dict.fromkeys([image.url, *image.alternate_urls]))
+            last_error: Exception | None = None
+            target: Path | None = None
+            for candidate_url in candidate_urls:
+                response = requests.get(candidate_url, headers=headers, timeout=60, stream=True)
+                temp_target = image_dir / f".{index:02d}.download"
+                try:
+                    response.raise_for_status()
+                    digest = hashlib.sha256()
+                    with temp_target.open("wb") as output:
+                        for chunk in response.iter_content(chunk_size=512 * 1024):
+                            if chunk:
+                                output.write(chunk)
+                                digest.update(chunk)
+                    if temp_target.stat().st_size <= 0:
+                        raise RuntimeError(f"第 {index} 张图片下载结果为空")
+                    content_hash = digest.hexdigest()
+                    if content_hash in saved_hashes:
+                        raise RuntimeError(f"第 {index} 张图片与前一张内容重复")
+                    with Image.open(temp_target) as opened:
+                        actual_width, actual_height = opened.size
+                        detected_format = str(opened.format or "").lower()
+                    extension = infer_asset_extension(
+                        candidate_url,
+                        response.headers.get("content-type"),
+                        detected_format or image.format or "webp",
+                    )
+                    target = image_dir / f"{index:02d}_无水印_{actual_width}x{actual_height}.{extension}"
+                    temp_target.replace(target)
+                    saved_hashes.add(content_hash)
+                    saved.append(str(target.resolve()))
+                    image_details.append({
+                        "path": str(target.resolve()),
+                        "width": actual_width,
+                        "height": actual_height,
+                        "format": extension,
+                        "sizeBytes": target.stat().st_size,
+                        "sha256": content_hash,
+                        "sourceVariant": image.quality_label,
+                    })
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    temp_target.unlink(missing_ok=True)
+                finally:
+                    response.close()
+            if target is None:
+                raise RuntimeError(f"第 {index} 张图片所有候选源均下载失败：{last_error}")
+
+        if progress_callback:
+            progress_callback(88, "正在打包图片集（不二次压缩）")
+        partial_archive = partial_output_path(archive_path, token=os.getenv("STREAMDOCK_TASK_ID"))
+        cleanup_partial(partial_archive)
+        with zipfile.ZipFile(partial_archive, "w", compression=zipfile.ZIP_STORED) as bundle:
+            for saved_path in saved:
+                bundle.write(saved_path, arcname=Path(saved_path).name)
+        with zipfile.ZipFile(partial_archive) as bundle:
+            names = bundle.namelist()
+            if len(names) != len(saved) or bundle.testzip() is not None:
+                raise RuntimeError("图片压缩包校验失败")
+        commit_partial(partial_archive, archive_path)
+    except Exception:
+        shutil.rmtree(image_dir, ignore_errors=True)
+        cleanup_partial(partial_output_path(archive_path, token=os.getenv("STREAMDOCK_TASK_ID")))
+        raise
+
+    validation = {
+        "valid": True,
+        "kind": "images",
+        "imageCount": len(saved),
+        "archiveFormat": "zip",
+        "archiveCompression": "stored",
+        "sizeBytes": archive_path.stat().st_size,
+        "images": image_details,
+        "uniqueImageCount": len(saved_hashes),
+    }
+    return archive_path, saved, validation
+
+
 def resolve_media_selection(
     fetch_result: MediaFetchResult,
     *,
@@ -272,11 +382,6 @@ def run_pipeline(
     progress(8, '正在识别平台资源')
     fetch_result = selected_adapter.fetch_media(normalized_link)
     progress(15, '资源识别完成')
-    selection = resolve_media_selection(
-        fetch_result,
-        output_type=export_request.output_type,
-        video_quality=video_quality,
-    )
     if dry_run:
         return {
             "platform": fetch_result.platform,
@@ -291,6 +396,43 @@ def run_pipeline(
     download_referer = getattr(selected_adapter, "download_referer", normalized_link)
 
     saved_assets: dict[str, object] = {"cover": None, "subtitles": [], "subtitleDetails": []}
+    if fetch_result.content_type == "images":
+        archive_path, image_files, validation = download_image_collection(
+            fetch_result,
+            output_dir=output_dir,
+            base_name=base_name,
+            user_agent=download_user_agent,
+            referer=download_referer,
+            progress_callback=progress,
+        )
+        saved_assets["images"] = image_files
+        saved_assets["archive"] = str(archive_path)
+        progress(100, f"{len(image_files)} 张图片已保存并完成校验")
+        return {
+            "platform": fetch_result.platform,
+            "normalized_link": normalized_link,
+            "title": fetch_result.title,
+            "capture_strategy": fetch_result.metadata.get("capture_strategy"),
+            "media_kind": fetch_result.content_type,
+            "final_url": fetch_result.final_url,
+            "cover_url": fetch_result.cover_url,
+            "author": fetch_result.author,
+            "subtitle_count": 0,
+            "subtitle_tracks": [],
+            "subtitle_strategy": None,
+            "subtitle_pending": False,
+            "selected_video_quality": None,
+            "output_file": str(archive_path),
+            "image_count": len(image_files),
+            "assets": saved_assets,
+            "validation": validation,
+        }
+
+    selection = resolve_media_selection(
+        fetch_result,
+        output_type=export_request.output_type,
+        video_quality=video_quality,
+    )
     subtitle_pending = False
     selected_subtitle_strategy = (subtitle_strategy or os.getenv("STREAMDOCK_SUBTITLE_STRATEGY") or "native-asr-ocr").strip().lower()
     if selected_subtitle_strategy not in {"native", "native-asr", "native-asr-ocr", "ocr"}:

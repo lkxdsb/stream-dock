@@ -111,6 +111,7 @@ def main() -> int:
         log(f"cover url: {result['cover_url']}")
     log(f"subtitle count: {result.get('subtitle_count', 0)}")
     log(f"subtitle pending: {'true' if result.get('subtitle_pending') else 'false'}")
+    log(f"image count: {result.get('image_count', 0)}")
     if result.get("selected_video_quality"):
         log(f"selected video quality: {result['selected_video_quality']}")
     log(f"output file: {result['output_file']}")
@@ -123,6 +124,8 @@ def main() -> int:
         for detail in assets.get('subtitleDetails') or []:
             if isinstance(detail, dict) and detail.get('path'):
                 log(f"subtitle detail: {detail.get('source') or '-'}|{detail.get('quality') or '-'}|{detail.get('path')}")
+        for image in assets.get('images') or []:
+            log(f"image file: {image}")
     return 0
 
 

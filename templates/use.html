@@ -3,7 +3,7 @@
 {% block body_class_attr %} class="use-body"{% endblock %}
 
 {% block page_styles %}
-<link rel="stylesheet" href="{{ url_for('static', path='/css/use.css') }}?v=20260716-coverfit4" />
+<link rel="stylesheet" href="{{ url_for('static', path='/css/use.css') }}?v=20260725-douyin-images1" />
 {% endblock %}
 
 {% block page_content %}
@@ -81,7 +81,7 @@
                 </div>
                 <div class="media-probe-summary" id="mediaProbeSummary"></div>
                 <details class="media-stream-details" id="mediaProbeDetails">
-                  <summary>视频资源详情</summary>
+                  <summary>媒体资源详情</summary>
                   <div class="media-probe-detail-grid" id="mediaProbeDetailGrid"></div>
                   <div class="media-stream-table" id="mediaStreamTable"></div>
                 </details>
@@ -89,7 +89,7 @@
 
               <div class="fields use-fields">
                 <div class="field use-field">
-                  <label for="outputType">输出格式</label>
+                  <label for="outputType">输出格式（图文作品自动导出图片集）</label>
                   <select id="outputType" name="outputType" class="select native-select">
                     <optgroup label="音频">
                       <option value="m4a">M4A 音频</option>
@@ -138,7 +138,7 @@
 
                     <label class="asset-toggle" for="saveAssets">
                       <input id="saveAssets" type="checkbox" checked />
-                      <span><strong>同时保存封面和字幕</strong><small>视频下载完成后立即可用；没有原生字幕时，语音识别会转入独立后台任务。</small></span>
+                      <span><strong>视频同时保存封面和字幕</strong><small>视频下载完成后立即可用；图文作品会始终保存全部图片并生成 ZIP。</small></span>
                     </label>
 
                     <div class="field use-field use-field-subtitle-strategy">
@@ -276,7 +276,7 @@
 <script src="{{ url_for('static', path='/js/use-result.js') }}?v=20260716-cancel1"></script>
 <script src="{{ url_for('static', path='/js/use-quality.js') }}"></script>
 <script src="{{ url_for('static', path='/js/use-tabs.js') }}?v=20260715-hash2"></script>
-<script src="{{ url_for('static', path='/js/task-center.js') }}?v=20260716-journey1"></script>
+<script src="{{ url_for('static', path='/js/task-center.js') }}?v=20260725-douyin-images1"></script>
 <script src="{{ url_for('static', path='/js/health.js') }}?v=20260711-health1"></script>
-<script src="{{ url_for('static', path='/js/use-form.js') }}?v=20260716-journey1"></script>
+<script src="{{ url_for('static', path='/js/use-form.js') }}?v=20260725-douyin-images1"></script>
 {% endblock %}

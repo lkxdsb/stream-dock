@@ -119,7 +119,13 @@ class MediaQueue:
         logs = [line for line in ['输出文件已生成' if result.get('success') else '媒体资源处理失败', stdout, stderr] if line]
         if result.get('success'):
             result_copy = dict(result)
-            stage = '视频已下载' if result_copy.get('outputPath') else '已完成'
+            stage = (
+                '图片已下载'
+                if result_copy.get('mediaKind') == 'images'
+                else '视频已下载'
+                if result_copy.get('outputPath')
+                else '已完成'
+            )
             self.store.update(task_id, status=TaskStatus.COMPLETED, logs=logs, result=result_copy, error=None, stage=stage, progress=100)
             if self.success_hook is not None:
                 try:

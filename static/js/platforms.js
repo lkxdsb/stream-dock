@@ -13,11 +13,11 @@
   const platforms = {
     domestic: [
       {
-        name: '抖音', iconSrc: '/static/icons/platforms/svg/douyin.svg', level: '稳定', type: '短视频', quality: '自动优选可达最高画质',
-        badges: ['视频', '音频', '浏览器登录态'],
-        summary: '优先结构化解析分享链接，必要时读取本机浏览器登录态，以当前账号可访问的视频源为准。',
-        strategy: '分享链接规范化 → 视频页探测 → 可用流筛选 → ffmpeg 输出',
-        limit: '画质上限取决于平台返回源和账号权限。',
+        name: '抖音', iconSrc: '/static/icons/platforms/svg/douyin.svg', level: '稳定', type: '视频 / 图文', quality: '视频自动优选，图片按原顺序导出',
+        badges: ['视频', '音频', '无水印图片集', '浏览器登录态'],
+        summary: '先判断作品是视频还是图文：视频进入清晰度选择与导出，图文逐张保存无水印图片并生成 ZIP。',
+        strategy: '分享链接规范化 → 作品类型判断 → 视频流筛选 / 图片集无损落盘',
+        limit: '视频画质与图片规格以平台实际返回源为准。',
       },
       {
         name: 'B站', iconSrc: '/static/icons/platforms/svg/bilibili.svg', level: '稳定', type: '长视频 / 番剧外内容', quality: '支持识别多档清晰度',

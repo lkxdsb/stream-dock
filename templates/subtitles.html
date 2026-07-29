@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block body_class_attr %} class="subtitle-body"{% endblock %}
+
+{% block page_styles %}
+<link rel="stylesheet" href="{{ url_for('static', path='/css/subtitles.css') }}?v=20260718-editor3" />
+{% endblock %}
+
+{% block page_content %}
+<main class="subtitle-page" id="workbench">
+  <header class="subtitle-commandbar">
+    <div class="subtitle-command-title">
+      <p><a href="/use">视频解析</a><span>/</span>字幕工作台</p>
+      <div><h1>字幕时间轴</h1><span id="subtitleDocumentStatus">新建工作区</span></div>
+    </div>
+    <div class="subtitle-command-actions">
+      <label class="subtitle-action secondary" for="subtitleVideo">
+        <span class="subtitle-action-icon">▶</span>关联媒体
+      </label>
+      <input id="subtitleVideo" type="file" accept="video/*,audio/*" hidden />
+      <label class="subtitle-action secondary" for="subtitleFile">
+        <span class="subtitle-action-icon">↥</span>导入字幕
+      </label>
+      <input id="subtitleFile" type="file" accept=".srt,.vtt,.txt,text/plain,text/vtt" hidden />
+      <div class="subtitle-export-group">
+        <select id="subtitleExportFormat" aria-label="导出格式"><option value="srt">SRT</option><option value="vtt">VTT</option><option value="txt">TXT</option></select>
+        <button class="subtitle-action primary" id="subtitleExport" type="button">导出字幕</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="subtitle-workspace">
+    <section class="subtitle-monitor" aria-label="媒体预览">
+      <div class="subtitle-monitor-head">
+        <div><i></i><span>媒体预览</span></div>
+        <span id="subtitleMediaName">未关联媒体</span>
+      </div>
+      <div class="subtitle-stage" id="subtitleStage">
+        <video id="subtitlePlayer" controls></video>
+        <div class="subtitle-stage-empty" id="subtitleStageEmpty">
+          <span class="subtitle-stage-mark">▶</span>
+          <strong>关联视频以同步校准</strong>
+          <small>支持本地视频和音频，文件不会上传</small>
+          <label for="subtitleVideo">选择媒体文件</label>
+        </div>
+        <div class="subtitle-stage-caption" id="subtitleNow" hidden></div>
+      </div>
+      <div class="subtitle-transport">
+        <span id="subtitleCurrentTime">00:00.000</span>
+        <div><kbd>Space</kbd><span>播放 / 暂停</span><kbd>⌘S</kbd><span>导出</span></div>
+        <span id="subtitleMediaDuration">00:00.000</span>
+      </div>
+    </section>
+
+    <aside class="subtitle-inspector" aria-label="字幕文档信息">
+      <div class="subtitle-inspector-head"><span>文档</span><i id="subtitleReadyDot"></i></div>
+      <div class="subtitle-file-identity">
+        <span class="subtitle-file-icon">CC</span>
+        <div><strong id="subtitleName">未导入字幕</strong><small id="subtitleFormatLabel">SRT / VTT / TXT</small></div>
+      </div>
+      <dl class="subtitle-facts">
+        <div><dt>字幕片段</dt><dd id="subtitleCount">0</dd></div>
+        <div><dt>时间轴长度</dt><dd id="subtitleDuration">00:00</dd></div>
+        <div><dt>当前状态</dt><dd id="subtitleState">等待导入</dd></div>
+      </dl>
+      <div class="subtitle-inspector-note">
+        <strong>本地处理</strong>
+        <p>字幕与媒体只在当前浏览器和本机服务之间处理。</p>
+      </div>
+      <div class="subtitle-inspector-actions">
+        <label for="subtitleFile">重新导入字幕</label>
+        <button id="subtitleClear" type="button">清空工作区</button>
+      </div>
+    </aside>
+  </section>
+
+  <section class="subtitle-timeline">
+    <div class="subtitle-timeline-head">
+      <div><strong>字幕轨道</strong><span id="subtitleSelectionSummary">尚未导入字幕</span></div>
+      <div class="subtitle-timeline-tools">
+        <button id="subtitleAdd" type="button"><span>＋</span>添加片段</button>
+        <button id="subtitleSort" type="button">按时间排序</button>
+      </div>
+    </div>
+    <div class="subtitle-columns" aria-hidden="true"><span>#</span><span>开始</span><span>结束</span><span>字幕内容</span><span></span></div>
+    <div class="subtitle-empty" id="subtitleEmpty" data-subtitle-dropzone>
+      <div class="subtitle-empty-graphic"><i></i><i></i><i></i><span>CC</span></div>
+      <strong>把字幕文件拖到这里</strong>
+      <p>或从右上角导入 SRT、VTT、TXT 文件，开始校准时间和文本。</p>
+      <label for="subtitleFile">选择字幕文件</label>
+      <small>单个文件最大 5MB · 最多 5000 条字幕</small>
+    </div>
+    <div class="subtitle-cues" id="subtitleCues"></div>
+  </section>
+</main>
+{% endblock %}
+
+{% block page_scripts %}
+<script src="{{ url_for('static', path='/js/subtitles.js') }}?v=20260718-editor3"></script>
+{% endblock %}

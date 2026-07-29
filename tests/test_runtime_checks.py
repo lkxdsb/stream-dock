@@ -4,10 +4,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from runtime_checks import augmented_path, deep_media_quality, network_subprocess_environment, partial_output_path, prepare_output_directory, resolve_tool_path, validate_media_output
+from runtime_checks import augmented_path, deep_media_quality, environment_health, network_subprocess_environment, partial_output_path, prepare_output_directory, resolve_tool_path, validate_media_output
 
 
 class RuntimeChecksTests(unittest.TestCase):
+    def test_environment_health_reports_full_local_capability_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = environment_health(tmp)
+
+        keys = {item['key'] for item in result['checks']}
+        self.assertTrue({'python', 'ffmpeg', 'ffprobe', 'playwright', 'subtitle_asr', 'subtitle_ocr', 'pdf_engine', 'output'}.issubset(keys))
+        self.assertEqual(result['summary']['total'], len(result['checks']))
+        self.assertGreaterEqual(result['summary']['requiredTotal'], 4)
+
     def test_prepare_output_directory_creates_and_checks_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / 'new-output'

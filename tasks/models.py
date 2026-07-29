@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from error_catalog import classify_error
+
 SENSITIVE_PAYLOAD_KEYS = {'cookie', 'token', 'secret', 'password', 'credential'}
 
 
@@ -58,7 +60,7 @@ class TaskItem:
     updated_at: str = field(default_factory=utc_now_iso)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             'id': self.id,
             'kind': self.kind.value,
             'title': self.title,
@@ -72,3 +74,6 @@ class TaskItem:
             'createdAt': self.created_at,
             'updatedAt': self.updated_at,
         }
+        if self.error:
+            payload['errorInfo'] = classify_error(self.error)
+        return payload

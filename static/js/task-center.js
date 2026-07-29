@@ -14,6 +14,8 @@
   const mediaFinishedSummary = document.getElementById('mediaFinishedSummary');
   const convertTaskSearch = document.getElementById('convertTaskSearch');
   const convertTaskStatusFilter = document.getElementById('convertTaskStatusFilter');
+  const pauseMediaTasks = document.getElementById('pauseMediaTasks');
+  const resumeMediaTasks = document.getElementById('resumeMediaTasks');
   const POLL_MS = 3500;
   const MEDIA_FINISHED_PREVIEW_LIMIT = 3;
   let timer = null;
@@ -21,6 +23,7 @@
   let currentDetailTaskId = '';
   let latestMediaTasks = [];
   let latestConvertTasks = [];
+  let mediaQueuePaused = false;
 
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -82,6 +85,7 @@
   }
 
   function stageLabel(task) {
+    if (task.status === 'pending' && mediaQueuePaused) return '队列已暂停';
     if (task.status === 'completed' && subtitleJobActive(task)) return '视频已下载';
     if (task.status !== 'running') return statusLabel(task.status);
     if (task.stage && !['处理中', '等待中'].includes(task.stage)) return task.stage;
@@ -158,8 +162,8 @@
     return tasks.filter((task) => {
       if (status !== 'all' && task.status !== status) return false;
       if (!query) return true;
-      const result = task.result || {};
-      const payload = task.payload || {};
+    const result = task.result || {};
+    const payload = task.payload || {};
       const haystack = [
         task.title, task.status, task.stage, task.error,
         result.title, result.platform, result.author, result.outputPath, result.finalUrl, result.coverUrl,
@@ -214,7 +218,15 @@
       : '-');
   }
 
-  function errorPresentation(rawError) {
+  function errorPresentation(rawError, structured) {
+    if (structured && structured.title && structured.message) {
+      return {
+        title: structured.title,
+        hint: structured.message,
+        action: structured.action || 'logs',
+        actionLabel: structured.actionLabel || '查看运行记录',
+      };
+    }
     const error = String(rawError || '').trim();
     const lowered = error.toLowerCase();
     if (!error) return { title: '任务未完成', hint: '这次没有拿到完整结果，可以重新提交链接，或打开运行记录查看原因。', action: 'logs', actionLabel: '查看运行记录' };
@@ -228,7 +240,7 @@
       return { title: '本地依赖不可用', hint: '打开本地环境状态，检查 FFmpeg、PDF 引擎或转换依赖。', action: 'health', actionLabel: '检查本地环境' };
     }
     if (error.includes('不支持') || error.includes('无法识别') || error.includes('未识别') || lowered.includes('unsupported')) {
-      return { title: '暂不支持当前链接', hint: '请粘贴抖音、B站、快手、小红书、微博、视频号、YouTube、TikTok 或 X 的视频分享链接。', action: 'capability', actionLabel: '查看支持平台' };
+      return { title: '暂不支持当前链接', hint: '请粘贴抖音、B站、快手、小红书、微博、视频号、YouTube、TikTok 或 X 的媒体分享链接。', action: 'capability', actionLabel: '查看支持平台' };
     }
     if (error.includes('磁盘') || lowered.includes('no space')) {
       return { title: '磁盘空间不足', hint: '清理空间或更换输出目录后再次执行。', action: 'settings', actionLabel: '打开保存设置' };
@@ -337,10 +349,15 @@
     const subtitles = Array.isArray(assets.subtitles) ? assets.subtitles : [];
     const subtitleDetails = Array.isArray(assets.subtitleDetails) ? assets.subtitleDetails : [];
     const subtitleTracks = Array.isArray(result.subtitleTracks) ? result.subtitleTracks : [];
+    const images = Array.isArray(assets.images) ? assets.images : [];
     const coverFile = assets.cover || '';
     const coverUrl = result.coverUrl || '';
     const subtitleCount = Number(result.subtitleCount || subtitleTracks.length || subtitles.length || 0);
-    if (!result.title && !result.author && !coverUrl && !coverFile && subtitleCount <= 0) return '';
+    if (!result.title && !result.author && !coverUrl && !coverFile && subtitleCount <= 0 && !images.length) return '';
+    const isImages = result.mediaKind === 'images' || images.length > 0;
+    const imageGallery = images.length
+      ? `<div class="media-image-gallery">${images.map((path, index) => `<figure><img src="${escapeHtml(mediaLocalAssetSrc(task.id, path))}" alt="图片 ${index + 1}" loading="lazy"><figcaption>第 ${index + 1} 张</figcaption></figure>`).join('')}</div>`
+      : '';
     const subtitleTrackLabel = subtitleTracks
       .slice(0, 4)
       .map((track) => [track.language, track.label || track.name || track.source].filter(Boolean).join(' · '))
@@ -351,7 +368,8 @@
       .filter(Boolean)
       .join('\n');
     return `<section class="task-detail-section media-assets-preview">
-      <h3>视频信息与资产</h3>
+      <h3>${isImages ? '图文图片集' : '视频信息与资产'}</h3>
+      ${imageGallery}
       <div class="media-asset-layout">
         <div class="media-asset-cover">${coverFile || coverUrl ? `<img src="${escapeHtml(coverFile ? mediaLocalAssetSrc(task.id, coverFile) : mediaCoverSrc(coverUrl))}" alt="视频封面" loading="lazy">` : '<span>暂无封面</span>'}</div>
         <div class="task-detail-grid">
@@ -359,7 +377,7 @@
           ${detailRow('作者', result.author || '')}
           ${detailRow('源封面', coverUrl ? '可预览' : '')}
           ${detailRow('封面', coverFile ? '已保存' : (coverUrl ? '可预览，未保存' : '未发现'))}
-          ${detailRow('视频状态', result.outputPath ? '已下载，可立即打开' : '')}
+          ${detailRow(isImages ? '图片状态' : '视频状态', result.outputPath ? (isImages ? `${images.length || result.imageCount || 0} 张已保存，ZIP 已生成` : '已下载，可立即打开') : '')}
           ${detailRow('字幕处理', subtitleJobLabel(task))}
           ${detailRow('字幕轨', subtitleCount > 0 ? `${subtitleCount} 条` : '未发现')}
           ${detailRow('字幕信息', subtitleTrackLabel, true)}
@@ -445,10 +463,11 @@
     const previousLogsScrollTop = previousLogs?.scrollTop || 0;
     const payload = task.payload || {};
     const result = task.result || {};
+    const subtitleFiles = Array.isArray(result.assets?.subtitles) ? result.assets.subtitles : [];
     const outputPath = result.outputPath || '';
     const stage = stageLabel(task);
     const latestLog = compactActivity(task) || stage;
-    const errorInfo = errorPresentation(task.error);
+    const errorInfo = errorPresentation(task.error, task.errorInfo);
 
     detailTitle.textContent = taskDisplayTitle(task);
     detailContent.innerHTML = `
@@ -501,6 +520,7 @@
       ${task.kind === 'convert' && task.status === 'failed' ? '<button class="task-detail-action primary" type="button" data-reselect-file>重新选择文件</button>' : ''}
       ${task.kind === 'media' && ['pending', 'running'].includes(task.status) ? '<button class="task-detail-action" type="button" data-cancel-detail>取消任务</button>' : ''}
       ${task.kind === 'media' && task.status === 'completed' && outputPath ? '<button class="task-detail-action" type="button" data-deep-quality>深度质量检测</button>' : ''}
+      ${task.kind === 'media' && subtitleFiles.length ? '<button class="task-detail-action primary" type="button" data-edit-subtitle>编辑字幕</button>' : ''}
       ${['completed', 'failed', 'skipped', 'cancelled'].includes(task.status) && !subtitleJobActive(task) ? '<button class="task-detail-action danger" type="button" data-delete-detail>删除记录</button>' : ''}
     `;
 
@@ -521,6 +541,10 @@
     bindAction(detailFooter.querySelector('[data-copy-error]'), async () => {
       await navigator.clipboard?.writeText(task.error || '');
       window.StreamDockUI?.showToast?.('错误信息已复制');
+    });
+    bindAction(detailFooter.querySelector('[data-edit-subtitle]'), () => {
+      const query = new URLSearchParams({ taskId: task.id, path: subtitleFiles[0] });
+      window.location.href = `/subtitles?${query.toString()}`;
     });
     bindAction(detailFooter.querySelector('[data-retry-task]'), async () => {
       const response = await fetch(`/api/tasks/${encodeURIComponent(task.id)}/retry`, { method: 'POST' });
@@ -589,7 +613,7 @@
       const result = task.result || {};
       const coverUrl = result.coverUrl || '';
       const stage = stageLabel(task);
-      const errorInfo = errorPresentation(task.error);
+      const errorInfo = errorPresentation(task.error, task.errorInfo);
       const card = document.createElement('article');
       card.className = `task-card task-card-${task.status || 'pending'}`;
       card.tabIndex = 0;
@@ -654,6 +678,11 @@
     const response = await fetch(`/api/tasks${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`);
     const data = await response.json();
     if (!response.ok || !data.success) return [];
+    if (kind === 'media' && data.mediaQueue) {
+      mediaQueuePaused = Boolean(data.mediaQueue.paused);
+      if (pauseMediaTasks) pauseMediaTasks.disabled = mediaQueuePaused;
+      if (resumeMediaTasks) resumeMediaTasks.disabled = !mediaQueuePaused;
+    }
     return data.tasks || [];
   }
 
@@ -747,8 +776,8 @@
     await refresh();
   }
 
-  bindAction(document.getElementById('pauseMediaTasks'), () => taskAction('/api/tasks/media/pause', 'POST', '等待队列已暂停'));
-  bindAction(document.getElementById('resumeMediaTasks'), () => taskAction('/api/tasks/media/resume', 'POST', '等待队列已继续'));
+  bindAction(pauseMediaTasks, () => taskAction('/api/tasks/media/pause', 'POST', '等待队列已暂停'));
+  bindAction(resumeMediaTasks, () => taskAction('/api/tasks/media/resume', 'POST', '等待队列已继续'));
   bindAction(document.getElementById('clearMediaFinished'), () => taskAction('/api/task-actions/clear-finished?kind=media', 'DELETE', '解析历史记录已清除'));
   bindAction(document.getElementById('clearConvertFinished'), () => taskAction('/api/task-actions/clear-finished?kind=convert', 'DELETE', '转换历史记录已清除'));
   [mediaTaskSearch, mediaTaskStatusFilter, convertTaskSearch, convertTaskStatusFilter].forEach((control) => {

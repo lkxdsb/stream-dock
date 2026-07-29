@@ -335,6 +335,14 @@ def validate_general_output(path: Path, *, target: str) -> dict[str, Any]:
 
 def environment_health(output_path: str | None = None) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
+    python_ok = sys.version_info >= (3, 11)
+    checks.append({
+        'key': 'python',
+        'name': 'Python 运行时',
+        'status': 'ok' if python_ok else 'error',
+        'detail': f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}' + ('' if python_ok else ' · 需要 Python 3.11+'),
+        'required': True,
+    })
     for name, command, required in (
         ('FFmpeg', 'ffmpeg', True),
         ('FFprobe', 'ffprobe', True),
@@ -359,6 +367,21 @@ def environment_health(output_path: str | None = None) -> dict[str, Any]:
         checks.append({'key': 'openpyxl', 'name': '表格转换', 'status': 'missing', 'detail': '未安装 openpyxl', 'required': False})
 
     try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            browser_path = Path(playwright.chromium.executable_path)
+        checks.append({
+            'key': 'playwright',
+            'name': '浏览器解析',
+            'status': 'ok' if browser_path.exists() else 'missing',
+            'detail': str(browser_path) if browser_path.exists() else 'Playwright 已安装，但 Chromium 浏览器尚未安装',
+            'required': False,
+        })
+    except Exception as exc:
+        checks.append({'key': 'playwright', 'name': '浏览器解析', 'status': 'missing', 'detail': f'Playwright 不可用：{exc}', 'required': False})
+
+    try:
         from fetchers.subtitle_asr import asr_engine_status
         asr_status = asr_engine_status()
         checks.append({
@@ -371,6 +394,34 @@ def environment_health(output_path: str | None = None) -> dict[str, Any]:
     except Exception as exc:
         checks.append({'key': 'subtitle_asr', 'name': '语音字幕', 'status': 'error', 'detail': str(exc), 'required': False})
 
+    try:
+        from fetchers.subtitle_ocr import ocr_available
+
+        ocr_ready = ocr_available()
+        checks.append({
+            'key': 'subtitle_ocr',
+            'name': '画面字幕 OCR',
+            'status': 'ok' if ocr_ready else 'missing',
+            'detail': 'Tesseract 与 FFmpeg 可用' if ocr_ready else '需要 Tesseract 与 FFmpeg',
+            'required': False,
+        })
+    except Exception as exc:
+        checks.append({'key': 'subtitle_ocr', 'name': '画面字幕 OCR', 'status': 'error', 'detail': str(exc), 'required': False})
+
+    try:
+        from pdf_engine.providers.mineru import MinerUProvider
+
+        pdf_status = MinerUProvider().health()
+        checks.append({
+            'key': 'pdf_engine',
+            'name': 'PDF 深度解析',
+            'status': 'ok' if pdf_status.get('available') else 'missing',
+            'detail': str(pdf_status.get('detail') or '未安装独立 PDF 解析环境'),
+            'required': False,
+        })
+    except Exception as exc:
+        checks.append({'key': 'pdf_engine', 'name': 'PDF 深度解析', 'status': 'error', 'detail': str(exc), 'required': False})
+
     output = Path(output_path or '~/Downloads/StreamDock').expanduser()
     try:
         output_info = prepare_output_directory(output)
@@ -381,4 +432,14 @@ def environment_health(output_path: str | None = None) -> dict[str, Any]:
     except RuntimeError as exc:
         checks.append({'key': 'output', 'name': '输出目录', 'status': 'error', 'detail': str(exc), 'required': True})
     healthy = all(item['status'] == 'ok' for item in checks if item['required'])
-    return {'healthy': healthy, 'checks': checks}
+    available_count = sum(item['status'] == 'ok' for item in checks)
+    return {
+        'healthy': healthy,
+        'summary': {
+            'available': available_count,
+            'total': len(checks),
+            'requiredReady': sum(item['required'] and item['status'] == 'ok' for item in checks),
+            'requiredTotal': sum(bool(item['required']) for item in checks),
+        },
+        'checks': checks,
+    }

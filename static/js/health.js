@@ -20,7 +20,7 @@
   function render(checks) {
     const html = (checks || []).map((item) => `
       <div class="system-health-item is-${escapeHtml(item.status || 'missing')}">
-        <strong>${escapeHtml(item.name)}</strong>
+        <strong>${escapeHtml(item.name)} · ${item.required ? '必需' : '可选'}</strong>
         <span>${escapeHtml(item.detail)}</span>
       </div>
     `).join('');

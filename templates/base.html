@@ -27,6 +27,7 @@
           <a class="nav-link {% if active_nav == 'use' %}active{% endif %}" href="/use" data-transition-link>视频解析</a>
           <a class="nav-link {% if active_nav == 'convert' %}active{% endif %}" href="/convert" data-transition-link>文件转换</a>
           <a class="nav-link {% if active_nav == 'pdf' %}active{% endif %}" href="/pdf" data-transition-link>PDF解析</a>
+          <a class="nav-link {% if active_nav == 'subtitles' %}active{% endif %}" href="/subtitles" data-transition-link>字幕工作台</a>
           <a class="nav-link {% if active_nav == 'updates' %}active{% endif %}" href="/updates" data-transition-link>更新日志</a>
         </nav>
 
@@ -41,8 +42,8 @@
             class="top-btn download"
             id="topDownloadBtn"
             type="button"
-            data-primary-action="{% if active_nav == 'convert' %}/convert#workbench{% elif active_nav == 'pdf' %}/pdf#workbench{% elif active_nav == 'use' %}/use#parse{% else %}/use{% endif %}"
-          >{% if active_nav == 'convert' %}开始转换{% elif active_nav == 'pdf' %}解析 PDF{% elif active_nav == 'use' %}开始解析{% else %}开始使用{% endif %}</button>
+            data-primary-action="{% if active_nav == 'convert' %}/convert#workbench{% elif active_nav == 'pdf' %}/pdf#workbench{% elif active_nav == 'subtitles' %}/subtitles#workbench{% elif active_nav == 'use' %}/use#parse{% else %}/use{% endif %}"
+          >{% if active_nav == 'convert' %}开始转换{% elif active_nav == 'pdf' %}解析 PDF{% elif active_nav == 'subtitles' %}编辑字幕{% elif active_nav == 'use' %}开始解析{% else %}开始使用{% endif %}</button>
         </div>
       </div>
     </header>
@@ -59,6 +60,7 @@
       <a class="mobile-nav-link {% if active_nav == 'use' %}active{% endif %}" href="/use" data-transition-link>视频解析</a>
       <a class="mobile-nav-link {% if active_nav == 'convert' %}active{% endif %}" href="/convert" data-transition-link>文件转换</a>
       <a class="mobile-nav-link {% if active_nav == 'pdf' %}active{% endif %}" href="/pdf" data-transition-link>PDF解析</a>
+      <a class="mobile-nav-link {% if active_nav == 'subtitles' %}active{% endif %}" href="/subtitles" data-transition-link>字幕工作台</a>
       <a class="mobile-nav-link {% if active_nav == 'updates' %}active{% endif %}" href="/updates" data-transition-link>更新日志</a>
     </nav>
   </div>

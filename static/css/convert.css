@@ -695,20 +695,7 @@
 }
 
 .convert-world-map::before {
-  content: "";
-  position: absolute;
-  z-index: 0;
-  left: 7%;
-  right: 7%;
-  top: 7%;
-  height: 68%;
-  pointer-events: none;
-  opacity: .18;
-  filter: blur(.15px);
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: contain;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 560'%3E%3Cg fill='%235f7fae' fill-opacity='.54' stroke='%235f7fae' stroke-opacity='.18' stroke-width='3'%3E%3Cpath d='M92 158 139 121l93-18 78 24 50 45-16 37-66-8-47 30-6 47-49 17-58-29-35-56Z'/%3E%3Cpath d='M296 274 348 309l21 76-33 91-40 47-35-72-30-79 20-66Z'/%3E%3Cpath d='M505 141 586 105l108 13 76 42 73-10 128 42 74 72-38 47-95-6-70 32-76-20-73 14-81-31-59 13-68-51 12-64Z'/%3E%3Cpath d='M566 281 642 273l68 54 11 93-44 83-63-24-42-78-35-61Z'/%3E%3Cpath d='M922 365 1010 351l81 41-28 62-99 18-60-40Z'/%3E%3Cpath d='M369 103 421 70l56 20-13 49-59 22Z'/%3E%3Cpath d='M1027 226 1114 238l49 44-38 49-83-16-47-45Z'/%3E%3C/g%3E%3Cg fill='none' stroke='%235f7fae' stroke-opacity='.15' stroke-width='2'%3E%3Cpath d='M70 280h1060M600 42v472M170 70c-52 106-52 322 0 428M1030 70c52 106 52 322 0 428M334 48c-34 124-34 360 0 464M866 48c34 124 34 360 0 464'/%3E%3C/g%3E%3C/svg%3E");
+  display: none;
 }
 
 .convert-world-cloud {
@@ -784,12 +771,12 @@
 }
 
 .convert-world-popover {
-  margin: 8px 18px 22px;
+  margin: 14px 18px 12px;
   border: 1px solid rgba(70,63,56,.10);
-  border-radius: 18px;
-  padding: 16px;
-  background: rgba(255,255,255,.76);
-  box-shadow: 0 14px 30px rgba(40,32,24,.08);
+  border-radius: 14px;
+  padding: 14px;
+  background: rgba(250,248,245,.64);
+  box-shadow: none;
   display: grid;
   gap: 12px;
   transition: transform .22s ease, opacity .22s ease, border-color .22s ease;
@@ -906,7 +893,7 @@
 }
 
 .convert-world-panel > p {
-  margin: 22px 24px 12px;
+  margin: 18px 24px 10px;
   color: #8b95a6;
   font-size: 12px;
   font-weight: 800;
@@ -915,15 +902,19 @@
 
 .convert-world-types {
   display: grid;
-  gap: 4px;
-  padding: 0 18px 22px;
+  gap: 0;
+  margin: 0 18px;
+  padding: 6px;
+  border: 1px solid rgba(70,63,56,.09);
+  border-radius: 16px;
+  background: rgba(255,255,255,.38);
 }
 
 .convert-world-types button {
   border: 0;
-  border-radius: 10px;
-  height: 44px;
-  padding: 0 12px;
+  border-radius: 11px;
+  min-height: 56px;
+  padding: 7px 12px;
   background: transparent;
   color: #586171;
   display: flex;
@@ -964,11 +955,59 @@
   box-shadow: 0 0 0 4px rgba(45,95,167,.08);
 }
 
+.type-all { background: #8490a3; }
 .type-document { background: #5f7fae; }
 .type-image { background: #6faeb8; }
 .type-media { background: #c58a62; }
 .type-subtitle { background: #9b84b8; }
 .type-archive { background: #8faf9a; }
+
+.convert-world-type-copy {
+  display: grid !important;
+  gap: 2px !important;
+  text-align: left;
+}
+
+.convert-world-type-copy b {
+  color: inherit;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.convert-world-type-copy small {
+  color: #9299a4;
+  font-size: 10px;
+  font-weight: 560;
+  line-height: 1.25;
+}
+
+.convert-world-type-copy em {
+  color: inherit;
+  font-style: normal;
+}
+
+.convert-world-explore {
+  min-height: 44px;
+  margin: auto 18px 18px;
+  padding: 0 14px;
+  border: 1px solid rgba(70,63,56,.10);
+  border-radius: 13px;
+  background: rgba(255,255,255,.48);
+  color: #555b65;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: transform .18s ease, background .18s ease, border-color .18s ease;
+}
+
+.convert-world-explore:hover {
+  transform: translateY(-1px);
+  border-color: rgba(95,127,174,.24);
+  background: rgba(255,255,255,.84);
+}
 
 @keyframes world-dot-breathe {
   0%, 100% { filter: blur(0); }
@@ -1451,38 +1490,101 @@ button.convert-orbit-route:hover { transform: translateY(-1px); border-color: rg
   border-color: rgba(45,95,167,.28);
 }
 
-.convert-world-guide {
-  margin: -4px 18px 14px;
-  padding: 12px 14px;
-  border: 1px solid rgba(95,127,174,.13);
-  border-radius: 14px;
-  background: rgba(95,127,174,.055);
-  color: #6f6861;
-  font-size: 12px;
-  line-height: 1.65;
+.convert-world-summary {
+  margin: 16px 18px 0;
+  padding: 0 0 16px;
+  border-bottom: 1px solid rgba(70,63,56,.09);
 }
+
+.convert-world-summary-title {
+  display: block;
+  color: #2d68ac;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.convert-world-route-visual {
+  display: grid;
+  grid-template-columns: 68px minmax(64px, 1fr) 68px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.convert-world-format-node {
+  min-width: 0;
+  height: 70px;
+  border: 1px solid rgba(70,63,56,.11);
+  border-radius: 16px;
+  background: rgba(255,255,255,.70);
+  display: grid;
+  place-content: center;
+  gap: 5px;
+  text-align: center;
+  box-shadow: 0 9px 24px rgba(46,52,63,.05);
+}
+
+.convert-world-format-node span {
+  max-width: 58px;
+  overflow: hidden;
+  color: #536f91;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.convert-world-format-node.target span { color: #2d68ac; }
+
+.convert-world-format-node small {
+  color: #8c929c;
+  font-size: 10px;
+}
+
+.convert-world-route-arrow {
+  width: 100%;
+  overflow: visible;
+  fill: none;
+  stroke: rgba(83,139,196,.38);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.convert-world-route-arrow path:not(.arrow-head) {
+  stroke-dasharray: 4 5;
+  animation: world-route-flow 2.8s linear infinite;
+}
+
+.convert-world-route-arrow .arrow-head {
+  stroke: rgba(54,117,181,.64);
+  stroke-width: 2;
+}
+
+@keyframes world-route-flow { to { stroke-dashoffset: -36; } }
+
 .convert-world-stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin: 0 18px 18px;
+  gap: 0;
+  margin: 14px 0 0;
 }
 .convert-world-stats span {
-  min-height: 58px;
-  padding: 10px 8px;
-  border-radius: 14px;
-  background: rgba(255,255,255,.54);
-  border: 1px solid rgba(70,63,56,.08);
+  min-height: 44px;
+  padding: 7px 5px;
+  border-right: 1px solid rgba(70,63,56,.10);
   color: #7a736b;
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1.35;
   text-align: center;
 }
+.convert-world-stats span:last-child { border-right: 0; }
 .convert-world-stats strong {
   display: block;
   margin-bottom: 3px;
   color: #2d5fa7;
-  font-size: 18px;
+  font-size: 17px;
   font-family: var(--font-body);
 }
 

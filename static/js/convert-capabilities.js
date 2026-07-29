@@ -11,12 +11,21 @@
   const worldCanvas = document.getElementById('convertWorldCanvas');
   const worldPopover = document.getElementById('convertWorldPopover');
   const worldSearchInput = document.getElementById('convertWorldSearchInput');
+  const detailSource = document.getElementById('convertDetailSource');
+  const detailTarget = document.getElementById('convertDetailTarget');
+  const detailSourceLabel = document.getElementById('convertDetailSourceLabel');
+  const detailTargetLabel = document.getElementById('convertDetailTargetLabel');
+  const detailRouteCount = document.getElementById('convertDetailRouteCount');
+  const detailLocalCount = document.getElementById('convertDetailLocalCount');
+  const detailFormatCount = document.getElementById('convertDetailFormatCount');
+  const exploreWorldRoutes = document.querySelector('[data-explore-world-routes]');
   const ctx = worldCanvas?.getContext('2d');
   let capabilities = [];
   let particles = [];
   let routeEdges = [];
   let worldTextureDots = [];
   let worldMapShapes = [];
+  let worldLandDots = [];
   let selectedFormat = null;
   let routePinned = false;
   let activeFilter = 'all';
@@ -48,6 +57,7 @@
   let dragStartX = 0;
   let dragStartY = 0;
   let dragMoved = false;
+  let lastDragEndedAt = 0;
   let lastPointerX = 0;
   let lastPointerY = 0;
   const frameInterval = 0;
@@ -162,9 +172,9 @@
     if (!vector) return;
     const y = Math.atan2(-vector.sx, vector.sz || 0.0001);
     const zAfterY = -vector.sx * Math.sin(y) + vector.sz * Math.cos(y);
-    const x = clamp(Math.atan2(vector.sy, zAfterY || 0.0001), -0.88, 0.68);
+    const x = Math.atan2(vector.sy, zAfterY || 0.0001);
     worldTargetRotationY = worldRotationY + normalizeAngle(y - worldRotationY);
-    worldTargetRotationX = x;
+    worldTargetRotationX = worldRotationX + normalizeAngle(x - worldRotationX);
     worldVelocityX = 0;
     worldVelocityY = 0;
     worldFocusRotating = true;
@@ -285,9 +295,41 @@
     });
   }
 
+  function formatsForRoutes(items) {
+    const formats = new Set();
+    items.forEach((item) => {
+      formats.add(item.source);
+      formats.add(item.target);
+    });
+    return formats;
+  }
+
+  function renderWorldSummary(filtered) {
+    const route = selectedCapability && matchesActiveFilters(selectedCapability) ? selectedCapability : null;
+    const formats = formatsForRoutes(filtered);
+    if (detailRouteCount) detailRouteCount.textContent = String(filtered.length);
+    if (detailLocalCount) detailLocalCount.textContent = String(filtered.filter((item) => item.level !== 'vendor').length);
+    if (detailFormatCount) detailFormatCount.textContent = String(formats.size);
+
+    if (route) {
+      if (detailSource) detailSource.textContent = route.source.toUpperCase();
+      if (detailTarget) detailTarget.textContent = route.target.toUpperCase();
+      if (detailSourceLabel) detailSourceLabel.textContent = '输入';
+      if (detailTargetLabel) detailTargetLabel.textContent = '输出';
+      return;
+    }
+
+    const typeName = activeType === 'all' ? 'ALL' : activeType.slice(0, 4).toUpperCase();
+    if (detailSource) detailSource.textContent = typeName;
+    if (detailTarget) detailTarget.textContent = String(filtered.length);
+    if (detailSourceLabel) detailSourceLabel.textContent = activeType === 'all' ? '全部格式' : '当前类型';
+    if (detailTargetLabel) detailTargetLabel.textContent = '条路径';
+  }
+
   function renderWorldDetail(filtered) {
     const meta = typeMeta[activeType] || typeMeta.all;
     if (description) description.textContent = meta.description;
+    renderWorldSummary(filtered);
 
     if (selectedCapability && matchesActiveFilters(selectedCapability)) {
       if (orbitTitle) orbitTitle.textContent = `${selectedCapability.source.toUpperCase()} → ${selectedCapability.target.toUpperCase()}`;
@@ -397,21 +439,82 @@
   }
 
   function buildWorldMapShapes() {
-    const continents = [
-      // North America - deliberately simplified, soft background silhouette only.
-      [[-168, 62], [-145, 72], [-112, 70], [-84, 55], [-70, 42], [-88, 24], [-112, 18], [-132, 32], [-158, 44]],
-      // South America.
-      [[-82, 12], [-62, 8], [-48, -10], [-52, -32], [-66, -54], [-76, -36], [-82, -12]],
-      // Europe + Asia.
-      [[-10, 58], [18, 70], [58, 64], [96, 58], [135, 48], [150, 30], [128, 12], [86, 18], [54, 8], [28, 18], [2, 34]],
-      // Africa + Middle East.
-      [[-18, 34], [18, 36], [42, 18], [36, -8], [24, -32], [8, -36], [-10, -22], [-18, 4]],
-      // Australia / Oceania.
-      [[110, -14], [138, -10], [154, -24], [142, -38], [116, -34], [104, -24]],
-      // Greenland.
-      [[-52, 78], [-28, 74], [-20, 62], [-44, 58], [-62, 66]],
-    ];
-    worldMapShapes = continents.map((shape) => shape.map(([lon, lat]) => lonLatPoint(lon, lat)));
+    const landRings = Array.isArray(window.STREAMDOCK_WORLD_LAND)
+      ? window.STREAMDOCK_WORLD_LAND
+      : [];
+    worldMapShapes = landRings
+      .filter((coordinates) => Array.isArray(coordinates) && coordinates.length >= 4)
+      .map((coordinates, index) => {
+        const lons = coordinates.map((point) => point[0]);
+        const lats = coordinates.map((point) => point[1]);
+        const longitudeSpan = Math.max(...lons) - Math.min(...lons);
+        const latitudeSpan = Math.max(...lats) - Math.min(...lats);
+        const areaHint = Math.max(1, longitudeSpan * latitudeSpan);
+        return {
+          name: `natural-earth-land-${index}`,
+          weight: clamp(0.72 + Math.log10(areaHint) * 0.13, 0.72, 1.18),
+          areaHint,
+          coordinates,
+          points: coordinates.map(([lon, lat]) => lonLatPoint(lon, lat)),
+        };
+      })
+      // Antarctica is intentionally omitted from this decorative product globe:
+      // keeping the lower hemisphere open makes the six familiar inhabited
+      // continents immediately readable at this scale.
+      .filter((shape) => shape.coordinates.reduce((sum, point) => sum + point[1], 0) / shape.coordinates.length > -62);
+    buildWorldLandDots();
+  }
+
+  function deterministicNoise(seed) {
+    const value = Math.sin(seed * 12.9898) * 43758.5453123;
+    return value - Math.floor(value);
+  }
+
+  function isPointInPolygon(lon, lat, coordinates) {
+    let inside = false;
+    for (let i = 0, j = coordinates.length - 1; i < coordinates.length; j = i, i += 1) {
+      const xi = coordinates[i][0];
+      const yi = coordinates[i][1];
+      const xj = coordinates[j][0];
+      const yj = coordinates[j][1];
+      const intersects = ((yi > lat) !== (yj > lat))
+        && (lon < ((xj - xi) * (lat - yi)) / ((yj - yi) || 0.0001) + xi);
+      if (intersects) inside = !inside;
+    }
+    return inside;
+  }
+
+  function buildWorldLandDots() {
+    worldLandDots = [];
+    worldMapShapes.forEach((shape, shapeIndex) => {
+      const coordinates = shape.coordinates || [];
+      if (coordinates.length < 3) return;
+      const lons = coordinates.map((point) => point[0]);
+      const lats = coordinates.map((point) => point[1]);
+      const minLon = Math.floor(Math.min(...lons) - 1);
+      const maxLon = Math.ceil(Math.max(...lons) + 1);
+      const minLat = Math.floor(Math.min(...lats) - 1);
+      const maxLat = Math.ceil(Math.max(...lats) + 1);
+      const step = shape.areaHint > 500 ? 1.7 : shape.areaHint > 80 ? 2.0 : 2.35;
+      for (let lat = minLat; lat <= maxLat; lat += step) {
+        for (let lon = minLon; lon <= maxLon; lon += step) {
+          if (!isPointInPolygon(lon, lat, coordinates)) continue;
+          const seed = (shapeIndex + 1) * 100000 + Math.round((lon + 180) * 10) * 97 + Math.round((lat + 90) * 10) * 37;
+          const noiseA = deterministicNoise(seed);
+          const noiseB = deterministicNoise(seed + 17);
+          const jitterLon = lon + (noiseA - 0.5) * 0.72;
+          const jitterLat = lat + (noiseB - 0.5) * 0.72;
+          const point = lonLatPoint(jitterLon, jitterLat);
+          worldLandDots.push({
+            sx: point.sx,
+            sy: point.sy,
+            sz: point.sz,
+            size: 0.42 + noiseA * 0.43 + Math.max(0, (shape.weight || 1) - 1) * 0.1,
+            alpha: 0.09 + noiseB * 0.065 + Math.max(0, (shape.weight || 1) - 1) * 0.025,
+          });
+        }
+      }
+    });
   }
 
   function buildWorldTexture() {
@@ -520,6 +623,49 @@
     ctx.restore();
   }
 
+  function boxesOverlap(a, b, padding = 3) {
+    return !(a.right + padding < b.left || a.left - padding > b.right || a.bottom + padding < b.top || a.top - padding > b.bottom);
+  }
+
+  function drawFormatLabel(particle, active, typeFocused, placedBoxes) {
+    const text = particle.item.format.toUpperCase();
+    const size = particle.renderSize || particle.size;
+    ctx.save();
+    ctx.font = `${active ? 800 : 720} ${active ? 12 : 9.5}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
+    const textWidth = ctx.measureText(text).width;
+    const halfWidth = textWidth / 2;
+    const gap = active ? 11 : 9;
+    const candidates = [
+      { x: particle.x, y: particle.y + size + gap },
+      { x: particle.x, y: particle.y - size - gap },
+      { x: particle.x + size + halfWidth + 6, y: particle.y },
+      { x: particle.x - size - halfWidth - 6, y: particle.y },
+      { x: particle.x + halfWidth * 0.55, y: particle.y + size + gap },
+      { x: particle.x - halfWidth * 0.55, y: particle.y - size - gap },
+    ];
+    const makeBox = (candidate) => ({
+      left: candidate.x - halfWidth,
+      right: candidate.x + halfWidth,
+      top: candidate.y - 6,
+      bottom: candidate.y + 6,
+    });
+    let chosen = candidates.find((candidate) => {
+      const box = makeBox(candidate);
+      const insideCanvas = box.left >= 5 && box.right <= canvasWidth - 5 && box.top >= 5 && box.bottom <= canvasHeight - 5;
+      return insideCanvas && !placedBoxes.some((placed) => boxesOverlap(box, placed));
+    }) || candidates[0];
+    const chosenBox = makeBox(chosen);
+    placedBoxes.push(chosenBox);
+    ctx.fillStyle = active || typeFocused ? 'rgba(53,60,69,.88)' : 'rgba(72,81,94,.70)';
+    ctx.strokeStyle = 'rgba(255,255,255,.82)';
+    ctx.lineWidth = active ? 3.6 : 3;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.strokeText(text, chosen.x, chosen.y);
+    ctx.fillText(text, chosen.x, chosen.y);
+    ctx.restore();
+  }
+
   function routeMatchesActive(route) {
     return matchesActiveFilters(route);
   }
@@ -539,21 +685,81 @@
     ctx.beginPath();
     ctx.arc(cx, cy, radius * 0.985, 0, Math.PI * 2);
     ctx.clip();
-    worldMapShapes.forEach((shape, index) => {
-      const points = shape.map((point) => projectSpherePoint(point.sx, point.sy, point.sz, 0.94));
+
+    // 1) A restrained land wash gives the accurate coastline a readable body.
+    // Only polygons mostly facing the camera are filled, preventing far-side
+    // geometry from folding across the globe.
+    worldMapShapes.forEach((shape) => {
+      const points = shape.points.map((point) => projectSpherePoint(point.sx, point.sy, point.sz, 0.952));
       const avgZ = points.reduce((sum, point) => sum + point.z, 0) / Math.max(points.length, 1);
-      if (avgZ < -0.82) return;
+      const visibleRatio = points.filter((point) => point.z > 0.02).length / Math.max(points.length, 1);
+      if (avgZ < 0.08 || visibleRatio < 0.74) return;
+      const front = clamp((avgZ - 0.02) / 0.98, 0, 1);
       ctx.beginPath();
       points.forEach((point, pointIndex) => {
         if (pointIndex === 0) ctx.moveTo(point.x, point.y);
         else ctx.lineTo(point.x, point.y);
       });
       ctx.closePath();
-      const visibleAlpha = avgZ > 0 ? 0.105 : 0.052;
-      ctx.fillStyle = index === 2 ? `rgba(95,127,174,${visibleAlpha})` : `rgba(117,128,139,${visibleAlpha})`;
+      ctx.fillStyle = `rgba(78,98,121,${(0.018 + front * 0.032) * (shape.weight || 1)})`;
       ctx.fill();
-      ctx.strokeStyle = `rgba(95,127,174,${visibleAlpha * 0.85})`;
-      ctx.lineWidth = 0.8;
+    });
+
+    // 2) Dotted continent texture, matching the reference image: the land mass
+    // is perceived through dense halftone points instead of solid dark blocks.
+    worldLandDots.forEach((dot) => {
+      const point = projectSpherePoint(dot.sx, dot.sy, dot.sz, 0.956);
+      if (point.z < -0.05) return;
+      const front = clamp((point.z + 0.05) / 1.05, 0, 1);
+      const alpha = dot.alpha * (0.5 + front * 1.15);
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(63,82,105,${alpha})`;
+      ctx.arc(point.x, point.y, dot.size * point.scale * (0.72 + front * 0.72), 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // 3) Draw only visible coastline segments. This keeps the real Natural
+    // Earth silhouettes crisp while the hidden hemisphere remains clean.
+    worldMapShapes.forEach((shape) => {
+      const points = shape.points.map((point) => projectSpherePoint(point.sx, point.sy, point.sz, 0.958));
+      let hasVisibleSegment = false;
+      ctx.beginPath();
+      points.forEach((point, pointIndex) => {
+        const previous = points[pointIndex - 1];
+        const visible = point.z > -0.025;
+        const previousVisible = previous && previous.z > -0.025;
+        if (!visible) return;
+        if (!previousVisible) ctx.moveTo(point.x, point.y);
+        else {
+          ctx.lineTo(point.x, point.y);
+          hasVisibleSegment = true;
+        }
+      });
+      if (!hasVisibleSegment) return;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = `rgba(55,75,98,${0.18 * (shape.weight || 1)})`;
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,255,255,.12)';
+      ctx.lineWidth = 0.42;
+      ctx.stroke();
+    });
+
+    // A few faint latitude seams keep the map attached to the globe.
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.strokeStyle = 'rgba(95,127,174,.038)';
+    ctx.lineWidth = 0.68;
+    [-45, -20, 0, 20, 45].forEach((lat) => {
+      const samples = [];
+      for (let lon = -175; lon <= 180; lon += 10) samples.push(lonLatPoint(lon, lat));
+      const points = samples.map((point) => projectSpherePoint(point.sx, point.sy, point.sz, 0.948)).filter((point) => point.z > -0.025);
+      if (points.length < 2) return;
+      ctx.beginPath();
+      points.forEach((point, index) => {
+        if (index === 0) ctx.moveTo(point.x, point.y);
+        else ctx.lineTo(point.x, point.y);
+      });
       ctx.stroke();
     });
     ctx.restore();
@@ -698,15 +904,17 @@
       visibleFormatSet.add(item.target);
     });
 
-    particles.slice().sort((a, b) => a.z - b.z).forEach((particle) => {
+    const sortedParticles = particles.slice().sort((a, b) => a.z - b.z);
+    sortedParticles.forEach((particle) => {
       const visible = visibleFormatSet.has(particle.item.key);
       const active = activeFormatSet.has(particle.item.key);
       const front = particle.z > -0.35;
       const pulse = Math.sin(time * 0.0025 + particle.phase) * 0.35;
       const focus = typeFocusWeight(particle.type, time);
       const typeFocused = activeType !== 'all' && particle.type === activeType;
-      const size = (particle.size + pulse + (active ? 4.4 : 0) + (typeFocused ? 1.2 : 0)) * particle.scale;
-      const alpha = active ? .9 : typeFocused && visible && front ? .78 : visible && front ? .62 * focus : visible ? .28 * focus : .045;
+      const size = (particle.size + pulse + (active ? 4.4 : 0) + (typeFocused ? 1.2 : 0)) * particle.scale * 1.2;
+      particle.renderSize = size;
+      const alpha = active ? .92 : typeFocused && visible && front ? .8 : visible && front ? .66 * focus : visible ? .16 * focus : .035;
       ctx.beginPath();
       ctx.fillStyle = hexToRgba(particle.color, alpha);
       ctx.arc(particle.x, particle.y, Math.max(1.4, size), 0, Math.PI * 2);
@@ -727,15 +935,31 @@
         ctx.restore();
       }
 
-      if (active || (typeFocused && visible && front && particle.item.weight >= 2) || (activeType === 'all' && visible && front && particle.scale > 1.02 && particle.item.weight >= 3)) {
-        ctx.save();
-        ctx.font = `${active ? 800 : 700} ${active ? 12 : 10}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
-        ctx.fillStyle = active || typeFocused ? 'rgba(58,64,72,.82)' : 'rgba(88,97,113,.52)';
-        ctx.textAlign = 'center';
-        ctx.fillText(particle.item.format.toUpperCase(), particle.x, particle.y + size + 13);
-        ctx.restore();
-      }
     });
+
+    // Naming rule: all front-facing nodes in the current view are labelled.
+    // During type focus, labels from other groups disappear with their nodes.
+    const placedLabelBoxes = [];
+    sortedParticles
+      .filter((particle) => {
+        const visible = visibleFormatSet.has(particle.item.key);
+        const active = activeFormatSet.has(particle.item.key);
+        const typeFocused = activeType !== 'all' && particle.type === activeType;
+        return active || (visible && particle.z > 0.015 && (activeType === 'all' || typeFocused));
+      })
+      .sort((a, b) => {
+        const activeDifference = Number(activeFormatSet.has(b.item.key)) - Number(activeFormatSet.has(a.item.key));
+        if (activeDifference) return activeDifference;
+        return b.z - a.z || b.item.weight - a.item.weight;
+      })
+      .forEach((particle) => {
+        drawFormatLabel(
+          particle,
+          activeFormatSet.has(particle.item.key),
+          activeType !== 'all' && particle.type === activeType,
+          placedLabelBoxes,
+        );
+      });
 
     const labelParticle = particles.find((particle) => activeFormatSet.has(particle.item.key) && particle.z > -0.6);
     if (labelParticle) drawParticleLabel(labelParticle);
@@ -750,9 +974,9 @@
         if (worldFocusRotating) {
           const ease = 1 - Math.pow(0.0018, delta / 900);
           const diffY = normalizeAngle(worldTargetRotationY - worldRotationY);
-          const diffX = worldTargetRotationX - worldRotationX;
+          const diffX = normalizeAngle(worldTargetRotationX - worldRotationX);
           worldRotationY += diffY * ease;
-          worldRotationX = clamp(worldRotationX + diffX * ease, -1.05, 0.72);
+          worldRotationX += diffX * ease;
           if (Math.abs(diffY) < 0.0025 && Math.abs(diffX) < 0.0025) {
             worldRotationY = worldTargetRotationY;
             worldRotationX = worldTargetRotationX;
@@ -760,7 +984,7 @@
           }
         } else {
           worldRotationY += delta * 0.00011 + worldVelocityY;
-          worldRotationX = clamp(worldRotationX + worldVelocityX, -1.05, 0.72);
+          worldRotationX += worldVelocityX;
           worldVelocityX *= 0.93;
           worldVelocityY *= 0.93;
         }
@@ -800,7 +1024,7 @@
         nearest = particle;
       }
     });
-    return nearestDistance <= 24 ? nearest : null;
+    return nearestDistance <= 29 ? nearest : null;
   }
 
   function selectRoute(route) {
@@ -839,11 +1063,17 @@
       if (isDraggingWorld) {
         const dx = event.clientX - lastPointerX;
         const dy = event.clientY - lastPointerY;
+        // One drag across the visible globe maps to a complete revolution.
+        // Both axes are continuous, so users can inspect every hemisphere.
+        const globeDiameter = Math.max(320, Math.min(canvasWidth, canvasHeight) * 0.86);
+        const radiansPerPixel = (Math.PI * 2) / globeDiameter;
         if (Math.abs(event.clientX - dragStartX) + Math.abs(event.clientY - dragStartY) > 4) dragMoved = true;
-        worldRotationY += dx * 0.0062;
-        worldRotationX = clamp(worldRotationX + dy * 0.0048, -1.05, 0.72);
-        worldVelocityY = dx * 0.00034;
-        worldVelocityX = dy * 0.00025;
+        worldRotationY += dx * radiansPerPixel;
+        worldRotationX += dy * radiansPerPixel;
+        worldTargetRotationY = worldRotationY;
+        worldTargetRotationX = worldRotationX;
+        worldVelocityY = dx * radiansPerPixel * 0.055;
+        worldVelocityX = dy * radiansPerPixel * 0.055;
         lastPointerX = event.clientX;
         lastPointerY = event.clientY;
         drawCanvas(performance.now());
@@ -859,7 +1089,9 @@
     });
     const endDrag = (event) => {
       if (!isDraggingWorld) return;
+      if (Math.abs(event.clientX - dragStartX) + Math.abs(event.clientY - dragStartY) > 4) dragMoved = true;
       isDraggingWorld = false;
+      if (dragMoved) lastDragEndedAt = performance.now();
       worldCanvas.releasePointerCapture?.(event.pointerId);
       worldCanvas.style.cursor = 'grab';
     };
@@ -869,7 +1101,7 @@
       if (!isDraggingWorld) hoveredCapability = null;
     });
     worldCanvas.addEventListener('click', (event) => {
-      if (dragMoved) return;
+      if (dragMoved || performance.now() - lastDragEndedAt < 180) return;
       const nearest = nearestParticle(event);
       if (!nearest) return;
       setActiveType(nearest.type, { forceRotate: true });
@@ -948,8 +1180,15 @@
     });
   }
 
+  function setFormatCount(name, value) {
+    document.querySelectorAll(`[data-format-count-for="${name}"]`).forEach((node) => {
+      node.textContent = String(value);
+    });
+  }
+
   function updateCounts() {
     const byType = (type) => capabilities.filter((item) => capabilityType(item) === type).length;
+    const formatsByType = (type) => formatsForRoutes(capabilities.filter((item) => type === 'all' || capabilityType(item) === type)).size;
     const total = capabilities.length;
     if (orbitTotal) orbitTotal.textContent = String(total.toLocaleString());
     setCount('all', total);
@@ -957,9 +1196,11 @@
     setCount('basic', capabilities.filter((item) => item.level === 'basic').length);
     setCount('vendor', capabilities.filter((item) => item.level === 'vendor').length);
     setCount('type-all', total);
+    setFormatCount('all', formatsByType('all'));
     ['document', 'image', 'media', 'subtitle', 'archive'].forEach((type) => {
       setCount(type, byType(type));
       setCount(`orbit-${type}`, byType(type));
+      setFormatCount(type, formatsByType(type));
     });
   }
 
@@ -989,6 +1230,10 @@
     selectedFormat = null;
     routePinned = false;
     render();
+  });
+
+  exploreWorldRoutes?.addEventListener('click', () => {
+    matrix?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
   fetch('/api/convert/capabilities')

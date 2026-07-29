@@ -8,13 +8,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from dataclasses import asdict
 from threading import Lock
 from threading import Thread
 from time import monotonic, sleep
 from contextlib import contextmanager
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from uuid import uuid4
 
 import requests
@@ -29,8 +30,9 @@ from converters.models import ConversionLevel
 from converters.executor import convert_file_with_timeout
 from converters.registry import find_capability, infer_input_format, list_capabilities, normalize_format, targets_for_source
 from converters.sniff import validate_declared_format
+from error_catalog import classify_error
 from fetchers.adapters.bilibili import USER_AGENT as BILIBILI_USER_AGENT, reset_manual_cookie_overrides, set_manual_cookie_overrides
-from fetchers.models import MediaFetchResult, MediaStream, SubtitleTrack
+from fetchers.models import ImageAsset, MediaFetchResult, MediaStream, SubtitleTrack
 from fetchers.pipeline import available_output_path, generate_metadata_subtitle_file, probe_media
 from fetchers.subtitle_asr import asr_available, generate_asr_subtitle_file
 from fetchers.subtitle_ocr import generate_ocr_subtitle_file, ocr_available
@@ -45,6 +47,7 @@ from tasks.subtitle_queue import SubtitleQueue
 from tasks.models import TaskKind, TaskStatus
 from tasks.store import TaskStore
 from runtime_checks import augmented_path, cleanup_task_partials, deep_media_quality, ensure_system_proxy_environment, environment_health, network_subprocess_environment, prepare_output_directory, validate_media_output
+from subtitles.service import export_subtitles, normalize_format as normalize_subtitle_format, parse_subtitles
 
 ensure_system_proxy_environment()
 
@@ -61,6 +64,9 @@ SUBTITLE_FILE_PATTERN = re.compile(r"subtitle file:\s*(.+)$")
 SUBTITLE_COUNT_PATTERN = re.compile(r"subtitle count:\s*(\d+)$")
 SUBTITLE_DETAIL_PATTERN = re.compile(r"subtitle detail:\s*([^|]+)\|([^|]+)\|(.+)$")
 SUBTITLE_PENDING_PATTERN = re.compile(r"subtitle pending:\s*(true|false)$", re.IGNORECASE)
+MEDIA_KIND_PATTERN = re.compile(r"captured media kind:\s*(.+)$")
+IMAGE_FILE_PATTERN = re.compile(r"image file:\s*(.+)$")
+IMAGE_COUNT_PATTERN = re.compile(r"image count:\s*(\d+)$")
 PROGRESS_PATTERN = re.compile(r"progress:\s*([0-9.]*)\|(.+)$")
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 MAX_CONVERT_FILE_BYTES = int(os.getenv('STREAMDOCK_MAX_CONVERT_FILE_BYTES', str(500 * 1024 * 1024)))
@@ -69,6 +75,7 @@ MAX_CONVERT_BATCH_TOTAL_BYTES = int(os.getenv('STREAMDOCK_MAX_CONVERT_BATCH_TOTA
 CONVERT_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_CONVERT_TIMEOUT_SECONDS', '120'))
 MEDIA_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_MEDIA_TIMEOUT_SECONDS', str(20 * 60)))
 MEDIA_IDLE_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_MEDIA_IDLE_TIMEOUT_SECONDS', str(5 * 60)))
+MAX_SUBTITLE_FILE_BYTES = int(os.getenv('STREAMDOCK_MAX_SUBTITLE_FILE_BYTES', str(5 * 1024 * 1024)))
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app = FastAPI(title='Douyin Local Fetch UI')
@@ -124,6 +131,24 @@ class BatchFetchRequest(BaseModel):
     bilibiliCookieFile: str | None = None
     saveAssets: bool = False
     subtitleStrategy: str | None = None
+
+
+class SubtitleTextRequest(BaseModel):
+    filename: str = 'subtitle.srt'
+    text: str = Field(min_length=1, max_length=MAX_SUBTITLE_FILE_BYTES)
+    format: str | None = None
+
+
+class SubtitleCueRequest(BaseModel):
+    start: float = Field(ge=0, le=7 * 24 * 60 * 60)
+    end: float = Field(gt=0, le=7 * 24 * 60 * 60)
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class SubtitleExportRequest(BaseModel):
+    filename: str = 'subtitle'
+    format: str = 'srt'
+    cues: list[SubtitleCueRequest] = Field(min_length=1, max_length=5000)
 
 
 class ProbeRequest(BaseModel):
@@ -291,10 +316,24 @@ def serialize_subtitle_track(track: SubtitleTrack) -> dict[str, object]:
     }
 
 
+def serialize_image_asset(image: ImageAsset) -> dict[str, object]:
+    return {
+        'url': image.url,
+        'candidateCount': 1 + len(image.alternate_urls),
+        'width': image.width,
+        'height': image.height,
+        'format': image.format,
+        'filesize': image.filesize,
+        'qualityLabel': image.quality_label,
+        'watermarked': image.watermarked,
+    }
+
+
 def safe_metadata(metadata: dict[str, object]) -> dict[str, object]:
     allowed = {
         'capture_strategy', 'resolve_method', 'media_kind', 'cookie_source',
-        'bvid', 'cid', 'raw_platform_id', 'aweme_id', 'note_id', 'photo_id', 'short_url',
+        'stream_layout', 'bvid', 'cid', 'raw_platform_id', 'aweme_id', 'note_id', 'photo_id', 'short_url',
+        'image_count',
     }
     safe: dict[str, object] = {}
     for key, value in (metadata or {}).items():
@@ -310,11 +349,12 @@ def infer_video_info(result: MediaFetchResult) -> dict[str, object]:
         'bestResolution': f'{best.width}×{best.height}' if best and best.width and best.height else None,
         'bestCodec': best.codec if best else None,
         'bestBitrate': best.bitrate if best else None,
-        'delivery': infer_probe_delivery(result),
+        'delivery': 'image-collection' if result.content_type == 'images' else infer_probe_delivery(result),
         'videoStreamCount': len(result.video_streams),
         'audioStreamCount': len(result.audio_streams),
         'subtitleCount': len(result.subtitle_tracks),
         'coverAvailable': bool(result.cover_url),
+        'imageCount': len(result.image_assets),
     }
 
 
@@ -340,6 +380,8 @@ def infer_access_hint(result: MediaFetchResult) -> str:
         return '未检测到登录态，当前可用清晰度可能受限'
 
     if platform == 'douyin':
+        if result.content_type == 'images':
+            return f'已识别抖音图文作品，共 {len(result.image_assets)} 张无水印图片'
         if capture_strategy == 'chrome-cookies':
             return '已使用浏览器登录态，当前优先返回可达最高档'
         if capture_strategy == 'no-login':
@@ -381,6 +423,8 @@ def infer_source_hint(result: MediaFetchResult) -> str:
             return '已从快手移动端页面清单提取视频流'
 
     if platform == 'douyin':
+        if result.content_type == 'images':
+            return '已从抖音移动端分享页结构化数据提取无水印图片集'
         if capture_strategy == 'share-page':
             return '已从抖音移动端分享页结构化数据提取视频流'
         if capture_strategy == 'chrome-cookies':
@@ -395,6 +439,20 @@ def infer_source_hint(result: MediaFetchResult) -> str:
 
 
 def build_probe_summary(result: MediaFetchResult) -> dict[str, object]:
+    if result.content_type == 'images':
+        first = result.image_assets[0] if result.image_assets else None
+        return {
+            'qualityCount': 0,
+            'imageCount': len(result.image_assets),
+            'bestResolution': f'{first.width}×{first.height}' if first and first.width and first.height else None,
+            'delivery': 'image-collection',
+            'sourceHint': infer_source_hint(result),
+            'deliveryHint': '将按原顺序逐张保存，并生成不二次压缩的 ZIP',
+            'accessHint': infer_access_hint(result),
+            'coverAvailable': bool(result.cover_url),
+            'subtitleCount': 0,
+            'downloadHint': f'已识别 {len(result.image_assets)} 张无水印图片，将保留平台返回的原始文件字节',
+        }
     delivery = infer_probe_delivery(result)
     best = result.preferred_video
     best_filesize = best.filesize if best else None
@@ -474,7 +532,9 @@ def serialize_probe_result(result: MediaFetchResult) -> dict[str, object]:
         'assetSummary': {
             'coverAvailable': bool(result.cover_url),
             'subtitleCount': len(result.subtitle_tracks),
+            'imageCount': len(result.image_assets),
         },
+        'imageAssets': [serialize_image_asset(image) for image in result.image_assets],
         'videoStreams': serialized_video_streams,
         'audioStreams': [serialize_stream(stream) for stream in result.audio_streams],
         'preferredVideoQuality': result.preferred_video.quality_label if result.preferred_video else None,
@@ -521,29 +581,7 @@ def format_bytes(value: int) -> str:
 
 def public_error_message(raw_error: str | None, *, fallback: str = '操作失败') -> str:
     """Return a concise user-facing error without leaking a Python traceback."""
-    raw = str(raw_error or '').strip()
-    if not raw:
-        return fallback
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    last = lines[-1] if lines else raw
-    if ':' in last and any(last.startswith(prefix) for prefix in ('ValueError:', 'RuntimeError:', 'TimeoutError:', 'OSError:')):
-        last = last.split(':', 1)[1].strip()
-    lowered = raw.lower()
-    if 'unsupported platform link' in lowered:
-        return '暂不支持该平台或链接格式，请确认复制的是视频分享链接'
-    if (
-        'capture failed in all strategies' in lowered
-        or 'window._router_data' in lowered
-        or 'no media url captured' in lowered
-    ):
-        return '未能从页面提取视频资源；可能是分享链接已过期、平台返回了风控页面，或页面结构临时变化。请重新复制分享链接后重试'
-    if 'requested video quality not found' in lowered:
-        return '所选清晰度已失效，请重新识别清晰度后再试'
-    if 'timeout' in lowered or '超时' in raw:
-        return '处理超时，平台响应较慢或文件过大，请稍后重试'
-    if len(last) > 320:
-        last = f'{last[:317]}...'
-    return last or fallback
+    return str(classify_error(raw_error, fallback=fallback)['message'])
 
 
 async def save_upload_with_limits(
@@ -711,16 +749,42 @@ def run_media_fetch(payload: dict[str, object]) -> dict[str, object]:
     subtitle_count = int(subtitle_count_raw) if subtitle_count_raw and subtitle_count_raw.isdigit() else len(subtitle_files)
     subtitle_pending_raw = extract_first_match(stdout, SUBTITLE_PENDING_PATTERN)
     subtitle_pending = str(subtitle_pending_raw or '').lower() == 'true'
+    media_kind = extract_first_match(stdout, MEDIA_KIND_PATTERN)
+    image_files = extract_all_matches(stdout, IMAGE_FILE_PATTERN)
+    image_count_raw = extract_first_match(stdout, IMAGE_COUNT_PATTERN)
+    image_count = int(image_count_raw) if image_count_raw and image_count_raw.isdigit() else len(image_files)
     success = returncode == 0
     validation = None
     if success and output_file:
         try:
-            output_kind = 'video' if str(payload.get('outputType') or '') in {'mp4', 'mkv', 'mov', 'webm'} else 'audio'
-            validation = validate_media_output(Path(output_file), expected_kind=output_kind)
+            if media_kind == 'images':
+                archive = Path(output_file)
+                if not archive.is_file() or archive.suffix.lower() != '.zip':
+                    raise RuntimeError('图片集输出压缩包不存在')
+                with zipfile.ZipFile(archive) as bundle:
+                    names = [name for name in bundle.namelist() if not name.endswith('/')]
+                    if bundle.testzip() is not None or len(names) != image_count:
+                        raise RuntimeError('图片集输出压缩包校验失败')
+                validation = {
+                    'valid': True,
+                    'kind': 'images',
+                    'imageCount': image_count,
+                    'archiveFormat': 'zip',
+                    'sizeBytes': archive.stat().st_size,
+                }
+            else:
+                output_kind = 'video' if str(payload.get('outputType') or '') in {'mp4', 'mkv', 'mov', 'webm'} else 'audio'
+                validation = validate_media_output(Path(output_file), expected_kind=output_kind)
         except Exception as exc:
             success = False
             stderr = str(exc)
-    if not bool(payload.get('saveAssets')):
+    if media_kind == 'images':
+        subtitle_job = {
+            'status': 'skipped',
+            'message': '图文作品不需要字幕处理',
+            'strategy': None,
+        }
+    elif not bool(payload.get('saveAssets')):
         subtitle_job = {
             'status': 'not_requested',
             'message': '未开启字幕保存',
@@ -760,13 +824,24 @@ def run_media_fetch(payload: dict[str, object]) -> dict[str, object]:
         'platform': platform,
         'title': title,
         'coverUrl': cover_url,
+        'mediaKind': media_kind,
+        'imageCount': image_count,
         'subtitleCount': subtitle_count,
         'subtitleJob': subtitle_job,
-        'assets': {'cover': cover_file, 'subtitles': subtitle_files, 'subtitleDetails': subtitle_details},
+        'assets': {
+            'cover': cover_file,
+            'subtitles': subtitle_files,
+            'subtitleDetails': subtitle_details,
+            'images': image_files,
+            'archive': output_file if media_kind == 'images' else None,
+        },
         'validation': validation,
     }
     if not success:
-        body['error'] = public_error_message(stderr or stdout, fallback='解析失败')
+        error_info = classify_error(stderr or stdout, fallback='解析失败')
+        body['error'] = error_info['message']
+        body['errorCode'] = error_info['code']
+        body['errorInfo'] = error_info
         # 不把完整 Python traceback 传给前端或任务中心。
         body['stderr'] = body['error']
         if 'traceback (most recent call last)' in stdout.lower():
@@ -1117,6 +1192,61 @@ def pdf_page(request: Request):
     )
 
 
+@app.get('/subtitles', response_class=HTMLResponse)
+def subtitles_page(request: Request):
+    return templates.TemplateResponse(
+        'subtitles.html',
+        {'request': request, 'title': 'StreamDock · 字幕工作台', 'active_nav': 'subtitles'},
+    )
+
+
+def decode_subtitle_bytes(content: bytes) -> str:
+    if len(content) > MAX_SUBTITLE_FILE_BYTES:
+        raise ValueError('字幕文件不能超过 5MB')
+    for encoding in ('utf-8-sig', 'utf-16', 'gb18030'):
+        try:
+            return content.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError('字幕文件编码无法识别，请转换为 UTF-8 后重试')
+
+
+@app.post('/api/subtitles/import')
+async def subtitle_import(file: UploadFile = File(...)):
+    filename = Path(file.filename or 'subtitle.srt').name
+    try:
+        normalize_subtitle_format(filename)
+        content = await file.read(MAX_SUBTITLE_FILE_BYTES + 1)
+        document = parse_subtitles(decode_subtitle_bytes(content), filename=filename)
+    except ValueError as exc:
+        return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
+    return JSONResponse({'success': True, 'document': document.to_dict()})
+
+
+@app.post('/api/subtitles/parse')
+def subtitle_parse_text(payload: SubtitleTextRequest):
+    try:
+        document = parse_subtitles(payload.text, filename=Path(payload.filename).name, format=payload.format)
+    except ValueError as exc:
+        return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
+    return JSONResponse({'success': True, 'document': document.to_dict()})
+
+
+@app.post('/api/subtitles/export')
+def subtitle_export(payload: SubtitleExportRequest):
+    try:
+        target_format = normalize_subtitle_format(f'subtitle.{payload.format}', payload.format)
+        content = export_subtitles([cue.model_dump() for cue in payload.cues], target_format)
+    except (OverflowError, TypeError, ValueError) as exc:
+        return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
+    safe_name = re.sub(r'[^\w\-.\u4e00-\u9fff]+', '_', Path(payload.filename).stem).strip('._') or 'subtitle'
+    download_name = f'{safe_name}.{target_format}'
+    ascii_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', download_name).strip('._') or f'subtitle.{target_format}'
+    media_type = 'text/vtt' if target_format == 'vtt' else 'text/plain'
+    headers = {'Content-Disposition': f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(download_name, safe='')}"}
+    return Response(content.encode('utf-8'), media_type=f'{media_type}; charset=utf-8', headers=headers)
+
+
 def select_output_directory_with_system_dialog() -> tuple[bool, str | None, str | None]:
     if sys.platform != 'darwin':
         return False, None, '当前仅支持在 macOS 本地弹出目录选择窗口'
@@ -1439,7 +1569,10 @@ def list_tasks(kind: str | None = None):
             kind_filter = TaskKind(kind)
         except ValueError:
             return JSONResponse({'success': False, 'error': '未知任务类型', 'tasks': []}, status_code=400)
-    return JSONResponse({'success': True, 'tasks': [task.to_dict() for task in task_store.list(kind_filter)]})
+    body: dict[str, object] = {'success': True, 'tasks': [task.to_dict() for task in task_store.list(kind_filter)]}
+    if kind_filter in {None, TaskKind.MEDIA}:
+        body['mediaQueue'] = {'paused': media_queue.is_paused()}
+    return JSONResponse(body)
 
 
 @app.get('/api/tasks/{task_id}')
@@ -1560,10 +1693,13 @@ def probe(payload: ProbeRequest):
         with bilibili_cookie_env(payload.bilibiliCookie, payload.bilibiliCookieFile):
             result = probe_media(payload.link)
     except Exception as exc:
+        error_info = classify_error(str(exc), fallback='链接探测失败')
         return JSONResponse(
             {
                 'success': False,
-                'error': public_error_message(str(exc), fallback='链接探测失败'),
+                'error': error_info['message'],
+                'errorCode': error_info['code'],
+                'errorInfo': error_info,
                 'platform': None,
                 'videoStreams': [],
                 'audioStreams': [],
@@ -1650,6 +1786,9 @@ def get_media_task_asset(task_id: str, path: str):
     for item in (assets or {}).get('subtitleDetails') or []:
         if isinstance(item, dict) and item.get('path'):
             allowed.append(Path(str(item.get('path'))).expanduser().resolve())
+    for image in (assets or {}).get('images') or []:
+        if image:
+            allowed.append(Path(str(image)).expanduser().resolve())
 
     requested = Path(path).expanduser().resolve()
     if requested not in allowed:

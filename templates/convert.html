@@ -3,7 +3,7 @@
 {% block body_class_attr %} class="convert-body"{% endblock %}
 
 {% block page_styles %}
-<link rel="stylesheet" href="{{ url_for('static', path='/css/convert.css') }}?v=20260715-taskjump1" />
+<link rel="stylesheet" href="{{ url_for('static', path='/css/convert.css') }}?v=20260718-worldpolish2" />
 {% endblock %}
 
 {% block page_content %}
@@ -159,30 +159,50 @@
               </section>
 
               <aside class="convert-world-panel">
-                <h2>Details panel</h2>
-                <div class="convert-world-guide">球体展示格式节点与当前筛选路径的视觉关系；下方路线列表为完整路径清单。点击类型会聚焦高亮，并将对应节点旋转到正面。</div>
-                <div class="convert-world-stats" aria-label="转换能力统计">
-                  <span><strong data-count-for="stable">0</strong>成熟引擎</span>
-                  <span><strong data-count-for="basic">0</strong>基础转换</span>
-                  <span><strong data-count-for="vendor">0</strong>专业工具</span>
-                </div>
+                <h2>Details</h2>
+                <section class="convert-world-summary" aria-label="当前转换能力概览">
+                  <strong class="convert-world-summary-title" id="convertOrbitTitle">全部转换路径</strong>
+                  <div class="convert-world-route-visual">
+                    <div class="convert-world-format-node">
+                      <span id="convertDetailSource">ALL</span>
+                      <small id="convertDetailSourceLabel">格式</small>
+                    </div>
+                    <svg class="convert-world-route-arrow" viewBox="0 0 104 42" aria-hidden="true">
+                      <path d="M2 11C30 11 48 17 82 21" />
+                      <path d="M2 21C30 21 48 21 82 21" />
+                      <path d="M2 31C30 31 48 25 82 21" />
+                      <path class="arrow-head" d="m77 13 12 8-12 8" />
+                    </svg>
+                    <div class="convert-world-format-node target">
+                      <span id="convertDetailTarget">176</span>
+                      <small id="convertDetailTargetLabel">路径</small>
+                    </div>
+                  </div>
+                  <div class="convert-world-stats" aria-label="当前能力统计">
+                    <span><strong id="convertDetailRouteCount">0</strong>路径</span>
+                    <span><strong id="convertDetailLocalCount">0</strong>本地可用</span>
+                    <span><strong id="convertDetailFormatCount">0</strong>格式</span>
+                  </div>
+                </section>
                 <p>NODE TYPES</p>
                 <div class="convert-world-types">
-                  <button class="active" type="button" data-convert-type="all"><span>Select all</span><strong data-count-for="type-all">0</strong></button>
-                  <button type="button" data-convert-type="document"><span><i class="type-document"></i>Document</span><strong data-count-for="document">0</strong></button>
-                  <button type="button" data-convert-type="image"><span><i class="type-image"></i>Image</span><strong data-count-for="image">0</strong></button>
-                  <button type="button" data-convert-type="media"><span><i class="type-media"></i>Media</span><strong data-count-for="media">0</strong></button>
-                  <button type="button" data-convert-type="subtitle"><span><i class="type-subtitle"></i>Subtitle</span><strong data-count-for="subtitle">0</strong></button>
-                  <button type="button" data-convert-type="archive"><span><i class="type-archive"></i>Archive</span><strong data-count-for="archive">0</strong></button>
+                  <button class="active" type="button" data-convert-type="all"><span><i class="type-all"></i><span class="convert-world-type-copy"><b>Select all</b><small><em data-format-count-for="all">0</em> formats · <em data-count-for="type-all">0</em> routes</small></span></span><strong aria-hidden="true">›</strong></button>
+                  <button type="button" data-convert-type="document"><span><i class="type-document"></i><span class="convert-world-type-copy"><b>Document</b><small><em data-format-count-for="document">0</em> formats · <em data-count-for="document">0</em> routes</small></span></span><strong aria-hidden="true">›</strong></button>
+                  <button type="button" data-convert-type="image"><span><i class="type-image"></i><span class="convert-world-type-copy"><b>Image</b><small><em data-format-count-for="image">0</em> formats · <em data-count-for="image">0</em> routes</small></span></span><strong aria-hidden="true">›</strong></button>
+                  <button type="button" data-convert-type="media"><span><i class="type-media"></i><span class="convert-world-type-copy"><b>Media</b><small><em data-format-count-for="media">0</em> formats · <em data-count-for="media">0</em> routes</small></span></span><strong aria-hidden="true">›</strong></button>
+                  <button type="button" data-convert-type="subtitle"><span><i class="type-subtitle"></i><span class="convert-world-type-copy"><b>Subtitle</b><small><em data-format-count-for="subtitle">0</em> formats · <em data-count-for="subtitle">0</em> routes</small></span></span><strong aria-hidden="true">›</strong></button>
+                  <button type="button" data-convert-type="archive"><span><i class="type-archive"></i><span class="convert-world-type-copy"><b>Archive</b><small><em data-format-count-for="archive">0</em> formats · <em data-count-for="archive">0</em> routes</small></span></span><strong aria-hidden="true">›</strong></button>
                 </div>
 
                 <article class="convert-world-popover" id="convertWorldPopover">
                   <div>
-                    <strong id="convertOrbitTitle">全部转换路径</strong>
                     <span id="convertOrbitText">选择一个节点或文件类型，查看具体转换路径。</span>
                   </div>
                   <div class="convert-orbit-routes" id="convertOrbitRoutes"></div>
                 </article>
+                <button class="convert-world-explore" type="button" data-explore-world-routes>
+                  <span>Explore all routes</span><strong aria-hidden="true">↗</strong>
+                </button>
               </aside>
             </section>
 
@@ -350,7 +370,8 @@
 <script src="{{ url_for('static', path='/js/convert-tabs.js') }}?v=20260715-hash2"></script>
 <script src="{{ url_for('static', path='/js/convert-logs.js') }}"></script>
 <script src="{{ url_for('static', path='/js/convert-result.js') }}?v=20260715-taskjump1"></script>
-<script src="{{ url_for('static', path='/js/convert-capabilities.js') }}?v=20260715-matrixfilter1"></script>
+<script src="{{ url_for('static', path='/data/world-land-50m.js') }}?v=20260718-naturalearth2"></script>
+<script src="{{ url_for('static', path='/js/convert-capabilities.js') }}?v=20260718-rotation360b"></script>
 <script src="{{ url_for('static', path='/js/convert-settings.js') }}?v=20260707-settings1"></script>
 <script src="{{ url_for('static', path='/js/task-center.js') }}?v=20260716-journey2"></script>
 <script src="{{ url_for('static', path='/js/health.js') }}?v=20260711-health1"></script>

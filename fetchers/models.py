@@ -26,6 +26,18 @@ class SubtitleTrack:
 
 
 @dataclass(frozen=True)
+class ImageAsset:
+    url: str
+    alternate_urls: list[str] = field(default_factory=list)
+    width: int | None = None
+    height: int | None = None
+    format: str | None = None
+    filesize: int | None = None
+    quality_label: str | None = None
+    watermarked: bool = False
+
+
+@dataclass(frozen=True)
 class MediaFetchResult:
     platform: str
     content_type: str
@@ -38,6 +50,7 @@ class MediaFetchResult:
     audio_streams: list[MediaStream] = field(default_factory=list)
     preferred_video: MediaStream | None = None
     preferred_audio: MediaStream | None = None
+    image_assets: list[ImageAsset] = field(default_factory=list)
     subtitle_tracks: list[SubtitleTrack] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
 

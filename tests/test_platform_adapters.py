@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,7 +12,7 @@ from fetchers.adapters.douyin import DouyinAdapter, extract_router_data_json, re
 from fetchers.adapters.kuaishou import KuaishouAdapter
 from fetchers.adapters.weibo import WeiboAdapter
 from fetchers.adapters.xiaohongshu import XiaohongshuAdapter
-from fetchers.models import ExportRequest, MediaFetchResult, MediaStream, ResolvedMediaSelection, SubtitleTrack
+from fetchers.models import ExportRequest, ImageAsset, MediaFetchResult, MediaStream, ResolvedMediaSelection, SubtitleTrack
 
 
 class ModelContractTests(unittest.TestCase):
@@ -233,6 +234,145 @@ class DouyinAdapterTests(unittest.TestCase):
                 resolve_share_link("https://v.douyin.com/demo/"),
                 "https://www.douyin.com/video/7444687640944790844",
             )
+
+    def test_douyin_share_resolver_accepts_note_redirect(self):
+        class FakeResponse:
+            headers = {"location": "https://www.douyin.com/note/7665352049119584742"}
+
+        with patch("fetchers.adapters.douyin.requests.get", return_value=FakeResponse()):
+            self.assertEqual(
+                resolve_share_link("https://v.douyin.com/demo/"),
+                "https://www.douyin.com/note/7665352049119584742",
+            )
+
+    def test_douyin_adapter_extracts_non_watermarked_image_collection(self):
+        adapter = DouyinAdapter()
+        capture = {
+            "final_url": "https://www.douyin.com/note/7665352049119584742",
+            "title": "天将黑未黑时最美",
+            "media_url": None,
+            "media_kind": "images",
+            "video_url": None,
+            "audio_url": None,
+            "cover_url": "https://p3-sign.douyinpic.com/image-1~q80.webp",
+            "author": "一颗苹果",
+            "aweme_detail": {
+                "images": [
+                    {
+                        "uri": "tos/image-1",
+                        "width": 1440,
+                        "height": 2558,
+                        "url_list": ["https://p3-sign.douyinpic.com/image-1~tplv-dy-lqen-new:1440:2558:q80.webp"],
+                        "download_url_list": ["https://p3-sign.douyinpic.com/image-1~water:q80.webp"],
+                    },
+                    {
+                        "uri": "tos/image-2",
+                        "width": 1440,
+                        "height": 2558,
+                        "url_list": ["https://p11-sign.douyinpic.com/image-2~tplv-dy-lqen-new:1440:2558:q80.webp"],
+                        "download_url_list": ["https://p11-sign.douyinpic.com/image-2~water:q80.webp"],
+                    },
+                ],
+                "img_bitrate": [
+                    {
+                        "name": "gear_480p",
+                        "images": [
+                            {"uri": "tos/image-1", "url_list": [
+                                "https://p3-sign.douyinpic.com/image-1~q80.webp",
+                                "https://p3-sign.douyinpic.com/image-1~q80.jpeg",
+                            ]},
+                            {"uri": "tos/image-2", "url_list": [
+                                "https://p11-sign.douyinpic.com/image-2~q80.webp",
+                                "https://p11-sign.douyinpic.com/image-2~q80.jpeg",
+                            ]},
+                        ],
+                    }
+                ],
+            },
+        }
+        with patch("fetchers.adapters.douyin.capture_from_share_page", return_value=capture):
+            result = adapter.fetch_media("https://www.douyin.com/note/7665352049119584742")
+
+        self.assertEqual(result.content_type, "images")
+        self.assertEqual(len(result.image_assets), 2)
+        self.assertEqual(result.image_assets[0].width, 1440)
+        self.assertFalse(result.image_assets[0].watermarked)
+        self.assertNotIn("water:", result.image_assets[0].url)
+        self.assertTrue(result.image_assets[0].url.endswith("~q80.jpeg"))
+        self.assertIn("lqen-new", result.image_assets[0].alternate_urls[-1])
+        self.assertEqual(result.metadata["image_count"], 2)
+
+    def test_pipeline_saves_image_collection_and_uncompressed_zip(self):
+        import zipfile
+        from fetchers.pipeline import run_pipeline
+
+        images = [
+            ImageAsset(url=f"https://p3-sign.douyinpic.com/image-{index}.webp", width=1440, height=2558, format="webp")
+            for index in (1, 2)
+        ]
+
+        class ImageAdapter(BasePlatformAdapter):
+            platform_name = "douyin"
+            download_user_agent = "test"
+            download_referer = "https://www.douyin.com/"
+
+            def can_handle(self, raw_link):
+                return True
+
+            def normalize_link(self, raw_link):
+                return raw_link
+
+            def fetch_media(self, normalized_link):
+                return MediaFetchResult(
+                    platform="douyin",
+                    content_type="images",
+                    title="图文测试",
+                    source_url=normalized_link,
+                    final_url="https://www.douyin.com/note/1",
+                    cover_url=images[0].url,
+                    author="作者",
+                    image_assets=images,
+                    metadata={"capture_strategy": "share-page"},
+                )
+
+        from PIL import Image
+
+        encoded_images = []
+        for color in ((255, 0, 0), (0, 0, 255)):
+            buffer = BytesIO()
+            Image.new("RGB", (12, 20), color).save(buffer, format="WEBP")
+            encoded_images.append(buffer.getvalue())
+
+        class FakeResponse:
+            headers = {"content-type": "image/webp"}
+
+            def __init__(self, content):
+                self.content = content
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                yield self.content
+
+            def close(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as output_dir, \
+             patch("fetchers.pipeline.requests.get", side_effect=[FakeResponse(content) for content in encoded_images]):
+            result = run_pipeline(
+                raw_link="https://v.douyin.com/demo/",
+                export_request=ExportRequest(output_path=output_dir, output_type="mp4"),
+                adapter=ImageAdapter(),
+            )
+            archive = Path(result["output_file"])
+            self.assertTrue(archive.exists())
+            self.assertEqual(result["media_kind"], "images")
+            self.assertEqual(result["image_count"], 2)
+            self.assertEqual(len(result["assets"]["images"]), 2)
+            with zipfile.ZipFile(archive) as bundle:
+                self.assertEqual(len(bundle.infolist()), 2)
+                self.assertTrue(all(item.compress_type == zipfile.ZIP_STORED for item in bundle.infolist()))
 
     def test_douyin_adapter_builds_quality_streams_from_aweme_detail(self):
         adapter = DouyinAdapter()
@@ -1073,6 +1213,96 @@ class BilibiliAdapterTests(unittest.TestCase):
         self.assertEqual(result.preferred_video.url, "https://cdn.example.com/video-720-avc.m4s")
         self.assertEqual(result.preferred_video.quality_label, "高清 720P")
         self.assertEqual(result.preferred_audio.url, "https://cdn.example.com/audio-30280.m4s")
+
+    def test_bilibili_adapter_supports_single_muxed_durl_stream(self):
+        adapter = BilibiliAdapter()
+        html = """
+        <script>window.__INITIAL_STATE__={"videoData":{"title":"B站 MP4 测试","bvid":"BV1durlTest","cid":123,"duration":147}};</script>
+        """
+        playurl_payload = {
+            "code": 0,
+            "data": {
+                "quality": 80,
+                "format": "mp4",
+                "timelength": 147000,
+                "support_formats": [
+                    {"quality": 80, "new_description": "1080P 高清"},
+                ],
+                "durl": [
+                    {
+                        "url": "https://cdn.example.com/full-video-with-audio.mp4",
+                        "length": 147000,
+                        "size": 12345678,
+                    }
+                ],
+            },
+        }
+
+        class FakeResponse:
+            def __init__(self, *, text="", json_data=None, url="https://www.bilibili.com/video/BV1durlTest/"):
+                self.text = text
+                self._json_data = json_data
+                self.url = url
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._json_data
+
+        with patch("fetchers.adapters.bilibili.load_bilibili_cookies", return_value=(None, None)):
+            with patch("fetchers.adapters.bilibili.requests.get") as mocked_get:
+                mocked_get.side_effect = [
+                    FakeResponse(text=html),
+                    FakeResponse(json_data=playurl_payload),
+                    RuntimeError("subtitle endpoint unavailable"),
+                ]
+                result = adapter.fetch_media("https://www.bilibili.com/video/BV1durlTest/")
+
+        self.assertEqual(result.preferred_video.url, "https://cdn.example.com/full-video-with-audio.mp4")
+        self.assertEqual(result.preferred_video.quality_label, "1080P 高清")
+        self.assertEqual(result.preferred_video.filesize, 12345678)
+        self.assertIsNone(result.preferred_audio)
+        self.assertEqual(result.metadata["stream_layout"], "progressive")
+
+    def test_bilibili_adapter_rejects_upower_preview_durl(self):
+        adapter = BilibiliAdapter()
+        html = """
+        <script>window.__INITIAL_STATE__={"videoData":{"title":"UP 主专属","bvid":"BV1previewTest","cid":456,"duration":147,"is_upower_exclusive":true}};</script>
+        """
+        playurl_payload = {
+            "code": 0,
+            "data": {
+                "quality": 80,
+                "format": "mp4",
+                "timelength": 146982,
+                "durl": [
+                    {
+                        "url": "https://cdn.example.com/preview.mp4",
+                        "length": 20133,
+                        "size": 7189385,
+                    }
+                ],
+            },
+        }
+
+        class FakeResponse:
+            def __init__(self, *, text="", json_data=None):
+                self.text = text
+                self._json_data = json_data
+                self.url = "https://www.bilibili.com/video/BV1previewTest/"
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._json_data
+
+        with patch("fetchers.adapters.bilibili.load_bilibili_cookies", return_value=({"SESSDATA": "demo"}, "manual")):
+            with patch("fetchers.adapters.bilibili.requests.get") as mocked_get:
+                mocked_get.side_effect = [FakeResponse(text=html), FakeResponse(json_data=playurl_payload)]
+                with self.assertRaisesRegex(RuntimeError, r"UP 主专属内容未解锁.*20 秒.*147 秒"):
+                    adapter.fetch_media("https://www.bilibili.com/video/BV1previewTest/")
 
     def test_bilibili_adapter_uses_chrome_cookies_to_unlock_higher_quality(self):
         adapter = BilibiliAdapter()

@@ -29,6 +29,7 @@
   const streamTable = document.getElementById('mediaStreamTable');
   const streamDetails = document.getElementById('mediaProbeDetails');
   let confirmedProbeKey = '';
+  let lastProbeContentType = '';
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const mediaCoverSrc = (value) => {
     const raw = String(value || '').trim();
@@ -135,14 +136,58 @@
 
   function renderProbePreview(data) {
     if (!probePreview || !data) return;
+    const isImages = data.contentType === 'images';
+    lastProbeContentType = String(data.contentType || '');
+    const imageAssets = Array.isArray(data.imageAssets) ? data.imageAssets : [];
     probePlatform.textContent = data.platform || '未知平台';
-    probeTitle.textContent = data.title || '未命名视频';
+    probeTitle.textContent = data.title || (isImages ? '未命名图文作品' : '未命名视频');
     if (probeAuthor) probeAuthor.textContent = data.author ? `作者：${data.author}` : '';
     setProbeCover(data.coverUrl);
     const recommendation = data.recommendations?.best_quality?.stream;
     const subtitleCount = Number(data.assetSummary?.subtitleCount ?? data.probeSummary?.subtitleCount ?? 0);
     const summary = data.probeSummary || {};
     const best = recommendation || data.videoStreams?.[0] || {};
+    if (isImages) {
+      const firstImage = imageAssets[0] || {};
+      const firstResolution = firstImage.width && firstImage.height ? `${firstImage.width}×${firstImage.height}` : '平台未返回';
+      probeFacts.innerHTML = [
+        `${imageAssets.length} 张图片`,
+        '无水印源',
+        firstResolution,
+        '保持原始字节',
+        '按发布顺序保存',
+        '同时生成 ZIP',
+      ].map((item) => `<em>${escapeHtml(item)}</em>`).join('');
+      if (probeSummary) {
+        probeSummary.innerHTML = [
+          summaryCell('作品类型', '抖音图文 / 图片集'),
+          summaryCell('图片数量', `${imageAssets.length} 张`),
+          summaryCell('图片规格', firstResolution),
+          summaryCell('导出方式', '逐张原图 + ZIP（不二次压缩）'),
+        ].join('');
+      }
+      if (probeDetailGrid) {
+        probeDetailGrid.innerHTML = [
+          detailCell('平台', data.platform || '未知'),
+          detailCell('内容类型', 'images'),
+          detailCell('作者', data.author || '平台未返回'),
+          detailCell('无水印', imageAssets.every((item) => item.watermarked === false) ? '是' : '以平台源为准'),
+          detailCell('来源策略', data.metadata?.capture_strategy || '分享页结构化解析'),
+          detailCell('下载提示', summary.downloadHint || `将下载 ${imageAssets.length} 张图片`),
+        ].join('');
+      }
+      if (streamDetails) streamDetails.querySelector('summary').textContent = `图片清单（共 ${imageAssets.length} 张）`;
+      if (streamTable) {
+        streamTable.innerHTML = imageAssets.map((image, index) => (
+          `<div class="media-stream-row media-image-row"><strong>第 ${index + 1} 张</strong><span>${escapeHtml(image.width && image.height ? `${image.width}×${image.height}` : '尺寸未知')}</span><span>${escapeHtml(String(image.format || '原始格式').toUpperCase())}</span><span>${image.watermarked === false ? '无水印' : '平台源'}</span><span>按原始字节保存</span></div>`
+        )).join('');
+      }
+      probePreview.hidden = false;
+      if (probeCancel) probeCancel.hidden = false;
+      if (probeResetButton) probeResetButton.hidden = false;
+      if (probeToggle) probeToggle.setAttribute('aria-expanded', streamDetails?.open ? 'true' : 'false');
+      return;
+    }
     const bestSize = summary.bestFilesizeLabel || best.filesizeLabel || formatBytes(best.filesize) || '平台未返回';
     const bestBitrate = summary.bestBitrateLabel || bitrateLabel(best.bitrate) || '未知';
     const bestContainer = String(summary.bestContainer || best.container || (best.isHls ? 'm3u8' : '') || '未知').toUpperCase();
@@ -362,6 +407,7 @@
 
   function resetProbeState({ clearInput = false, resetWorkspace = false, toast = '' } = {}) {
     confirmedProbeKey = '';
+    lastProbeContentType = '';
     if (clearInput && linkInput) linkInput.value = '';
     if (probePreview) probePreview.hidden = true;
     if (probeCancel) probeCancel.hidden = true;
@@ -491,8 +537,11 @@
             payload.videoQuality = String(quality?.selectedQualityLabel?.() || '').trim();
             renderProbePreview(probeData);
             confirmedProbeKey = probeKey;
-            result?.setStatus('running', '已识别视频资源，请确认画质后开始下载');
-            logs?.renderLogs(['视频资源识别完成', `平台：${probeData?.platform || 'unknown'}`, '已整理为：最高画质 / 兼容优先 / 小体积', payload.saveAssets ? '确认后会同时保存封面和字幕。' : '当前未开启封面和字幕保存。']);
+            const isImages = probeData?.contentType === 'images';
+            result?.setStatus('running', isImages ? `已识别 ${probeData.imageAssets?.length || 0} 张图片，请确认后开始下载` : '已识别视频资源，请确认画质后开始下载');
+            logs?.renderLogs(isImages
+              ? ['抖音图文资源识别完成', `图片数量：${probeData.imageAssets?.length || 0}`, '将逐张保存无水印图片，并生成不二次压缩的 ZIP。']
+              : ['视频资源识别完成', `平台：${probeData?.platform || 'unknown'}`, '已整理为：最高画质 / 兼容优先 / 小体积', payload.saveAssets ? '确认后会同时保存封面和字幕。' : '当前未开启封面和字幕保存。']);
           } else {
             const batchProbe = await probeBatchLinks(links);
             renderBatchProbePreview(batchProbe, payload);
@@ -510,7 +559,7 @@
             logs?.renderLogs(['批量视频资源识别完成', `链接数量：${links.length}`, payload.saveAssets ? '确认后会同时保存封面和字幕；无原生字幕时按当前字幕策略兜底。' : '当前未开启封面和字幕保存。', '请确认后再次点击。']);
           }
           submitButton.disabled = false;
-          submitButton.textContent = links.length > 1 ? '确认并开始批量下载' : '确认并开始下载';
+          submitButton.textContent = links.length > 1 ? '确认并开始批量下载' : (lastProbeContentType === 'images' ? '确认并下载图片集' : '确认并开始下载');
           submitButton.classList.remove('loading');
           return;
         }
@@ -543,7 +592,9 @@
       ui?.showToast(message);
     } finally {
       submitButton.disabled = false;
-      submitButton.textContent = confirmedProbeKey ? (extractLinks(linkInput?.value || '').length > 1 ? '确认并开始批量下载' : '确认并开始下载') : '开始解析';
+      submitButton.textContent = confirmedProbeKey
+        ? (extractLinks(linkInput?.value || '').length > 1 ? '确认并开始批量下载' : (lastProbeContentType === 'images' ? '确认并下载图片集' : '确认并开始下载'))
+        : '开始解析';
       submitButton.classList.remove('loading');
     }
   });

@@ -882,6 +882,52 @@ class ApiResponseShapeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data['probeSummary']['delivery'], 'direct')
         self.assertIn('未登录', data['probeSummary']['accessHint'])
 
+    async def test_probe_api_returns_douyin_image_collection(self):
+        from fetchers.models import ImageAsset, MediaFetchResult
+
+        fake_result = MediaFetchResult(
+            platform='douyin',
+            content_type='images',
+            title='抖音图文测试',
+            source_url='https://v.douyin.com/demo/',
+            final_url='https://www.douyin.com/note/1',
+            cover_url='https://p3-sign.douyinpic.com/image-1.webp',
+            author='作者',
+            image_assets=[
+                ImageAsset(
+                    url='https://p3-sign.douyinpic.com/image-1.webp',
+                    width=1440,
+                    height=2558,
+                    format='webp',
+                    quality_label='original-size',
+                    watermarked=False,
+                ),
+                ImageAsset(
+                    url='https://p11-sign.douyinpic.com/image-2.webp',
+                    width=1440,
+                    height=2558,
+                    format='webp',
+                    quality_label='original-size',
+                    watermarked=False,
+                ),
+            ],
+            metadata={'capture_strategy': 'share-page', 'image_count': 2},
+        )
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            with patch('app.probe_media', return_value=fake_result):
+                response = await client.post('/api/media/probe', json={'link': 'https://v.douyin.com/demo/'})
+
+        data = response.json()
+        self.assertTrue(data['success'])
+        self.assertEqual(data['contentType'], 'images')
+        self.assertEqual(data['assetSummary']['imageCount'], 2)
+        self.assertEqual(data['probeSummary']['imageCount'], 2)
+        self.assertEqual(len(data['imageAssets']), 2)
+        self.assertFalse(data['imageAssets'][0]['watermarked'])
+        self.assertEqual(data['videoStreams'], [])
+
     async def test_probe_api_includes_login_hint_for_bilibili_when_cookie_missing(self):
         from unittest.mock import patch
 
@@ -1274,6 +1320,15 @@ class OutputFileActionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PlatformReliabilityApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_media_task_list_exposes_queue_pause_state(self):
+        transport = httpx.ASGITransport(app=app)
+        with patch('app.media_queue.is_paused', return_value=True):
+            async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                response = await client.get('/api/tasks', params={'kind': 'media'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['mediaQueue']['paused'])
+
     async def test_health_api_reports_required_local_tools(self):
         with tempfile.TemporaryDirectory() as tmp:
             transport = httpx.ASGITransport(app=app)
@@ -1284,7 +1339,8 @@ class PlatformReliabilityApiTests(unittest.IsolatedAsyncioTestCase):
         data = response.json()
         self.assertTrue(data['success'])
         keys = {item['key'] for item in data['checks']}
-        self.assertTrue({'ffmpeg', 'ffprobe', 'output'}.issubset(keys))
+        self.assertTrue({'python', 'ffmpeg', 'ffprobe', 'playwright', 'subtitle_asr', 'subtitle_ocr', 'pdf_engine', 'output'}.issubset(keys))
+        self.assertIn('summary', data)
 
     async def test_failed_media_task_can_be_resubmitted_for_fresh_probe(self):
         from tasks.models import TaskStatus
