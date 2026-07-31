@@ -17,6 +17,14 @@ def _html_to_text(text: str) -> str:
     return html.unescape(text).strip() + '\n'
 
 
+def _html_to_markdown(text: str) -> str:
+    try:
+        from markdownify import markdownify  # type: ignore
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError('缺少 markdownify，无法将 HTML 转换为 Markdown') from exc
+    return markdownify(text, heading_style='ATX').strip() + '\n'
+
+
 def _markdown_to_text(text: str) -> str:
     text = re.sub(r'```.*?```', '', text, flags=re.S)
     text = re.sub(r'`([^`]+)`', r'\1', text)
@@ -53,7 +61,7 @@ def _text_to_rtf(text: str) -> str:
 def _write_docx_from_text(text: str, output_path: Path) -> None:
     try:
         from docx import Document  # type: ignore
-    except Exception as exc:  # pragma: no cover
+    except ImportError as exc:  # pragma: no cover
         raise RuntimeError('缺少 python-docx，无法生成 DOCX') from exc
     doc = Document()
     for raw_line in text.splitlines():
@@ -75,7 +83,7 @@ def _write_docx_from_text(text: str, output_path: Path) -> None:
 def _read_docx_paragraphs(input_path: Path) -> list[str]:
     try:
         from docx import Document  # type: ignore
-    except Exception as exc:  # pragma: no cover
+    except ImportError as exc:  # pragma: no cover
         raise RuntimeError('缺少 python-docx，无法读取 DOCX') from exc
     doc = Document(str(input_path))
     return [p.text for p in doc.paragraphs]
@@ -84,8 +92,11 @@ def _read_docx_paragraphs(input_path: Path) -> list[str]:
 def _markdown_to_html(text: str) -> str:
     try:
         import markdown  # type: ignore
+    except ImportError:
+        markdown = None
+    if markdown is not None:
         body = markdown.markdown(text, extensions=['tables', 'fenced_code'])
-    except Exception:
+    else:
         lines = []
         for line in text.splitlines():
             if line.startswith('# '):
@@ -220,7 +231,7 @@ def _epub_documents(input_path: Path) -> list[str]:
     try:
         import ebooklib  # type: ignore
         from ebooklib import epub  # type: ignore
-    except Exception as exc:  # pragma: no cover
+    except ImportError as exc:  # pragma: no cover
         raise RuntimeError('缺少 ebooklib，无法读取 EPUB') from exc
     book = epub.read_epub(str(input_path))
     documents = []
@@ -243,7 +254,7 @@ def convert_document_basic(source: str, target: str, input_path: Path, output_pa
     elif source == 'html' and target == 'txt':
         output_path.write_text(_html_to_text(text), encoding='utf-8')
     elif source == 'html' and target == 'md':
-        output_path.write_text(_html_to_text(text), encoding='utf-8')
+        output_path.write_text(_html_to_markdown(text), encoding='utf-8')
     elif source == 'html' and target == 'docx':
         _write_docx_from_text(_html_to_text(text), output_path)
     elif source == 'html' and target == 'pdf':
@@ -309,7 +320,7 @@ def convert_document_basic(source: str, target: str, input_path: Path, output_pa
         elif target == 'txt':
             output_path.write_text(plain, encoding='utf-8')
         elif target == 'md':
-            output_path.write_text(plain, encoding='utf-8')
+            output_path.write_text(_html_to_markdown(joined_html), encoding='utf-8')
         else:
             _write_basic_pdf(plain, output_path)
     else:

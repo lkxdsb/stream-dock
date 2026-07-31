@@ -11,7 +11,7 @@ import httpx
 # App tests must never read, create, or clear the user's real task history.
 os.environ['STREAMDOCK_TASK_STORAGE_PATH'] = ''
 
-from app import FetchRequest, app, task_store
+from app import FetchRequest, app, parse_progress_update, task_store
 from tasks.models import TaskKind
 from douyin_fetch import choose_media_capture, merge_streams_to_mp4, validate_output_request
 
@@ -19,6 +19,12 @@ from douyin_fetch import choose_media_capture, merge_streams_to_mp4, validate_ou
 class TestIsolationTests(unittest.TestCase):
     def test_app_uses_in_memory_task_store_during_tests(self):
         self.assertIsNone(task_store.storage_path)
+
+    def test_progress_parser_keeps_stage_when_value_is_malformed(self):
+        self.assertEqual(parse_progress_update('progress: 42.5|正在下载'), (42.5, '正在下载'))
+        self.assertEqual(parse_progress_update('progress: |等待处理'), (None, '等待处理'))
+        self.assertEqual(parse_progress_update('progress: 1.2.3|仍记录阶段'), (None, '仍记录阶段'))
+        self.assertIsNone(parse_progress_update('ordinary log line'))
 
 
 class HomePageTests(unittest.IsolatedAsyncioTestCase):

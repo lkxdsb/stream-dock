@@ -24,15 +24,21 @@ def _require_yaml():
 
 
 def _require_toml():
+    tomllib_module = None
+    toml_module = None
     try:
         import tomllib  # py3.11+
-        return tomllib, None
-    except Exception:
-        try:
-            import toml  # type: ignore
-            return None, toml
-        except Exception as exc:  # pragma: no cover
-            raise RuntimeError('缺少 TOML 解析库，无法处理 TOML 转换') from exc
+        tomllib_module = tomllib
+    except ImportError:
+        pass
+    try:
+        import toml  # type: ignore
+        toml_module = toml
+    except ImportError:
+        pass
+    if tomllib_module is None and toml_module is None:  # pragma: no cover
+        raise RuntimeError('缺少 TOML 解析库，无法处理 TOML 转换')
+    return tomllib_module, toml_module
 
 
 def read_delimited(path: Path, delimiter: str) -> list[dict[str, str]]:
@@ -78,7 +84,7 @@ def read_xlsx_rows(path: Path) -> list[dict[str, Any]]:
     rows = list(ws.iter_rows(values_only=True))
     if not rows:
         return []
-    headers = [str(cell or f'column_{index + 1}') for index, cell in enumerate(rows[0])]
+    headers = [str(cell if cell is not None else f'column_{index + 1}') for index, cell in enumerate(rows[0])]
     result = []
     for row in rows[1:]:
         result.append({headers[index]: value for index, value in enumerate(row) if index < len(headers)})
@@ -102,6 +108,8 @@ def xml_to_dict(element: ET.Element) -> dict[str, Any]:
     if not children:
         return {element.tag: element.text or ''}
     result: dict[str, Any] = {}
+    if element.text and element.text.strip():
+        result['#text'] = element.text.strip()
     for child in children:
         child_value = xml_to_dict(child)
         key, value = next(iter(child_value.items()))
@@ -118,6 +126,9 @@ def dict_to_xml(name: str, value: Any) -> ET.Element:
     element = ET.Element(name)
     if isinstance(value, dict):
         for key, child_value in value.items():
+            if key == '#text':
+                element.text = '' if child_value is None else str(child_value)
+                continue
             element.append(dict_to_xml(str(key), child_value))
     elif isinstance(value, list):
         for item in value:
@@ -133,7 +144,7 @@ def read_rows(source: str, path: Path) -> list[dict[str, Any]]:
         first_line = text.splitlines()[0] if text.splitlines() else ''
         delimiter = '\t' if '\t' in first_line else ','
         rows = []
-        for index, line in enumerate(text.splitlines(), start=1):
+        for line in text.splitlines():
             if not line.strip():
                 continue
             parts = line.split(delimiter) if delimiter in line else [line]
@@ -174,11 +185,6 @@ def convert_data(source: str, target: str, input_path: Path, output_path: Path) 
         root = dict_to_xml('root', data)
         ET.ElementTree(root).write(output_path, encoding='utf-8', xml_declaration=True)
         return logs + ['JSON 已转换为 XML']
-
-
-
-
-
     if source in {'csv', 'tsv', 'json', 'ndjson', 'xlsx', 'txt'}:
         rows = read_rows(source, input_path)
         logs.append(f'读取到 {len(rows)} 行')

@@ -1,14 +1,19 @@
 import io
+import json
+import shutil
 import subprocess
 import tarfile
 import tempfile
 import unittest
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
 
 from converters.adapters.archive import convert_archive
+from converters.adapters.data import dict_to_xml, read_xlsx_rows, xml_to_dict
 from converters.adapters.document_basic import _libreoffice_convert
+from converters.adapters.image import convert_image
 from converters.adapters.media import convert_media
 from converters.models import ConversionLevel
 from converters.pipeline import convert_file
@@ -121,6 +126,45 @@ class ConverterPipelineTests(unittest.TestCase):
             self.assertTrue(result.output_path.exists())
             self.assertIn('Ada', result.output_path.read_text(encoding='utf-8'))
 
+    def test_pipeline_converts_json_to_toml_when_tomllib_is_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'settings.json'
+            source.write_text(json.dumps({'app': {'name': 'StreamDock', 'port': 8002}}), encoding='utf-8')
+
+            result = convert_file(source, source.name, 'json', 'toml', root)
+
+            self.assertTrue(result.success, result.error)
+            import tomllib
+            parsed = tomllib.loads(result.output_path.read_text(encoding='utf-8'))
+            self.assertEqual(parsed['app']['name'], 'StreamDock')
+            self.assertEqual(parsed['app']['port'], 8002)
+
+    def test_xlsx_reader_preserves_zero_header(self):
+        from openpyxl import Workbook
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'headers.xlsx'
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append([0, None])
+            sheet.append(['value', 'fallback'])
+            workbook.save(path)
+
+            rows = read_xlsx_rows(path)
+
+        self.assertEqual(rows, [{'0': 'value', 'column_2': 'fallback'}])
+
+    def test_xml_reader_preserves_mixed_content_text(self):
+        root = ET.fromstring('<root>leading text<child>value</child></root>')
+
+        parsed = xml_to_dict(root)
+
+        self.assertEqual(parsed, {'root': {'#text': 'leading text', 'child': 'value'}})
+        rebuilt = dict_to_xml('root', parsed['root'])
+        self.assertEqual(rebuilt.text, 'leading text')
+        self.assertEqual(rebuilt.findtext('child'), 'value')
+
 
 
     def test_pipeline_converts_txt_to_docx(self):
@@ -175,6 +219,23 @@ class ConverterPipelineTests(unittest.TestCase):
             extracted = '\n'.join(page.extract_text() or '' for page in PdfReader(str(result.output_path)).pages)
             self.assertIn('产品思维', extracted)
             self.assertIn('中文内容可读', extracted)
+
+    def test_pipeline_converts_html_structure_to_markdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'page.html'
+            source.write_text(
+                '<h1>Title</h1><p>Read the <a href="https://example.test">guide</a>.</p><ul><li>First</li></ul>',
+                encoding='utf-8',
+            )
+
+            result = convert_file(source, source.name, 'html', 'md', root)
+
+            self.assertTrue(result.success, result.error)
+            markdown = result.output_path.read_text(encoding='utf-8')
+            self.assertIn('# Title', markdown)
+            self.assertIn('[guide](https://example.test)', markdown)
+            self.assertIn('First', markdown)
 
     def test_pipeline_converts_rtf_to_txt(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -281,6 +342,91 @@ class ConverterPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '不安全路径'):
                 convert_archive('zip', 'folder', archive, tmp_path / 'out')
             self.assertFalse((tmp_path / 'pwned.txt').exists())
+
+    def test_archive_extraction_rejects_tar_special_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / 'special.tar'
+            info = tarfile.TarInfo('named-pipe')
+            info.type = tarfile.FIFOTYPE
+            with tarfile.open(archive, 'w') as tf:
+                tf.addfile(info)
+
+            with self.assertRaisesRegex(RuntimeError, '特殊文件'):
+                convert_archive('tar', 'folder', archive, root / 'out')
+
+    def test_archive_conversion_removes_intermediate_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / 'source.zip'
+            output = root / 'converted.tar'
+            with zipfile.ZipFile(archive, 'w') as zf:
+                zf.writestr('hello.txt', 'hello')
+
+            convert_archive('zip', 'tar', archive, output)
+
+            self.assertTrue(output.is_file())
+            self.assertFalse(output.with_suffix('').exists())
+
+    def test_archive_conversion_cleans_intermediate_directory_after_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / 'source.tar'
+            output = root / 'converted.zip'
+            data = b'hello'
+            info = tarfile.TarInfo('hello.txt')
+            info.size = len(data)
+            with tarfile.open(archive, 'w') as tf:
+                tf.addfile(info, io.BytesIO(data))
+
+            with patch('converters.adapters.archive._folder_to_zip', side_effect=RuntimeError('zip failed')):
+                with self.assertRaisesRegex(RuntimeError, 'zip failed'):
+                    convert_archive('tar', 'zip', archive, output)
+
+            self.assertFalse(output.with_suffix('').exists())
+
+    def test_single_file_archive_uses_streaming_copy(self):
+        import gzip
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / 'large.txt.gz'
+            with gzip.open(archive, 'wb') as handle:
+                handle.write(b'x' * (1024 * 1024))
+
+            with patch('converters.adapters.archive.shutil.copyfileobj', wraps=shutil.copyfileobj) as copy:
+                convert_archive('gz', 'folder', archive, root / 'out')
+
+            copy.assert_called_once()
+            self.assertEqual((root / 'out' / 'large.txt').stat().st_size, 1024 * 1024)
+
+    def test_direct_gif_conversion_rejects_silent_first_frame_loss(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'animated.gif'
+            frames = [Image.new('RGB', (4, 4), color) for color in ('red', 'blue')]
+            frames[0].save(source, save_all=True, append_images=frames[1:])
+
+            with self.assertRaisesRegex(RuntimeError, 'PNG 帧序列'):
+                convert_image('gif', 'jpg', source, root / 'output.jpg')
+
+    def test_netpbm_targets_use_semantic_pixel_modes(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'source.png'
+            Image.new('RGB', (3, 3), 'red').save(source)
+
+            pgm = root / 'output.pgm'
+            pbm = root / 'output.pbm'
+            convert_image('png', 'pgm', source, pgm)
+            convert_image('png', 'pbm', source, pbm)
+
+            self.assertEqual(pgm.read_bytes()[:2], b'P5')
+            self.assertEqual(pbm.read_bytes()[:2], b'P4')
 
     def test_pipeline_rejects_vendor_only_path(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -42,7 +42,9 @@ def _safe_extract_tar(input_path: Path, output_path: Path, mode: str) -> None:
             _ensure_safe_member(output_path, member.name)
             if member.issym() or member.islnk():
                 raise RuntimeError(f'TAR 包含链接文件，已拒绝解压：{member.name}')
-        tf.extractall(output_path)
+            if not (member.isfile() or member.isdir()):
+                raise RuntimeError(f'TAR 包含特殊文件，已拒绝解压：{member.name}')
+        tf.extractall(output_path, filter='data')
 
 
 def _zip_to_folder(input_path: Path, output_path: Path) -> list[str]:
@@ -73,7 +75,7 @@ def _single_compressed_to_folder(input_path: Path, output_path: Path, opener, su
         name = input_path.stem or 'extracted'
     target = output_path / name
     with opener(input_path, 'rb') as src, target.open('wb') as dst:
-        dst.write(src.read())
+        shutil.copyfileobj(src, dst)
     return [f'{suffix.upper().lstrip(".")} 已解压到 {target}']
 
 
@@ -96,14 +98,21 @@ def convert_archive(source: str, target: str, input_path: Path, output_path: Pat
         return _single_compressed_to_folder(input_path, output_path, bz2.open, '.bz2')
     if source == 'zip' and target == 'tar':
         tmp = output_path.with_suffix('')
-        logs = _zip_to_folder(input_path, tmp)
-        with tarfile.open(output_path, 'w') as tf:
-            tf.add(tmp, arcname=tmp.name)
-        return logs + ['ZIP 已转换为 TAR']
+        shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            logs = _zip_to_folder(input_path, tmp)
+            with tarfile.open(output_path, 'w') as tf:
+                tf.add(tmp, arcname=tmp.name)
+            return logs + ['ZIP 已转换为 TAR']
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
     if source in {'tar', 'tar.gz'} and target == 'zip':
         mode = 'r:gz' if source == 'tar.gz' else 'r'
         tmp = output_path.with_suffix('')
-        tmp.mkdir(parents=True, exist_ok=True)
-        _safe_extract_tar(input_path, tmp, mode)
-        return [f'{source.upper()} 已解压'] + _folder_to_zip(tmp, output_path)
+        shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            _safe_extract_tar(input_path, tmp, mode)
+            return [f'{source.upper()} 已解压'] + _folder_to_zip(tmp, output_path)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
     raise RuntimeError(f'暂不支持压缩包转换 {source} → {target}')
