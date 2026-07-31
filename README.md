@@ -59,41 +59,160 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
 
 ## 快速开始
 
+StreamDock 的推荐部署方式是：**在需要使用它的电脑上安装并运行，然后通过本机浏览器访问**。默认只监听 `127.0.0.1`，不会向局域网或公网开放；用户选择的文件、输出目录、浏览器登录态和任务历史也都属于当前电脑。
+
 ### 环境要求
 
 - Python 3.11+
 - FFmpeg 和 FFprobe
-- macOS、Linux 或 Windows；项目当前主要在 macOS 环境验证
-- 推荐使用 Conda 隔离 Python 依赖
+- Git
+- macOS、Linux 或 Windows（项目当前主要在 macOS 环境验证）
+- 至少预留数 GB 磁盘空间；浏览器、ASR 和 PDF 模型会占用额外空间
 
-以 macOS 为例，可先安装 FFmpeg：
+安装后先确认基础命令可用：
 
 ```bash
-brew install ffmpeg
+python --version
+ffmpeg -version
+ffprobe -version
+git --version
 ```
 
-### 安装与启动
+如果系统使用 `python3` 命令，请将后续示例中的 `python` 替换为 `python3`。
+
+#### macOS
+
+```bash
+brew install python@3.11 ffmpeg
+python3.11 --version
+```
+
+#### Ubuntu / Debian
+
+```bash
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip ffmpeg
+python3 --version
+```
+
+如果系统自带 Python 低于 3.11，请先通过系统软件源、pyenv 或 Conda 安装 Python 3.11，再继续创建环境。
+
+#### Windows
+
+可以通过 winget 安装 Git、Python 3.11 和 FFmpeg：
+
+```powershell
+winget install --id Git.Git
+winget install --id Python.Python.3.11
+winget install --id Gyan.FFmpeg
+```
+
+安装后重新打开 PowerShell，并确认 `python`、`ffmpeg` 和 `ffprobe` 已加入 `PATH`。
+
+### 拉取代码
 
 ```bash
 git clone https://github.com/lkxdsb/stream-dock.git
 cd stream-dock
-
-conda create -n jj python=3.11 -y
-conda activate jj
-pip install -r requirements.txt
-
-uvicorn app:app --host 127.0.0.1 --port 8002 --reload
 ```
 
-打开 <http://127.0.0.1:8002>。
+### 创建 Python 环境
 
-macOS 也可以直接双击 `start_streamdock.command`。脚本会使用 `jj` 环境、检查端口、等待健康检查通过并自动打开浏览器。
-
-如需使用浏览器回退能力，安装 Chromium：
+macOS / Linux：
 
 ```bash
-playwright install chromium
+# macOS Homebrew 可使用 python3.11；Linux 使用已确认版本不低于 3.11 的 python3
+python3.11 -m venv .venv
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
+
+Linux 如果命令名是 `python3`：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Windows PowerShell：
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+如果 PowerShell 禁止执行激活脚本，也可以不激活环境，直接使用：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+也可以使用 Conda：
+
+```bash
+conda create -n streamdock python=3.11 -y
+conda activate streamdock
+python -m pip install -r requirements.txt
+```
+
+### 安装浏览器解析组件
+
+Playwright 用于抖音等平台的浏览器回退链路，建议安装：
+
+```bash
+python -m playwright install chromium
+```
+
+Ubuntu / Debian 如果提示缺少 Chromium 系统依赖：
+
+```bash
+python -m playwright install --with-deps chromium
+```
+
+### 启动
+
+macOS / Linux：
+
+```bash
+python -m uvicorn app:app --host 127.0.0.1 --port 8002
+```
+
+Windows PowerShell：
+
+```powershell
+python -m uvicorn app:app --host 127.0.0.1 --port 8002
+```
+
+如果没有激活 Windows 虚拟环境：
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8002
+```
+
+打开 <http://127.0.0.1:8002>。终端需要在使用期间保持运行，按 `Ctrl+C` 停止服务。
+
+macOS 用户如果使用名为 `jj` 的 Conda 环境，也可以双击 `start_streamdock.command`。该脚本是 macOS 专用启动器，不适用于 Windows 或普通 Linux 桌面。
+
+### 验证安装
+
+打开健康检查页面：
+
+<http://127.0.0.1:8002/api/health>
+
+或者在另一个终端中执行：
+
+```bash
+curl http://127.0.0.1:8002/api/health
+```
+
+页面会分别显示 Python、FFmpeg/FFprobe、Playwright、图片/表格转换、ASR、OCR、PDF 引擎和输出目录状态。核心依赖正常后即可使用；可选能力缺失不会阻止其他工作台启动。
 
 ### 可选依赖
 
@@ -104,13 +223,36 @@ playwright install chromium
 | 画面字幕 OCR | Tesseract OCR、FFmpeg |
 | PDF 深度解析 | 独立 MinerU 环境 |
 
-PDF 环境安装：
+macOS 可安装 OCR 与 Office 转换依赖：
+
+```bash
+brew install tesseract tesseract-lang
+brew install --cask libreoffice
+```
+
+Ubuntu / Debian：
+
+```bash
+sudo apt install -y tesseract-ocr tesseract-ocr-chi-sim libreoffice
+```
+
+PDF 环境安装脚本需要 Bash 和 Conda，适用于 macOS/Linux：
 
 ```bash
 bash scripts/setup_mineru_env.sh
 ```
 
+Windows 用户可以通过 WSL 使用该脚本，或自行安装 MinerU 后通过 `STREAMDOCK_MINERU_EXECUTABLE` 指定可执行文件。PDF 深度解析是可选能力，不影响媒体解析、格式转换和字幕工作台。
+
 首次执行深度解析时可能下载模型。模型文件不应提交到 Git 仓库，相关第三方许可见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
+### 本机数据位置
+
+- 任务历史默认保存在用户目录下的 `.streamdock/tasks.json`。
+- PDF 临时输入默认保存在 `.streamdock/pdf-inputs/`。
+- 媒体、转换和 PDF 结果保存在页面中选择的本机输出目录。
+- 浏览器登录态来自运行 StreamDock 的当前电脑，不会自动从其他设备同步。
+- 不要把 Cookie、下载结果、模型文件或 `.streamdock` 数据提交到 Git。
 
 ## 页面入口
 
@@ -133,7 +275,6 @@ bash scripts/setup_mineru_env.sh
 | --- | --- |
 | `STREAMDOCK_PORT` | `start_streamdock.command` 使用的监听端口，默认 `8002` |
 | `STREAMDOCK_TASK_STORAGE_PATH` | 自定义任务状态存储路径 |
-| `STREAMDOCK_ALLOW_LAN_API=1` | 允许非本机来源访问 API；默认关闭 |
 | `STREAMDOCK_MINERU_EXECUTABLE` | 指定 MinerU 可执行文件 |
 | `STREAMDOCK_SUBTITLE_ASR_MODEL` | 指定 ASR 模型，默认 `base` |
 | `STREAMDOCK_SUBTITLE_ASR_DEVICE` | 指定 ASR 设备，默认 `cpu` |
