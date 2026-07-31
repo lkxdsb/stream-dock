@@ -29,6 +29,7 @@ class TaskKind(str, Enum):
     CONVERT = 'convert'
     MEDIA = 'media'
     PDF = 'pdf'
+    WEB_ARCHIVE = 'web_archive'
 
 
 class TaskStatus(str, Enum):
