@@ -10,12 +10,10 @@ from error_catalog import classify_error
 from runtime_checks import prepare_output_directory
 
 from web_archive.extractor import (
-    extract_main_content,
-    fetch_html_with_playwright,
-    fetch_html_with_requests,
-    html_to_markdown,
-    localize_images,
-    should_fallback_to_playwright,
+    ExtractorError,
+    crawl_url,
+    extract_title,
+    localize_images_in_markdown,
 )
 from web_archive.models import WebArchiveResult
 
@@ -46,6 +44,7 @@ def build_output_dir(output_path: str, page_title: str) -> Path:
 def run_web_archive(payload: dict[str, Any]) -> dict[str, Any]:
     url = str(payload.get('url') or '').strip()
     output_path = str(payload.get('outputPath') or '').strip()
+    cookie = str(payload.get('cookie') or '').strip() or None
     task_id = str(payload.get('_taskId') or '').strip()
 
     def report(stage: str, progress: float) -> None:
@@ -67,38 +66,29 @@ def run_web_archive(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         report('正在获取页面', 10)
         logs.append(f'开始获取页面: {url}')
+        if cookie:
+            logs.append('已携带用户 Cookie 发起请求')
 
-        html = fetch_html_with_requests(url)
-        extract_mode = 'requests'
-        logs.append('requests 模式获取 HTML 成功')
-
-        if should_fallback_to_playwright(html):
-            report('正在使用浏览器渲染页面', 20)
-            logs.append('检测到需要浏览器渲染，回退到 Playwright')
-            try:
-                html = fetch_html_with_playwright(url)
-                extract_mode = 'playwright'
-                logs.append('Playwright 渲染完成')
-            except Exception as exc:
-                error_msg = f'该页面需要浏览器渲染，但 Playwright 环境不可用：{exc}'
-                logs.append(error_msg)
-                return _error_result(url, error_msg, logs)
+        markdown, crawl_title, image_urls = crawl_url(url, cookie)
+        logs.append(f'crawl4ai 抓取完成，识别图片 {len(image_urls)} 张')
 
         report('正在提取正文', 40)
-        logs.append('开始提取正文内容')
-        main_node, page_title = extract_main_content(html, base_url=url)
+        page_title = extract_title(markdown, crawl_title)
         logs.append(f'页面标题: {page_title}')
 
         report('正在下载图片', 70)
         output_dir = build_output_dir(output_path, page_title)
         images_dir = output_dir / 'images'
-        main_node, downloaded, skipped = localize_images(main_node, url, images_dir)
+        markdown, downloaded, skipped = localize_images_in_markdown(
+            markdown, url, images_dir, image_urls, raw_cookie=cookie
+        )
         logs.append(f'图片下载完成: {downloaded} 张成功, {skipped} 张跳过')
 
         report('正在生成 Markdown', 90)
-        markdown_content = html_to_markdown(main_node, page_title)
+        if not markdown.lstrip().startswith('#'):
+            markdown = f'# {page_title}\n\n{markdown}'
         markdown_path = output_dir / 'index.md'
-        markdown_path.write_text(markdown_content, encoding='utf-8')
+        markdown_path.write_text(markdown, encoding='utf-8')
         logs.append(f'Markdown 文件已保存: {markdown_path}')
 
         report('已完成', 100)
@@ -109,7 +99,7 @@ def run_web_archive(payload: dict[str, Any]) -> dict[str, Any]:
             output_dir=str(output_dir),
             markdown_path=str(markdown_path),
             image_count=downloaded,
-            extract_mode=extract_mode,
+            extract_mode='crawl4ai',
             logs=logs,
         )
 
@@ -117,6 +107,10 @@ def run_web_archive(payload: dict[str, Any]) -> dict[str, Any]:
         body['success'] = True
         return body
 
+    except ExtractorError as exc:
+        error_msg = str(exc)
+        logs.append(f'错误: {error_msg}')
+        return _error_result(url, error_msg, logs)
     except Exception as exc:
         error_msg = str(classify_error(str(exc), fallback='网页存档失败')['message'])
         logs.append(f'错误: {error_msg}')

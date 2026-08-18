@@ -1,6 +1,8 @@
-fastapi>=0.115,<1
+fastapi>=0.115,<0.117
+starlette>=0.45,<0.48
 uvicorn[standard]>=0.30,<1
 python-multipart>=0.0.9
+jinja2>=3.1
 requests>=2.31
 beautifulsoup4>=4.12
 html2text>=2024.2.26

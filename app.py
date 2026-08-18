@@ -1671,7 +1671,11 @@ def clear_finished_tasks(kind: str | None = None):
 
 @app.post('/api/open-output-path')
 def open_output_path(path: str = Form(...)):
+    if not path or not path.strip():
+        return JSONResponse({'success': False, 'error': '输出目录为空，请先完成提取任务'}, status_code=400)
     target = Path(path).expanduser().resolve()
+    if target == Path.cwd():
+        return JSONResponse({'success': False, 'error': '输出目录未就绪，请稍后重试'}, status_code=400)
     directory = target if target.is_dir() else target.parent
     if not directory.exists():
         return JSONResponse({'success': False, 'error': '输出目录不存在'}, status_code=404)
@@ -1970,6 +1974,7 @@ def web_archive_extract(payload: ExtractRequest):
         task = web_archive_queue.submit({
             'url': payload.url,
             'outputPath': payload.outputPath,
+            'cookie': payload.cookie,
         })
         return JSONResponse({'success': True, 'task': task})
     except ValueError as exc:

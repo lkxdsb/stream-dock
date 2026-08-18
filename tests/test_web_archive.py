@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Importing app in tests must not touch ~/.streamdock/tasks.json.
 os.environ['STREAMDOCK_TASK_STORAGE_PATH'] = ''
@@ -12,162 +12,328 @@ os.environ['STREAMDOCK_TASK_STORAGE_PATH'] = ''
 # ── Extractor tests ──────────────────────────────────────────
 
 from web_archive.extractor import (
-    extract_main_content,
-    should_fallback_to_playwright,
-    html_to_markdown,
+    ExtractorError,
+    crawl_url,
+    extract_title,
+    localize_images_in_markdown,
+    parse_cookie_string,
+    _humanize_error,
+    _MARKDOWN_IMAGE_RE,
+    _infer_image_extension,
 )
 from web_archive.pipeline import sanitize_title
 from web_archive.models import ExtractRequest, WebArchiveResult
 
 
-def test_should_not_fallback_for_content_rich_page():
-    html = '''
-    <html><head><title>Test</title></head>
-    <body>
-      <nav>Home About</nav>
-      <main>
-        <h1>Documentation</h1>
-        <p>This is a long paragraph with enough text to exceed the minimum body text length threshold for the
-        should_fallback_to_playwright function. We need at least two hundred characters of body text to avoid
-        triggering the Playwright fallback. Let me add more text here to be safe and ensure this passes.</p>
-      </main>
-      <footer>Copyright</footer>
-    </body></html>
-    '''
-    assert should_fallback_to_playwright(html) is False
+def test_humanize_error_translates_timeout():
+    raw = "Unexpected error in _crawl_web at line 778 ... Page.goto: Timeout 30000ms exceeded"
+    assert "超时" in _humanize_error(raw)
 
 
-def test_should_fallback_for_empty_body():
-    html = '<html><head><title>Empty</title></head><body></body></html>'
-    assert should_fallback_to_playwright(html) is True
+def test_humanize_error_translates_navigation_failure():
+    raw = "Failed on navigating ACS-GOTO: net::ERR_NAME_NOT_RESOLVED"
+    out = _humanize_error(raw)
+    assert "无法打开" in out or "无法连接" in out
 
 
-def test_should_fallback_for_noscript_js_hint():
-    html = '''
-    <html><head><title>JS App</title></head>
-    <body>
-      <noscript>Please enable JavaScript to run this app.</noscript>
-    </body></html>
-    '''
-    assert should_fallback_to_playwright(html) is True
+def test_humanize_error_blanks_empty_message():
+    assert _humanize_error("") == "网页抓取失败"
 
 
-def test_extract_main_content_prefers_article_tag():
-    html = '''
-    <html><head><title>Article Page</title></head>
-    <body>
-      <nav>Nav links</nav>
-      <article>
-        <h1>My Article</h1>
-        <p>Article body text here with enough content to be meaningful.</p>
-      </article>
-      <footer>Footer</footer>
-    </body></html>
-    '''
-    node, title = extract_main_content(html)
-    assert title == 'My Article'
-    assert 'Article body text' in node.get_text()
-    assert 'Nav links' not in node.get_text()
-    assert 'Footer' not in node.get_text()
+def test_extract_title_prefers_first_heading():
+    md = "some intro\n\n# Real Heading\n\nbody text"
+    assert extract_title(md, "Fallback") == "Real Heading"
 
 
-def test_extract_main_content_falls_back_to_body():
-    html = '''
-    <html><head><title>Plain Page</title></head>
-    <body>
-      <div>Just some div content without semantic tags.</div>
-    </body></html>
-    '''
-    node, title = extract_main_content(html)
-    assert title == 'Plain Page'
-    assert 'Just some div content' in node.get_text()
+def test_extract_title_falls_back_to_crawl_title_when_no_heading():
+    md = "no heading here, just body text"
+    assert extract_title(md, "Crawl Title") == "Crawl Title"
 
 
-def test_html_to_markdown_produces_title_heading():
-    from bs4 import BeautifulSoup
-    html = '<p>Hello <strong>world</strong></p>'
-    soup = BeautifulSoup(html, 'html.parser')
-    md = html_to_markdown(soup, 'Test Title')
-    assert md.startswith('# Test Title')
-    assert 'Hello' in md
-    assert 'world' in md
+def test_extract_title_defaults_when_both_empty():
+    assert extract_title("", "") == "未命名页面"
+
+
+def test_extract_title_strips_permalink_anchor():
+    md = '# `asyncio` — Asynchronous I/O[¶](https://x/asyncio#module-asyncio "Link to this heading")'
+    assert extract_title(md, "") == "`asyncio` — Asynchronous I/O"
+
+
+def test_markdown_image_regex_captures_url():
+    md = "![cat](https://example.com/cat.png) and ![dog](/dog.jpg)"
+    matches = [m.group(2) for m in _MARKDOWN_IMAGE_RE.finditer(md)]
+    assert matches == ["https://example.com/cat.png", "/dog.jpg"]
+
+
+def test_markdown_image_regex_skips_data_uris_only_when_filtered():
+    # The regex still captures data: URIs; filtering happens in localize step.
+    md = "![x](data:image/png;base64,abcd)"
+    matches = [m.group(2) for m in _MARKDOWN_IMAGE_RE.finditer(md)]
+    assert matches == ["data:image/png;base64,abcd"]
+
+
+def test_infer_image_extension_known_types():
+    assert _infer_image_extension("https://x.com/a.png") == "png"
+    assert _infer_image_extension("https://x.com/a.JPG") == "jpg"
+    assert _infer_image_extension("https://x.com/a.weBP") == "webp"
+    assert _infer_image_extension("https://x.com/noext") == "png"
+
+
+def test_ext_from_content_type_maps_known_mimes():
+    from web_archive.extractor import _ext_from_content_type
+
+    assert _ext_from_content_type("image/png") == "png"
+    assert _ext_from_content_type("image/jpeg") == "jpg"
+    assert _ext_from_content_type("image/svg+xml") == "svg"
+    assert _ext_from_content_type("image/webp") == "webp"
+    assert _ext_from_content_type("image/avif") == "avif"
+    assert _ext_from_content_type("image/x-icon") == "ico"
+
+
+def test_ext_from_content_type_handles_charset_and_none():
+    from web_archive.extractor import _ext_from_content_type
+
+    assert _ext_from_content_type("image/svg+xml; charset=utf-8") == "svg"
+    assert _ext_from_content_type("  IMAGE/PNG ") == "png"
+    assert _ext_from_content_type(None) is None
+    assert _ext_from_content_type("") is None
+    assert _ext_from_content_type("application/octet-stream") is None
+
+
+# ── crawl_url wrapper tests ──────────────────────────────────
+
+
+def _fake_markdown_result(markdown: str, title: str = "T"):
+    result = MagicMock()
+    result.success = True
+    result.error_message = None
+    result.markdown = MagicMock()
+    result.markdown.fit_markdown = ""
+    result.markdown.raw_markdown = markdown
+    result.metadata = {"title": title}
+    return result
+
+
+def test_crawl_url_returns_markdown_and_title_from_raw_when_fit_empty():
+    md = "# Page\n\n![img](https://example.com/a.png) text"
+    fake = _fake_markdown_result(md, "Crawl Title")
+    crawler = MagicMock()
+    crawler.__aenter__ = AsyncMock(return_value=crawler)
+    crawler.__aexit__ = AsyncMock(return_value=None)
+    crawler.arun = AsyncMock(return_value=fake)
+
+    with patch("web_archive.extractor.AsyncWebCrawler", return_value=crawler):
+        out_md, title, imgs = crawl_url("https://example.com/p")
+    assert title == "Crawl Title"
+    assert "Page" in out_md
+    assert imgs == ["https://example.com/a.png"]
+
+
+def test_crawl_url_raises_extractor_error_when_crawl_fails():
+    fake = MagicMock()
+    fake.success = False
+    fake.error_message = "boom"
+    crawler = MagicMock()
+    crawler.__aenter__ = AsyncMock(return_value=crawler)
+    crawler.__aexit__ = AsyncMock(return_value=None)
+    crawler.arun = AsyncMock(return_value=fake)
+
+    with patch("web_archive.extractor.AsyncWebCrawler", return_value=crawler):
+        try:
+            crawl_url("https://example.com/p")
+            assert False, "expected ExtractorError"
+        except ExtractorError as exc:
+            assert "boom" in str(exc)
+
+
+def test_crawl_url_raises_extractor_error_on_empty_markdown():
+    fake = _fake_markdown_result("", "")
+    crawler = MagicMock()
+    crawler.__aenter__ = AsyncMock(return_value=crawler)
+    crawler.__aexit__ = AsyncMock(return_value=None)
+    crawler.arun = AsyncMock(return_value=fake)
+
+    with patch("web_archive.extractor.AsyncWebCrawler", return_value=crawler):
+        try:
+            crawl_url("https://example.com/p")
+            assert False, "expected ExtractorError"
+        except ExtractorError:
+            pass
 
 
 # ── Image localization tests ─────────────────────────────────
 
-from web_archive.extractor import localize_images
 
+def test_localize_images_downloads_and_rewrites_links():
+    md = "![a](https://example.com/cat.png)![b](https://example.com/dog.jpg)"
 
-def test_localize_images_handles_relative_urls():
-    from bs4 import BeautifulSoup
-    html = '<img src="/assets/img/photo.jpg"><img src="https://example.com/pic.png">'
-    soup = BeautifulSoup(html, 'html.parser')
+    def mock_get(url, **kwargs):
+        resp = MagicMock()
+        resp.headers = {"Content-Type": "image/jpeg" if ".jpg" in url else "image/png"}
+        resp.raise_for_status = MagicMock()
+        resp.iter_content = lambda chunk_size: [b"img-bytes"]
+        return resp
 
     with tempfile.TemporaryDirectory() as tmp:
-        images_dir = Path(tmp) / 'images'
-        with patch('web_archive.extractor.requests.get') as mock_get:
-            mock_resp = MagicMock()
-            mock_resp.raise_for_status = MagicMock()
-            mock_resp.iter_content = lambda chunk_size: [b'fake-image-data']
-            mock_get.return_value = mock_resp
-
-            node, downloaded, skipped = localize_images(soup, 'https://example.com/docs/page', images_dir)
-
+        images_dir = Path(tmp) / "images"
+        with patch("web_archive.extractor.requests.get", side_effect=mock_get):
+            out_md, downloaded, skipped = localize_images_in_markdown(
+                md, "https://example.com", images_dir
+            )
         assert downloaded == 2
         assert skipped == 0
-        imgs = node.find_all('img')
-        assert imgs[0]['src'].startswith('images/image-001')
-        assert imgs[1]['src'].startswith('images/image-002')
+        assert "images/image-001.png" in out_md
+        assert "images/image-002.jpg" in out_md
+        assert (images_dir / "image-001.png").is_file()
+        assert (images_dir / "image-002.jpg").is_file()
 
 
-def test_localize_images_does_not_interrupt_on_failure():
-    from bs4 import BeautifulSoup
-    html = '<img src="https://broken.example.com/bad.jpg"><img src="https://good.example.com/ok.png">'
-    soup = BeautifulSoup(html, 'html.parser')
+def test_localize_images_uses_content_type_over_url_suffix():
+    # URL claims .png but server actually serves SVG -> saved as .svg
+    md = "![logo](https://example.com/logo.png)"
+    with tempfile.TemporaryDirectory() as tmp:
+        images_dir = Path(tmp) / "images"
+        with patch("web_archive.extractor.requests.get") as mock_get:
+            resp = MagicMock()
+            resp.headers = {"Content-Type": "image/svg+xml"}
+            resp.raise_for_status = MagicMock()
+            resp.iter_content = lambda chunk_size: [b"<svg/>"]
+            mock_get.return_value = resp
+
+            out_md, downloaded, skipped = localize_images_in_markdown(
+                md, "https://example.com", images_dir
+            )
+        assert downloaded == 1
+        assert "images/image-001.svg" in out_md
+        assert (images_dir / "image-001.svg").is_file()
+        assert not (images_dir / "image-001.png").exists()
+
+
+def test_localize_images_falls_back_to_url_suffix_without_content_type():
+    # No Content-Type header -> fall back to URL suffix (.png)
+    md = "![x](https://example.com/pic.png)"
+    with tempfile.TemporaryDirectory() as tmp:
+        images_dir = Path(tmp) / "images"
+        with patch("web_archive.extractor.requests.get") as mock_get:
+            resp = MagicMock()
+            resp.headers = {}
+            resp.raise_for_status = MagicMock()
+            resp.iter_content = lambda chunk_size: [b"data"]
+            mock_get.return_value = resp
+
+            out_md, downloaded, skipped = localize_images_in_markdown(
+                md, "https://example.com", images_dir
+            )
+        assert downloaded == 1
+        assert "images/image-001.png" in out_md
+
+
+def test_localize_images_no_suffix_url_uses_content_type():
+    # URL has no extension (e.g. /logo?v=3) -> Content-Type decides
+    md = "![x](https://example.com/avatar?v=3)"
+    with tempfile.TemporaryDirectory() as tmp:
+        images_dir = Path(tmp) / "images"
+        with patch("web_archive.extractor.requests.get") as mock_get:
+            resp = MagicMock()
+            resp.headers = {"Content-Type": "image/webp"}
+            resp.raise_for_status = MagicMock()
+            resp.iter_content = lambda chunk_size: [b"data"]
+            mock_get.return_value = resp
+
+            out_md, downloaded, skipped = localize_images_in_markdown(
+                md, "https://example.com", images_dir
+            )
+        assert downloaded == 1
+        assert "images/image-001.webp" in out_md
+        assert (images_dir / "image-001.webp").is_file()
+
+
+def test_localize_images_skips_broken_and_keeps_original_link():
+    md = "![a](https://broken.example.com/bad.jpg)![b](https://good.example.com/ok.png)"
+
+    def mock_get(url, **kwargs):
+        if "broken" in url:
+            raise Exception("Connection error")
+        mock_resp = MagicMock()
+        mock_resp.headers = {}
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.iter_content = lambda chunk_size: [b"ok"]
+        return mock_resp
 
     with tempfile.TemporaryDirectory() as tmp:
-        images_dir = Path(tmp) / 'images'
-        call_count = [0]
-
-        def mock_get(url, **kwargs):
-            call_count[0] += 1
-            if 'broken' in url:
-                raise Exception('Connection error')
-            mock_resp = MagicMock()
-            mock_resp.raise_for_status = MagicMock()
-            mock_resp.iter_content = lambda chunk_size: [b'ok']
-            return mock_resp
-
-        with patch('web_archive.extractor.requests.get', side_effect=mock_get):
-            node, downloaded, skipped = localize_images(soup, 'https://example.com/page', images_dir)
-
+        images_dir = Path(tmp) / "images"
+        with patch("web_archive.extractor.requests.get", side_effect=mock_get):
+            out_md, downloaded, skipped = localize_images_in_markdown(
+                md, "https://example.com", images_dir
+            )
         assert downloaded == 1
         assert skipped == 1
-        imgs = node.find_all('img')
-        assert 'broken.example.com' in imgs[0]['src']
-        assert imgs[1]['src'].startswith('images/')
+        # Broken image link stays as the original remote URL (not rewritten).
+        assert "broken.example.com/bad.jpg" in out_md
+        assert "images/image-002.png" in out_md
+
+
+def test_localize_images_skips_data_uris():
+    md = "![a](data:image/png;base64,xxxx)![b](https://example.com/real.png)"
+    with tempfile.TemporaryDirectory() as tmp:
+        images_dir = Path(tmp) / "images"
+        with patch("web_archive.extractor.requests.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.headers = {}
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.iter_content = lambda chunk_size: [b"data"]
+            mock_get.return_value = mock_resp
+
+            out_md, downloaded, skipped = localize_images_in_markdown(
+                md, "https://example.com", images_dir
+            )
+        assert downloaded == 1
+        assert skipped == 1
+        assert "images/image-002.png" in out_md
+        assert "data:" in out_md  # data URI left untouched
 
 
 def test_localize_images_respects_max_limit():
-    from bs4 import BeautifulSoup
-    img_tags = ''.join(f'<img src="https://example.com/img-{i}.png">' for i in range(55))
-    soup = BeautifulSoup(img_tags, 'html.parser')
-
+    md = "".join(f"![x](https://example.com/img-{i}.png)" for i in range(55))
     with tempfile.TemporaryDirectory() as tmp:
-        images_dir = Path(tmp) / 'images'
-        with patch('web_archive.extractor.requests.get') as mock_get:
+        images_dir = Path(tmp) / "images"
+        with patch("web_archive.extractor.requests.get") as mock_get:
             mock_resp = MagicMock()
+            mock_resp.headers = {}
             mock_resp.raise_for_status = MagicMock()
-            mock_resp.iter_content = lambda chunk_size: [b'data']
+            mock_resp.iter_content = lambda chunk_size: [b"data"]
             mock_get.return_value = mock_resp
 
-            node, downloaded, skipped = localize_images(soup, 'https://example.com', images_dir)
-
+            _, downloaded, skipped = localize_images_in_markdown(
+                md, "https://example.com", images_dir
+            )
         assert downloaded == 50
         assert skipped == 5
 
 
+def test_localize_images_accepts_precomputed_url_list():
+    md = "![a](https://example.com/kept.png)"
+    urls = ["https://example.com/kept.png", "https://example.com/list-only.png"]
+    with tempfile.TemporaryDirectory() as tmp:
+        images_dir = Path(tmp) / "images"
+        with patch("web_archive.extractor.requests.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.headers = {}
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.iter_content = lambda chunk_size: [b"d"]
+            mock_get.return_value = mock_resp
+
+            out_md, downloaded, skipped = localize_images_in_markdown(
+                md, "https://example.com", images_dir, image_urls=urls
+            )
+        # The url list drives downloads; only links present in md get rewritten.
+        assert downloaded == 2
+        assert skipped == 0
+        assert "images/image-001.png" in out_md
+
+
 # ── Output directory naming tests ────────────────────────────
+
 
 def test_sanitize_title_replaces_illegal_chars():
     assert sanitize_title('hello/world:test') == 'hello-world-test'
@@ -195,6 +361,78 @@ def test_extract_request_validates_url():
 def test_extract_request_accepts_valid_url():
     req = ExtractRequest(url='https://example.com/page', outputPath='/tmp')
     assert req.url == 'https://example.com/page'
+    assert req.cookie is None
+
+
+def test_extract_request_normalizes_cookie():
+    req = ExtractRequest(url='https://example.com/p', outputPath='/tmp', cookie='  a=1; b=2  ')
+    assert req.cookie == 'a=1; b=2'
+    req_empty = ExtractRequest(url='https://example.com/p', outputPath='/tmp', cookie='   ')
+    assert req_empty.cookie is None
+
+
+# ── Cookie parsing tests ─────────────────────────────────────
+
+def test_parse_cookie_string_pairs():
+    cookies = parse_cookie_string('session=abc; theme=dark', 'https://example.com/p')
+    assert cookies == [
+        {'name': 'session', 'value': 'abc', 'domain': 'example.com', 'path': '/'},
+        {'name': 'theme', 'value': 'dark', 'domain': 'example.com', 'path': '/'},
+    ]
+
+
+def test_parse_cookie_string_skips_flags_and_empty():
+    cookies = parse_cookie_string('a=1; HttpOnly; ; =noval; b=2', 'https://sub.example.com')
+    assert [c['name'] for c in cookies] == ['a', 'b']
+    assert cookies[0]['domain'] == 'sub.example.com'
+
+
+def test_parse_cookie_string_keeps_equals_in_value():
+    cookies = parse_cookie_string('token=ab==cd==', 'https://example.com')
+    assert cookies[0]['value'] == 'ab==cd=='
+
+
+def test_crawl_url_passes_cookie_to_browser_config():
+    fake = _fake_markdown_result('# T', 'T')
+    crawler = MagicMock()
+    crawler.__aenter__ = AsyncMock(return_value=crawler)
+    crawler.__aexit__ = AsyncMock(return_value=None)
+    crawler.arun = AsyncMock(return_value=fake)
+
+    captured = {}
+
+    class FakeBrowserConfig:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    with patch('web_archive.extractor.AsyncWebCrawler', return_value=crawler), \
+         patch('web_archive.extractor.BrowserConfig', FakeBrowserConfig):
+        crawl_url('https://example.com/p', 'session=abc')
+
+    assert captured['cookies'][0]['name'] == 'session'
+    assert captured['cookies'][0]['value'] == 'abc'
+    assert captured['cookies'][0]['domain'] == 'example.com'
+
+
+def test_localize_images_forwards_cookie_to_same_host():
+    md = '![a](https://example.com/a.png)![b](https://cdn.other.com/b.png)'
+    seen = {}
+
+    def mock_get(url, **kwargs):
+        seen[url] = kwargs.get('headers', {})
+        resp = MagicMock()
+        resp.headers = {'Content-Type': 'image/png'}
+        resp.raise_for_status = MagicMock()
+        resp.iter_content = lambda chunk_size: [b'd']
+        return resp
+
+    with tempfile.TemporaryDirectory() as tmp:
+        images_dir = Path(tmp) / 'images'
+        with patch('web_archive.extractor.requests.get', side_effect=mock_get):
+            localize_images_in_markdown(md, 'https://example.com', images_dir, raw_cookie='s=1')
+
+    assert seen['https://example.com/a.png'].get('Cookie') == 's=1'
+    assert 'Cookie' not in seen['https://cdn.other.com/b.png']
 
 
 def test_web_archive_result_to_dict():
@@ -204,12 +442,12 @@ def test_web_archive_result_to_dict():
         output_dir='/tmp/test',
         markdown_path='/tmp/test/index.md',
         image_count=3,
-        extract_mode='requests',
+        extract_mode='crawl4ai',
     )
     d = result.to_dict()
     assert d['url'] == 'https://example.com'
     assert d['imageCount'] == 3
-    assert d['extractMode'] == 'requests'
+    assert d['extractMode'] == 'crawl4ai'
     assert d['markdownPath'] == '/tmp/test/index.md'
 
 

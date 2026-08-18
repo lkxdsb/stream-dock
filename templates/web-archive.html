@@ -1,61 +1,107 @@
 {% extends "base.html" %}
 {% block body_class_attr %} class="web-archive-body"{% endblock %}
-{% block page_styles %}<link rel="stylesheet" href="{{ url_for('static', path='/css/web-archive.css') }}?v=20260731" />{% endblock %}
+{% block page_styles %}<link rel="stylesheet" href="{{ url_for('static', path='/css/web-archive.css') }}?v=20260818" />{% endblock %}
 {% block page_content %}
 <main class="web-archive-page">
-  <section class="web-archive-main">
-    <header class="web-archive-heading">
-      <div>
-        <p>WEB ARCHIVE</p>
-        <h1>网页存档</h1>
-      </div>
-      <span>输入网页链接，提取正文内容并保存为本地 Markdown 文档。</span>
-    </header>
+  <section class="web-archive-workspace">
+    <aside class="web-archive-sidebar" aria-label="网页存档功能导航">
+      <a class="web-archive-sidebar-brand" href="/" aria-label="StreamDock 首页">
+        <span class="brand-mark"></span>
+        <span>StreamDock</span>
+      </a>
 
-    <section class="web-archive-flow-steps" aria-label="网页存档流程">
-      <article><i>01</i><strong>输入链接</strong><span>粘贴需要存档的网页 URL。</span></article>
-      <article><i>02</i><strong>自动提取</strong><span>智能识别正文，下载图片到本地。</span></article>
-      <article><i>03</i><strong>保存文档</strong><span>输出 Markdown 文件与图片目录。</span></article>
-    </section>
-
-    <section class="web-archive-card">
-      <div class="web-archive-input-area">
-        <label class="web-archive-url-label">
-          <span>网页链接</span>
-          <input id="webArchiveUrl" type="url" placeholder="https://example.com/docs/getting-started" autocomplete="off" />
-        </label>
-        <label class="web-archive-path-label">
-          <span>保存到</span>
-          <div class="web-archive-path-row">
-            <input id="webArchiveOutputPath" value="~/Downloads/StreamDock" readonly />
-            <button id="webArchiveSelectDir" type="button">选择目录</button>
-          </div>
-        </label>
-      </div>
-      <div class="web-archive-actions">
-        <button id="webArchiveExtractBtn" type="button">开始提取</button>
-        <button id="webArchiveCancelBtn" class="secondary" type="button" hidden>取消任务</button>
-        <span id="webArchiveStatus">请输入网页链接。</span>
-      </div>
-    </section>
-
-    <section class="web-archive-result-area" id="webArchiveResult" hidden>
-      <div class="web-archive-result-card">
-        <h2>提取结果</h2>
-        <div class="web-archive-result-info" id="webArchiveResultInfo"></div>
-        <div class="web-archive-result-actions">
-          <button id="webArchiveOpenDir" type="button" disabled>打开输出目录</button>
-          <button id="webArchiveOpenMd" type="button" disabled>查看 Markdown</button>
+      <nav class="web-archive-nav" aria-label="网页存档工作区">
+        <div class="web-archive-nav-section">
+          <p>网页存档</p>
+          <button class="web-archive-nav-item active" type="button" data-archive-nav="workbench">
+            <span class="sidebar-item-icon" aria-hidden="true">◎</span>
+            <span class="sidebar-item-copy"><strong class="sidebar-item-title">工作台</strong><small class="sidebar-item-subtitle">输入链接并提取</small></span>
+          </button>
+          <button class="web-archive-nav-item" type="button" data-archive-nav="tasks">
+            <span class="sidebar-item-icon" aria-hidden="true">↓</span>
+            <span class="sidebar-item-copy"><strong class="sidebar-item-title">存档任务</strong><small class="sidebar-item-subtitle">进行中 / 已完成</small></span>
+          </button>
         </div>
-      </div>
-    </section>
+      </nav>
+    </aside>
 
-    <section class="web-archive-task-area">
-      <h2>存档任务</h2>
-      <div class="web-archive-task-list" id="webArchiveTaskList"></div>
-      <div class="web-archive-empty" id="webArchiveTaskEmpty">暂无网页存档任务。</div>
+    <section class="web-archive-main-shell">
+      <div class="web-archive-main-inner">
+        <section class="web-archive-panel active" data-archive-panel="workbench">
+          <header class="workspace-heading">
+            <div>
+              <p class="workspace-eyebrow">WEB ARCHIVE</p>
+              <h1 class="workspace-title">网页存档工作台</h1>
+            </div>
+            <p class="workspace-description">输入网页链接，提取正文内容并保存为本地 Markdown 文档。</p>
+          </header>
+
+          <section class="web-archive-flow-steps" aria-label="网页存档流程">
+            <article><i>01</i><strong>输入链接</strong><span>粘贴需要存档的网页 URL。</span></article>
+            <article><i>02</i><strong>自动提取</strong><span>智能识别正文，下载图片到本地。</span></article>
+            <article><i>03</i><strong>保存文档</strong><span>输出 Markdown 文件与图片目录。</span></article>
+          </section>
+
+          <section class="web-archive-card">
+            <div class="web-archive-input-area">
+              <label class="web-archive-url-label">
+                <span>网页链接</span>
+                <input id="webArchiveUrl" type="url" placeholder="https://example.com/docs/getting-started" autocomplete="off" />
+              </label>
+              <label class="web-archive-path-label">
+                <span>保存到</span>
+                <div class="web-archive-path-row">
+                  <input id="webArchiveOutputPath" value="~/Downloads/StreamDock" readonly />
+                  <button id="webArchiveSelectDir" type="button">选择目录</button>
+                </div>
+              </label>
+
+              <details class="web-archive-advanced" id="webArchiveAdvanced">
+                <summary><span>高级选项</span><small>登录态（可选）</small></summary>
+                <div class="web-archive-advanced-body">
+                  <label class="web-archive-cookie-label" for="webArchiveCookie">
+                    <span>Cookie（可选）</span>
+                    <textarea id="webArchiveCookie" rows="3" placeholder="部分网站需要登录才能访问，可从浏览器开发者工具复制 Cookie 请求头粘贴到这里；仅保存在本机浏览器，不会上传"></textarea>
+                  </label>
+                </div>
+              </details>
+            </div>
+            <div class="web-archive-actions">
+              <button id="webArchiveExtractBtn" type="button">开始提取</button>
+              <button id="webArchiveCancelBtn" class="secondary" type="button" hidden>取消任务</button>
+              <span id="webArchiveStatus">请输入网页链接。</span>
+            </div>
+          </section>
+
+          <section class="web-archive-result-area" id="webArchiveResult" hidden>
+            <div class="web-archive-result-card">
+              <h2>提取结果</h2>
+              <div class="web-archive-result-info" id="webArchiveResultInfo"></div>
+              <div class="web-archive-result-actions">
+                <button id="webArchiveOpenDir" type="button" disabled>打开输出目录</button>
+                <button id="webArchiveOpenMd" type="button" disabled>查看 Markdown</button>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="web-archive-panel" data-archive-panel="tasks" hidden>
+          <header class="workspace-heading">
+            <div>
+              <p class="workspace-eyebrow">ARCHIVE TASKS</p>
+              <h1 class="workspace-title">存档任务</h1>
+            </div>
+            <p class="workspace-description">这里会集中展示正在提取、最近完成和失败的网页存档任务。</p>
+          </header>
+
+          <section class="web-archive-task-area">
+            <div class="web-archive-task-list" id="webArchiveTaskList"></div>
+            <div class="web-archive-empty" id="webArchiveTaskEmpty">暂无网页存档任务。</div>
+          </section>
+        </section>
+      </div>
     </section>
   </section>
 </main>
 {% endblock %}
-{% block page_scripts %}<script src="{{ url_for('static', path='/js/web-archive.js') }}?v=20260731"></script>{% endblock %}
+{% block page_scripts %}<script src="{{ url_for('static', path='/js/web-archive.js') }}?v=20260818"></script>{% endblock %}

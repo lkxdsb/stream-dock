@@ -31,6 +31,7 @@ class WebArchiveResult:
 class ExtractRequest(BaseModel):
     url: str = Field(min_length=1)
     outputPath: str = Field(min_length=1)
+    cookie: str | None = None
 
     @field_validator('url')
     @classmethod
@@ -40,3 +41,11 @@ class ExtractRequest(BaseModel):
         if parsed.scheme not in ('http', 'https') or not parsed.netloc:
             raise ValueError('请输入有效的网页链接（需以 http:// 或 https:// 开头）')
         return v
+
+    @field_validator('cookie')
+    @classmethod
+    def validate_cookie(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
