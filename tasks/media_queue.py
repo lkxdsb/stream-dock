@@ -89,13 +89,19 @@ class MediaQueue:
                 else:
                     task_id, payload = self._queue.popleft()
                     cancelled = task_id in self._cancelled
+                    if cancelled:
+                        self._cancelled.discard(task_id)
             if paused:
                 sleep(0.25)
                 continue
             if cancelled:
                 self.store.update(task_id, status=TaskStatus.CANCELLED, logs=['已取消'], error='任务已取消', stage='已取消', progress=None)
                 continue
-            self._run_one(task_id, payload)
+            try:
+                self._run_one(task_id, payload)
+            finally:
+                with self._lock:
+                    self._cancelled.discard(task_id)
             if self.interval_seconds > 0:
                 sleep(self.interval_seconds)
 
@@ -105,7 +111,16 @@ class MediaQueue:
         try:
             result = self.runner({**payload, '_taskId': task_id})
         except Exception as exc:  # pragma: no cover - defensive wrapper
-            self.store.update(task_id, status=TaskStatus.FAILED, logs=['媒体资源处理失败', str(exc)], error=str(exc), stage='失败', progress=None)
+            with self._lock:
+                cancelled = task_id in self._cancelled
+            self.store.update(
+                task_id,
+                status=TaskStatus.CANCELLED if cancelled else TaskStatus.FAILED,
+                logs=['任务已取消' if cancelled else '媒体资源处理失败', str(exc)],
+                error='任务已取消' if cancelled else str(exc),
+                stage='已取消' if cancelled else '失败',
+                progress=None,
+            )
             return
 
         with self._lock:

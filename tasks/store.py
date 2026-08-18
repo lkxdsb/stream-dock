@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import json
+import logging
 from pathlib import Path
+import shutil
 from threading import Lock
 from typing import Any
 from uuid import uuid4
@@ -11,6 +13,7 @@ from tasks.models import TaskItem, TaskKind, TaskStatus, utc_now_iso
 
 
 _UNSET = object()
+logger = logging.getLogger(__name__)
 
 
 class TaskStore:
@@ -26,7 +29,25 @@ class TaskStore:
             return
         try:
             rows = json.loads(self.storage_path.read_text(encoding='utf-8'))
-            for row in rows[-self.max_items:]:
+        except OSError as exc:
+            logger.warning('无法读取任务历史文件 %s：%s', self.storage_path, exc)
+            return
+        except json.JSONDecodeError as exc:
+            backup_path = self._backup_corrupt_storage()
+            logger.warning('任务历史文件 JSON 已损坏，已保留备份 %s：%s', backup_path or '（备份失败）', exc)
+            return
+
+        if not isinstance(rows, list):
+            backup_path = self._backup_corrupt_storage()
+            logger.warning('任务历史文件根节点不是列表，已保留备份 %s', backup_path or '（备份失败）')
+            return
+
+        recovered_state_changed = False
+        malformed_rows = 0
+        for index, row in enumerate(rows[-self.max_items:]):
+            try:
+                if not isinstance(row, dict):
+                    raise TypeError('任务记录不是对象')
                 loaded_status = TaskStatus(str(row.get('status') or 'pending'))
                 default_stage = {
                     TaskStatus.PENDING: '等待中',
@@ -62,26 +83,62 @@ class TaskStore:
                     })
                     task.result = {**(task.result or {}), 'subtitleJob': subtitle_job}
                     task.logs = [*task.logs, '后台字幕识别因本地服务重启而中断，视频文件仍可正常使用']
+                    task.updated_at = utc_now_iso()
+                    recovered_state_changed = True
                 if task.status in {TaskStatus.PENDING, TaskStatus.RUNNING}:
                     task.status = TaskStatus.FAILED
                     task.error = '本地服务重启，上次未完成任务已中断'
                     task.logs = [*task.logs, task.error]
                     task.updated_at = utc_now_iso()
                     task.stage = '已中断'
+                    recovered_state_changed = True
                 self._items[task.id] = task
-        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
-            self._items.clear()
+            except (ValueError, TypeError, KeyError) as exc:
+                malformed_rows += 1
+                logger.warning('跳过无法恢复的任务记录（索引 %s）：%s', index, exc)
+
+        if malformed_rows:
+            backup_path = self._backup_corrupt_storage()
+            logger.warning('任务历史中有 %s 条无效记录，原文件已备份到 %s', malformed_rows, backup_path or '（备份失败）')
+
+        if recovered_state_changed or malformed_rows:
+            try:
+                self._persist_locked()
+            except OSError as exc:
+                logger.warning('无法保存恢复后的任务历史：%s', exc)
+
+    def _backup_corrupt_storage(self) -> Path | None:
+        if not self.storage_path or not self.storage_path.exists():
+            return None
+        candidate = self.storage_path.with_name(f'{self.storage_path.name}.corrupt.bak')
+        suffix = 1
+        while candidate.exists():
+            candidate = self.storage_path.with_name(f'{self.storage_path.name}.corrupt.{suffix}.bak')
+            suffix += 1
+        try:
+            shutil.copy2(self.storage_path, candidate)
+        except OSError as exc:
+            logger.warning('无法备份损坏的任务历史文件 %s：%s', self.storage_path, exc)
+            return None
+        return candidate
 
     def _persist_locked(self) -> None:
         if not self.storage_path:
             return
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = self.storage_path.with_suffix('.tmp')
-        temp_path.write_text(
-            json.dumps([task.to_dict() for task in self._items.values()], ensure_ascii=False, indent=2),
-            encoding='utf-8',
-        )
-        temp_path.replace(self.storage_path)
+        try:
+            temp_path.write_text(
+                json.dumps([task.to_dict() for task in self._items.values()], ensure_ascii=False, indent=2),
+                encoding='utf-8',
+            )
+            temp_path.replace(self.storage_path)
+        except OSError:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     def create(self, kind: TaskKind, title: str, payload: dict[str, Any]) -> TaskItem:
         task = TaskItem(

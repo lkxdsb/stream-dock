@@ -1121,8 +1121,9 @@ def platform_status():
 @app.get('/', response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse(
-        'home.html',
-        {
+        request=request,
+        name='home.html',
+        context={
             'request': request,
             'title': 'StreamDock · 多平台媒体解析工具',
             'active_nav': 'home',
@@ -1133,8 +1134,9 @@ def home(request: Request):
 @app.get('/use', response_class=HTMLResponse)
 def use_page(request: Request):
     return templates.TemplateResponse(
-        'use.html',
-        {
+        request=request,
+        name='use.html',
+        context={
             'request': request,
             'title': 'StreamDock · 在线使用',
             'active_nav': 'use',
@@ -1145,8 +1147,9 @@ def use_page(request: Request):
 @app.get('/platforms', response_class=HTMLResponse)
 def platforms_page(request: Request):
     return templates.TemplateResponse(
-        'platforms.html',
-        {
+        request=request,
+        name='platforms.html',
+        context={
             'request': request,
             'title': 'StreamDock · 支持平台',
             'active_nav': 'platforms',
@@ -1157,8 +1160,9 @@ def platforms_page(request: Request):
 @app.get('/about', response_class=HTMLResponse)
 def about_page(request: Request):
     return templates.TemplateResponse(
-        'about.html',
-        {
+        request=request,
+        name='about.html',
+        context={
             'request': request,
             'title': 'StreamDock · 产品介绍',
             'active_nav': '',
@@ -1169,8 +1173,9 @@ def about_page(request: Request):
 @app.get('/updates', response_class=HTMLResponse)
 def updates_page(request: Request):
     return templates.TemplateResponse(
-        'updates.html',
-        {
+        request=request,
+        name='updates.html',
+        context={
             'request': request,
             'title': 'StreamDock · 更新日志',
             'active_nav': 'updates',
@@ -1181,8 +1186,9 @@ def updates_page(request: Request):
 @app.get('/convert', response_class=HTMLResponse)
 def convert_page(request: Request):
     return templates.TemplateResponse(
-        'convert.html',
-        {
+        request=request,
+        name='convert.html',
+        context={
             'request': request,
             'title': 'StreamDock · 文件转换',
             'active_nav': 'convert',
@@ -1193,8 +1199,9 @@ def convert_page(request: Request):
 @app.get('/pdf', response_class=HTMLResponse)
 def pdf_page(request: Request):
     return templates.TemplateResponse(
-        'pdf.html',
-        {
+        request=request,
+        name='pdf.html',
+        context={
             'request': request,
             'title': 'StreamDock · PDF 智能解析',
             'active_nav': 'pdf',
@@ -1205,8 +1212,9 @@ def pdf_page(request: Request):
 @app.get('/subtitles', response_class=HTMLResponse)
 def subtitles_page(request: Request):
     return templates.TemplateResponse(
-        'subtitles.html',
-        {'request': request, 'title': 'StreamDock · 字幕工作台', 'active_nav': 'subtitles'},
+        request=request,
+        name='subtitles.html',
+        context={'request': request, 'title': 'StreamDock · 字幕工作台', 'active_nav': 'subtitles'},
     )
 
 
@@ -1955,3 +1963,13 @@ def fetch_batch(payload: BatchFetchRequest):
         return JSONResponse({'success': False, 'error': '请至少输入一个有效链接', 'tasks': []}, status_code=400)
     tasks = media_queue.submit(items)
     return JSONResponse({'success': True, 'tasks': tasks})
+
+
+if __name__ == '__main__':
+    import uvicorn
+
+    uvicorn.run(
+        app,
+        host=os.getenv('STREAMDOCK_HOST', '127.0.0.1'),
+        port=int(os.getenv('STREAMDOCK_PORT', '8002')),
+    )

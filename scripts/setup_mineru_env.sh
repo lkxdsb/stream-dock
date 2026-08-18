@@ -2,10 +2,17 @@
 set -euo pipefail
 
 ENV_NAME="${STREAMDOCK_MINERU_ENV:-streamdock-mineru}"
-ENV_PATH="${CONDA_PREFIX%/envs/*}/envs/${ENV_NAME}"
-if [[ -z "${CONDA_PREFIX:-}" || "${CONDA_PREFIX}" != */envs/* ]]; then
-  ENV_PATH="/opt/anaconda3/envs/${ENV_NAME}"
+if ! command -v conda >/dev/null 2>&1; then
+  echo 'ERROR: conda is not installed or not on PATH' >&2
+  exit 1
 fi
+
+if [[ "${CONDA_PREFIX:-}" == */envs/* ]]; then
+  CONDA_BASE="${CONDA_PREFIX%/envs/*}"
+else
+  CONDA_BASE="$(conda info --base)"
+fi
+ENV_PATH="${CONDA_BASE}/envs/${ENV_NAME}"
 
 if ! conda env list | awk '{print $1}' | grep -qx "${ENV_NAME}"; then
   conda create -n "${ENV_NAME}" python=3.11 -y

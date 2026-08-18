@@ -1,7 +1,9 @@
 from tasks.models import TaskKind, TaskStatus
 from tasks.media_queue import MediaQueue
+from tasks.pdf_queue import PdfQueue
 from tasks.store import TaskStore
 from tasks.subtitle_queue import SubtitleQueue
+import json
 import tempfile
 import time
 from pathlib import Path
@@ -168,6 +170,57 @@ def test_task_store_persists_stage_and_progress():
         assert loaded.stage == '已中断'
 
 
+def test_task_store_persists_restart_recovery_only_once():
+    with tempfile.TemporaryDirectory() as tmp:
+        storage = Path(tmp) / 'tasks.json'
+        store = TaskStore(storage_path=storage)
+        task = store.create(kind=TaskKind.MEDIA, title='interrupted', payload={})
+        store.update(task.id, status=TaskStatus.RUNNING, logs=['started'])
+
+        first_restart = TaskStore(storage_path=storage).get(task.id)
+        second_restart = TaskStore(storage_path=storage).get(task.id)
+
+        assert first_restart is not None and second_restart is not None
+        assert second_restart.status == TaskStatus.FAILED
+        assert second_restart.logs.count('本地服务重启，上次未完成任务已中断') == 1
+
+
+def test_task_store_keeps_valid_rows_when_one_history_row_is_invalid():
+    with tempfile.TemporaryDirectory() as tmp:
+        storage = Path(tmp) / 'tasks.json'
+        valid = {
+            'id': 'valid-task',
+            'kind': 'media',
+            'title': 'valid',
+            'payload': {},
+            'status': 'completed',
+            'logs': [],
+            'result': {'outputPath': '/tmp/video.mp4'},
+            'stage': '已完成',
+        }
+        storage.write_text(json.dumps([valid, {'id': 'broken'}]), encoding='utf-8')
+
+        store = TaskStore(storage_path=storage)
+
+        assert store.get('valid-task') is not None
+        assert len(store.list()) == 1
+        assert list(Path(tmp).glob('tasks.json.corrupt*.bak'))
+
+
+def test_task_store_backs_up_invalid_json_without_deleting_it():
+    with tempfile.TemporaryDirectory() as tmp:
+        storage = Path(tmp) / 'tasks.json'
+        storage.write_text('{not-json', encoding='utf-8')
+
+        store = TaskStore(storage_path=storage)
+
+        assert store.list() == []
+        assert storage.read_text(encoding='utf-8') == '{not-json'
+        backups = list(Path(tmp).glob('tasks.json.corrupt*.bak'))
+        assert len(backups) == 1
+        assert backups[0].read_text(encoding='utf-8') == '{not-json'
+
+
 def test_task_store_marks_only_background_subtitle_as_interrupted_after_restart():
     with tempfile.TemporaryDirectory() as tmp:
         storage = Path(tmp) / 'tasks.json'
@@ -321,6 +374,44 @@ def test_task_store_delete_removes_only_requested_task():
     assert store.delete('missing') is None
 
 
+def test_pdf_queue_defers_pending_input_cleanup_to_worker():
+    with tempfile.TemporaryDirectory() as tmp:
+        source = Path(tmp) / 'input.pdf'
+        source.write_bytes(b'%PDF-test')
+        store = TaskStore()
+        task = store.create(TaskKind.PDF, 'queued PDF', {'inputPath': str(source)})
+        queue = PdfQueue(store, lambda payload: {})
+        queue._queue.append((task.id, dict(task.payload)))
+
+        assert queue.cancel(task.id)
+        assert source.exists()
+
+        queue._run()
+
+        assert not source.exists()
+        assert task.id not in queue._cancelled
+
+
+def test_media_queue_marks_cancelled_runner_failure_as_cancelled():
+    started = Event()
+    release = Event()
+
+    def runner(payload):
+        started.set()
+        release.wait(timeout=1.5)
+        raise RuntimeError('runner stopped')
+
+    store = TaskStore()
+    queue = MediaQueue(store, runner, interval_seconds=0)
+    task_id = queue.submit([{'link': 'https://example.com/video'}])[0]['id']
+
+    assert started.wait(timeout=1.5)
+    assert queue.cancel(task_id)
+    release.set()
+    assert _wait_until(lambda: store.get(task_id).status == TaskStatus.CANCELLED)
+    assert _wait_until(lambda: task_id not in queue._cancelled)
+
+
 _TEST_FUNCTIONS = [
     test_task_store_creates_and_lists_tasks,
     test_task_store_updates_task_status_and_logs,
@@ -334,12 +425,17 @@ _TEST_FUNCTIONS = [
     test_task_store_evicts_oldest_task_when_max_items_is_exceeded,
     test_task_store_persists_completed_history,
     test_task_store_persists_stage_and_progress,
+    test_task_store_persists_restart_recovery_only_once,
+    test_task_store_keeps_valid_rows_when_one_history_row_is_invalid,
+    test_task_store_backs_up_invalid_json_without_deleting_it,
     test_task_store_marks_only_background_subtitle_as_interrupted_after_restart,
     test_media_queue_completes_video_before_starting_subtitle_hook,
     test_subtitle_queue_updates_completed_video_without_reopening_main_task,
     test_video_result_is_openable_while_subtitle_worker_is_still_running,
     test_task_store_clear_finished_keeps_active_tasks,
     test_task_store_delete_removes_only_requested_task,
+    test_pdf_queue_defers_pending_input_cleanup_to_worker,
+    test_media_queue_marks_cancelled_runner_failure_as_cancelled,
 ]
 
 
