@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 *.log
+.venv/
+venv/
 .env
 .env.*
 .idea/
@@ -19,3 +21,6 @@ pdf_engine/output/
 *.streamdock-part.*
 cookies*.txt
 cookies*.json
+.codefuse/
+openspec/
+docs/PROJECT_OVERVIEW.md

@@ -48,6 +48,9 @@ from tasks.models import TaskKind, TaskStatus
 from tasks.store import TaskStore
 from runtime_checks import augmented_path, cleanup_task_partials, deep_media_quality, ensure_system_proxy_environment, environment_health, network_subprocess_environment, prepare_output_directory, validate_media_output
 from subtitles.service import export_subtitles, normalize_format as normalize_subtitle_format, parse_subtitles
+from web_archive.models import ExtractRequest
+from web_archive.pipeline import run_web_archive
+from web_archive.queue import WebArchiveQueue
 
 ensure_system_proxy_environment()
 
@@ -1081,6 +1084,7 @@ def run_pdf_task(payload: dict[str, object]) -> dict[str, object]:
 subtitle_queue = SubtitleQueue(task_store, run_subtitle_recognition)
 media_queue = MediaQueue(task_store, run_media_fetch, success_hook=enqueue_subtitle_after_media_success)
 pdf_queue = PdfQueue(task_store, run_pdf_task)
+web_archive_queue = WebArchiveQueue(task_store, run_web_archive)
 
 
 @app.get('/api/health')
@@ -1215,6 +1219,14 @@ def subtitles_page(request: Request):
         request=request,
         name='subtitles.html',
         context={'request': request, 'title': 'StreamDock · 字幕工作台', 'active_nav': 'subtitles'},
+    )
+
+
+@app.get('/web-archive', response_class=HTMLResponse)
+def web_archive_page(request: Request):
+    return templates.TemplateResponse(
+        'web-archive.html',
+        {'request': request, 'title': 'StreamDock · 网页存档', 'active_nav': 'web-archive'},
     )
 
 
@@ -1618,6 +1630,11 @@ def cancel_task(task_id: str):
         terminate_pdf_process(task_id)
         current = task_store.get(task_id)
         return JSONResponse({'success': True, 'task': current.to_dict() if current else None})
+    if task.kind == TaskKind.WEB_ARCHIVE:
+        if not web_archive_queue.cancel(task_id):
+            return JSONResponse({'success': False, 'error': '任务已结束，无需取消'}, status_code=409)
+        current = task_store.get(task_id)
+        return JSONResponse({'success': True, 'task': current.to_dict() if current else None})
     if task.kind != TaskKind.MEDIA:
         return JSONResponse({'success': False, 'error': '当前转换任务已同步执行，无法取消'}, status_code=409)
     if not media_queue.cancel(task_id):
@@ -1672,7 +1689,11 @@ def clear_finished_tasks(kind: str | None = None):
 
 @app.post('/api/open-output-path')
 def open_output_path(path: str = Form(...)):
+    if not path or not path.strip():
+        return JSONResponse({'success': False, 'error': '输出目录为空，请先完成提取任务'}, status_code=400)
     target = Path(path).expanduser().resolve()
+    if target == Path.cwd():
+        return JSONResponse({'success': False, 'error': '输出目录未就绪，请稍后重试'}, status_code=400)
     directory = target if target.is_dir() else target.parent
     if not directory.exists():
         return JSONResponse({'success': False, 'error': '输出目录不存在'}, status_code=404)
@@ -1965,11 +1986,43 @@ def fetch_batch(payload: BatchFetchRequest):
     return JSONResponse({'success': True, 'tasks': tasks})
 
 
-if __name__ == '__main__':
-    import uvicorn
+@app.post('/api/web-archive/extract')
+def web_archive_extract(payload: ExtractRequest):
+    try:
+        task = web_archive_queue.submit({
+            'url': payload.url,
+            'outputPath': payload.outputPath,
+            'cookie': payload.cookie,
+        })
+        return JSONResponse({'success': True, 'task': task})
+    except ValueError as exc:
+        return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
 
-    uvicorn.run(
-        app,
-        host=os.getenv('STREAMDOCK_HOST', '127.0.0.1'),
-        port=int(os.getenv('STREAMDOCK_PORT', '8002')),
-    )
+
+@app.get('/api/web-archive/tasks/{task_id}/asset')
+def get_web_archive_asset(task_id: str, path: str):
+    task = task_store.get(task_id)
+    if task is None or task.kind != TaskKind.WEB_ARCHIVE or task.status != TaskStatus.COMPLETED:
+        return JSONResponse({'success': False, 'error': '已完成的网页存档任务不存在'}, status_code=404)
+    output_dir = Path(str((task.result or {}).get('outputDir') or '')).expanduser().resolve()
+    if not output_dir.is_dir():
+        return JSONResponse({'success': False, 'error': '存档结果目录不存在'}, status_code=404)
+
+    requested = Path(path)
+    if requested.is_absolute() or '..' in requested.parts:
+        return JSONResponse({'success': False, 'error': '非法路径'}, status_code=400)
+
+    target = (output_dir / requested).resolve()
+    try:
+        target.relative_to(output_dir)
+    except ValueError:
+        return JSONResponse({'success': False, 'error': '路径超出存档目录'}, status_code=400)
+
+    if not target.is_file():
+        return JSONResponse({'success': False, 'error': '文件不存在'}, status_code=404)
+
+    allowed_suffixes = {'.md', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.avif'}
+    if target.suffix.lower() not in allowed_suffixes:
+        return JSONResponse({'success': False, 'error': '仅允许访问 Markdown 和图片文件'}, status_code=400)
+
+    return FileResponse(target)
