@@ -70,7 +70,7 @@ SUBTITLE_PENDING_PATTERN = re.compile(r"subtitle pending:\s*(true|false)$", re.I
 MEDIA_KIND_PATTERN = re.compile(r"captured media kind:\s*(.+)$")
 IMAGE_FILE_PATTERN = re.compile(r"image file:\s*(.+)$")
 IMAGE_COUNT_PATTERN = re.compile(r"image count:\s*(\d+)$")
-PROGRESS_PATTERN = re.compile(r"progress:\s*([0-9.]*)\|(.+)$")
+PROGRESS_PATTERN = re.compile(r"progress:\s*([^|]*)\|(.+)$")
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 MAX_CONVERT_FILE_BYTES = int(os.getenv('STREAMDOCK_MAX_CONVERT_FILE_BYTES', str(500 * 1024 * 1024)))
 MAX_CONVERT_BATCH_FILES = int(os.getenv('STREAMDOCK_MAX_CONVERT_BATCH_FILES', '20'))
@@ -83,6 +83,17 @@ MAX_SUBTITLE_FILE_BYTES = int(os.getenv('STREAMDOCK_MAX_SUBTITLE_FILE_BYTES', st
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app = FastAPI(title='Douyin Local Fetch UI')
 app.mount('/static', StaticFiles(directory=str(STATIC_DIR)), name='static')
+
+
+def parse_progress_update(line: str) -> tuple[float | None, str] | None:
+    match = PROGRESS_PATTERN.search(line)
+    if not match:
+        return None
+    try:
+        progress = float(match.group(1)) if match.group(1).strip() else None
+    except (TypeError, ValueError):
+        progress = None
+    return progress, match.group(2).strip()
 
 
 def _task_storage_path() -> Path | None:
@@ -685,10 +696,9 @@ def run_media_fetch(payload: dict[str, object]) -> dict[str, object]:
                     clean = line.rstrip()
                     sink.append(clean)
                     if report_progress:
-                        match = PROGRESS_PATTERN.search(clean)
-                        if match:
-                            progress_value = float(match.group(1)) if match.group(1) else None
-                            stage = match.group(2).strip()
+                        progress_update = parse_progress_update(clean)
+                        if progress_update:
+                            progress_value, stage = progress_update
                             current = task_store.get(task_id)
                             logs = list(current.logs if current else [])
                             if not logs or logs[-1] != stage:
@@ -1115,8 +1125,9 @@ def platform_status():
 @app.get('/', response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse(
-        'home.html',
-        {
+        request=request,
+        name='home.html',
+        context={
             'request': request,
             'title': 'StreamDock · 多平台媒体解析工具',
             'active_nav': 'home',
@@ -1127,8 +1138,9 @@ def home(request: Request):
 @app.get('/use', response_class=HTMLResponse)
 def use_page(request: Request):
     return templates.TemplateResponse(
-        'use.html',
-        {
+        request=request,
+        name='use.html',
+        context={
             'request': request,
             'title': 'StreamDock · 在线使用',
             'active_nav': 'use',
@@ -1139,8 +1151,9 @@ def use_page(request: Request):
 @app.get('/platforms', response_class=HTMLResponse)
 def platforms_page(request: Request):
     return templates.TemplateResponse(
-        'platforms.html',
-        {
+        request=request,
+        name='platforms.html',
+        context={
             'request': request,
             'title': 'StreamDock · 支持平台',
             'active_nav': 'platforms',
@@ -1151,8 +1164,9 @@ def platforms_page(request: Request):
 @app.get('/about', response_class=HTMLResponse)
 def about_page(request: Request):
     return templates.TemplateResponse(
-        'about.html',
-        {
+        request=request,
+        name='about.html',
+        context={
             'request': request,
             'title': 'StreamDock · 产品介绍',
             'active_nav': '',
@@ -1163,8 +1177,9 @@ def about_page(request: Request):
 @app.get('/updates', response_class=HTMLResponse)
 def updates_page(request: Request):
     return templates.TemplateResponse(
-        'updates.html',
-        {
+        request=request,
+        name='updates.html',
+        context={
             'request': request,
             'title': 'StreamDock · 更新日志',
             'active_nav': 'updates',
@@ -1175,8 +1190,9 @@ def updates_page(request: Request):
 @app.get('/convert', response_class=HTMLResponse)
 def convert_page(request: Request):
     return templates.TemplateResponse(
-        'convert.html',
-        {
+        request=request,
+        name='convert.html',
+        context={
             'request': request,
             'title': 'StreamDock · 文件转换',
             'active_nav': 'convert',
@@ -1187,8 +1203,9 @@ def convert_page(request: Request):
 @app.get('/pdf', response_class=HTMLResponse)
 def pdf_page(request: Request):
     return templates.TemplateResponse(
-        'pdf.html',
-        {
+        request=request,
+        name='pdf.html',
+        context={
             'request': request,
             'title': 'StreamDock · PDF 智能解析',
             'active_nav': 'pdf',
@@ -1199,8 +1216,9 @@ def pdf_page(request: Request):
 @app.get('/subtitles', response_class=HTMLResponse)
 def subtitles_page(request: Request):
     return templates.TemplateResponse(
-        'subtitles.html',
-        {'request': request, 'title': 'StreamDock · 字幕工作台', 'active_nav': 'subtitles'},
+        request=request,
+        name='subtitles.html',
+        context={'request': request, 'title': 'StreamDock · 字幕工作台', 'active_nav': 'subtitles'},
     )
 
 

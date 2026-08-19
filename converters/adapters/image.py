@@ -37,6 +37,9 @@ def convert_image(source: str, target: str, input_path: Path, output_path: Path)
             image.save(output_path, format='GIF')
             return logs + ['PNG 已转换为 GIF']
 
+        if source == 'gif':
+            raise RuntimeError(f'GIF 不支持转换为 {target.upper()}，请导出为 PNG 帧序列')
+
         converted = image
         if target in {'jpg', 'jpeg'}:
             if image.mode in {'RGBA', 'LA', 'P'}:
@@ -49,7 +52,11 @@ def convert_image(source: str, target: str, input_path: Path, output_path: Path)
                 converted = image.convert('RGB')
         elif target in {'png', 'webp', 'bmp', 'tiff', 'ico'}:
             converted = image.convert('RGBA') if image.mode in {'P', 'LA'} else image
-        elif target in {'ppm', 'pgm', 'pbm', 'pnm'}:
+        elif target in {'ppm', 'pnm'}:
             converted = image.convert('RGB')
+        elif target == 'pgm':
+            converted = image.convert('L')
+        elif target == 'pbm':
+            converted = image.convert('1')
         converted.save(output_path, format=target_format)
         return logs + [f'图片已转换为 {target.upper()}']

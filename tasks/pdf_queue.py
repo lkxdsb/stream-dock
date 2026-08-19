@@ -38,7 +38,6 @@ class PdfQueue:
             self._cancelled.add(task_id)
         if task.status == TaskStatus.PENDING:
             self.store.update(task_id, status=TaskStatus.CANCELLED, logs=['PDF 任务已取消'], error='任务已取消', stage='已取消', progress=None)
-            self._cleanup_input(task.payload)
         else:
             self.store.update(task_id, logs=[*task.logs, '正在终止本地解析进程'], stage='正在取消')
         return True
@@ -56,6 +55,8 @@ class PdfQueue:
                     return
                 task_id, payload = self._queue.popleft()
                 cancelled = task_id in self._cancelled
+                if cancelled:
+                    self._cancelled.discard(task_id)
             if cancelled:
                 self._cleanup_input(payload)
                 continue
@@ -77,6 +78,8 @@ class PdfQueue:
             self.store.update(task_id, status=TaskStatus.CANCELLED if cancelled else TaskStatus.FAILED, logs=['PDF 解析未完成', str(exc)], error='任务已取消' if cancelled else str(exc), stage='已取消' if cancelled else '失败', progress=None)
         finally:
             self._cleanup_input(payload)
+            with self._lock:
+                self._cancelled.discard(task_id)
 
     @staticmethod
     def _cleanup_input(payload: dict[str, Any]) -> None:

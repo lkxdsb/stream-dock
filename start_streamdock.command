@@ -38,7 +38,7 @@ cleanup() {
 trap cleanup EXIT INT TERM HUP
 
 echo "正在启动 StreamDock..."
-"$PYTHON" -m uvicorn app:app --host 127.0.0.1 --port "$PORT" &
+STREAMDOCK_PORT="$PORT" "$PYTHON" app.py &
 SERVER_PID=$!
 
 for _ in {1..40}; do
