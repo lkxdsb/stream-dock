@@ -80,8 +80,35 @@ def read_ndjson_rows(path: Path) -> list[dict[str, Any]]:
 def read_xlsx_rows(path: Path) -> list[dict[str, Any]]:
     openpyxl = _require_openpyxl()
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    formula_wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    non_empty_sheets = []
+    for sheet in formula_wb.worksheets:
+        # Valid workbooks may omit worksheet dimensions. In openpyxl's
+        # read-only mode that is represented as None rather than zero/one.
+        max_row = sheet.max_row or 0
+        max_column = sheet.max_column or 0
+        if max_row > 1 or max_column > 1 or sheet.cell(1, 1).value is not None:
+            non_empty_sheets.append(sheet.title)
+    if len(non_empty_sheets) > 1:
+        wb.close(); formula_wb.close()
+        raise RuntimeError(
+            'XLSX 含多个非空工作表，CSV/JSON/TSV 无法保留多工作表结构；'
+            '请改用 XLSX 或 HTML/PDF 输出'
+        )
     ws = wb[wb.sheetnames[0]]
+    formula_ws = formula_wb[formula_wb.sheetnames[0]]
     rows = list(ws.iter_rows(values_only=True))
+    # CSV/JSON have no formula language: this path intentionally exports
+    # calculated values only.  Reject formula cells with no cached result so
+    # they cannot silently become blank cells in the output.
+    for value_row, formula_row in zip(rows, formula_ws.iter_rows(values_only=False)):
+        for value, formula_cell in zip(value_row, formula_row):
+            if isinstance(formula_cell.value, str) and formula_cell.value.startswith('=') and value is None:
+                wb.close()
+                formula_wb.close()
+                raise RuntimeError('XLSX 含未计算公式，CSV/JSON 仅导出计算值；请先用 Excel 或 LibreOffice 重新计算并保存')
+    formula_wb.close()
+    wb.close()
     if not rows:
         return []
     headers = [str(cell if cell is not None else f'column_{index + 1}') for index, cell in enumerate(rows[0])]
@@ -89,6 +116,24 @@ def read_xlsx_rows(path: Path) -> list[dict[str, Any]]:
     for row in rows[1:]:
         result.append({headers[index]: value for index, value in enumerate(row) if index < len(headers)})
     return result
+
+
+def inspect_xlsx_downgrades(path: Path) -> list[str]:
+    openpyxl = _require_openpyxl()
+    wb = openpyxl.load_workbook(path, read_only=False, data_only=False)
+    ws = wb[wb.sheetnames[0]]
+    notes: list[str] = []
+    if ws.merged_cells.ranges:
+        notes.append('降级说明：合并单元格仅导出左上角值')
+    if any(dimension.hidden for dimension in ws.row_dimensions.values()) or any(dimension.hidden for dimension in ws.column_dimensions.values()):
+        notes.append('降级说明：隐藏行列的数据会导出，但隐藏状态无法保留')
+    if ws._charts:
+        notes.append('降级说明：图表对象无法写入文本表格格式')
+    styled = any(cell.style_id for row in ws.iter_rows() for cell in row)
+    if styled:
+        notes.append('降级说明：单元格样式无法写入文本表格格式')
+    wb.close()
+    return notes
 
 
 def write_xlsx(rows: list[dict[str, Any]], path: Path) -> None:
@@ -177,6 +222,11 @@ def convert_data(source: str, target: str, input_path: Path, output_path: Path) 
         if not toml:
             raise RuntimeError('当前环境只能读取 TOML，写出 TOML 需要安装 toml 包')
         data = json.loads(input_path.read_text(encoding='utf-8'))
+        if not isinstance(data, dict):
+            # TOML documents have named top-level keys; a bare JSON array has
+            # no lossless TOML representation.  Do not leak toml's internal
+            # ``list indices must be integers`` exception to the user.
+            raise RuntimeError('JSON 顶层数组无法直接转换为 TOML；请将数组放入一个对象字段后重试')
         output_path.write_text(toml.dumps(data), encoding='utf-8')
         return logs + ['JSON 已转换为 TOML']
 
@@ -188,6 +238,8 @@ def convert_data(source: str, target: str, input_path: Path, output_path: Path) 
     if source in {'csv', 'tsv', 'json', 'ndjson', 'xlsx', 'txt'}:
         rows = read_rows(source, input_path)
         logs.append(f'读取到 {len(rows)} 行')
+        if source == 'xlsx' and target in {'csv', 'tsv', 'json'}:
+            logs.extend(inspect_xlsx_downgrades(input_path))
         if target == 'csv':
             write_delimited(rows, output_path, ',')
         elif target == 'tsv':

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import base64
 import html
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 LIBREOFFICE_CONVERT_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_LIBREOFFICE_TIMEOUT_SECONDS', str(10 * 60)))
+# LibreOffice's default CSV filter can follow a legacy locale encoding.  The
+# fourth filter option is the first row and 76 is LibreOffice's UTF-8 charset.
+LIBREOFFICE_UTF8_CSV_FILTER = 'csv:Text - txt - csv (StarCalc):44,34,76,1'
 
 
 def _html_to_text(text: str) -> str:
@@ -40,6 +45,9 @@ def _rtf_to_text(text: str) -> str:
     text = re.sub(r'\\par[d]?', '\n', text)
     text = re.sub(r"\\'[0-9a-fA-F]{2}", '', text)
     text = re.sub(r'\\u(-?\d+)\??', lambda m: chr(int(m.group(1)) % 65536), text)
+    # RTF represents non-BMP Unicode as two \u UTF-16 surrogate controls.
+    # Join them before returning Python text so emoji survive RTF read-back.
+    text = text.encode('utf-16', 'surrogatepass').decode('utf-16', 'replace')
     text = re.sub(r'\\[a-zA-Z]+-?\d* ?', '', text)
     text = text.replace('{', '').replace('}', '')
     text = text.replace('\\~', ' ').replace('\\-', '')
@@ -53,9 +61,36 @@ def _text_to_html(text: str) -> str:
 
 
 def _text_to_rtf(text: str) -> str:
-    escaped = text.replace('\\', r'\\').replace('{', r'\{').replace('}', r'\}')
-    escaped = escaped.replace('\n', r'\par ' + '\n')
-    return r'{\rtf1\ansi\deff0 ' + escaped + '}'
+    def unicode_escape(codepoint: int) -> str:
+        # RTF \u accepts a signed UTF-16 code unit.  Non-BMP characters (for
+        # example emoji) therefore need a surrogate pair.
+        units = [codepoint]
+        if codepoint > 0xFFFF:
+            value = codepoint - 0x10000
+            units = [0xD800 + (value >> 10), 0xDC00 + (value & 0x3FF)]
+        return ''.join(f'\\u{unit if unit < 0x8000 else unit - 0x10000}?' for unit in units)
+
+    parts: list[str] = []
+    for character in text:
+        if character == '\\':
+            parts.append(r'\\')
+        elif character == '{':
+            parts.append(r'\{')
+        elif character == '}':
+            parts.append(r'\}')
+        elif character == '\n':
+            parts.append('\\par\n')
+        elif character == '\r':
+            continue
+        elif character == '\t':
+            parts.append(r'\tab ')
+        elif 0x20 <= ord(character) <= 0x7E:
+            parts.append(character)
+        else:
+            parts.append(unicode_escape(ord(character)))
+    # Keep the physical file ASCII-only.  The RTF Unicode escapes, rather
+    # than UTF-8 bytes under \ansi, are what LibreOffice reliably restores.
+    return r'{\rtf1\ansi\ansicpg1252\deff0\uc1 ' + ''.join(parts) + '}'
 
 
 def _write_docx_from_text(text: str, output_path: Path) -> None:
@@ -87,6 +122,85 @@ def _read_docx_paragraphs(input_path: Path) -> list[str]:
         raise RuntimeError('缺少 python-docx，无法读取 DOCX') from exc
     doc = Document(str(input_path))
     return [p.text for p in doc.paragraphs]
+
+
+def _docx_to_html(input_path: Path) -> str:
+    """Export core DOCX structure without silently dropping tables/images."""
+    try:
+        from docx import Document  # type: ignore
+        from docx.oxml.ns import qn  # type: ignore
+        from docx.table import Table  # type: ignore
+        from docx.text.paragraph import Paragraph  # type: ignore
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError('缺少 python-docx，无法读取 DOCX') from exc
+
+    document = Document(str(input_path))
+
+    def paragraph_html(paragraph) -> str:
+        parts: list[str] = []
+        for run in paragraph.runs:
+            value = html.escape(run.text).replace('\n', '<br>')
+            if run.bold:
+                value = f'<strong>{value}</strong>'
+            if run.italic:
+                value = f'<em>{value}</em>'
+            parts.append(value)
+            for blip in run._r.iter(qn('a:blip')):
+                relationship_id = blip.get(qn('r:embed'))
+                related = document.part.related_parts.get(relationship_id)
+                if related is None or not hasattr(related, 'blob'):
+                    continue
+                mime = str(getattr(related, 'content_type', 'application/octet-stream'))
+                encoded = base64.b64encode(related.blob).decode('ascii')
+                parts.append(f'<img alt="DOCX image" src="data:{mime};base64,{encoded}">')
+        style = str(getattr(paragraph.style, 'name', '') or '')
+        match = re.match(r'Heading\s+([1-6])', style, flags=re.I)
+        tag = f'h{match.group(1)}' if match else 'p'
+        return f'<{tag}>{"".join(parts)}</{tag}>'
+
+    def table_html(table) -> str:
+        rows = []
+        for row_index, row in enumerate(table.rows):
+            cell_tag = 'th' if row_index == 0 else 'td'
+            cells = ''.join(f'<{cell_tag}>{html.escape(cell.text)}</{cell_tag}>' for cell in row.cells)
+            rows.append(f'<tr>{cells}</tr>')
+        return '<table>' + ''.join(rows) + '</table>'
+
+    body: list[str] = []
+    for child in document.element.body.iterchildren():
+        if child.tag == qn('w:p'):
+            body.append(paragraph_html(Paragraph(child, document)))
+        elif child.tag == qn('w:tbl'):
+            body.append(table_html(Table(child, document)))
+
+    headings = [paragraph.text.strip() for paragraph in document.paragraphs if str(getattr(paragraph.style, 'name', '') or '').lower().startswith('heading') and paragraph.text.strip()]
+    generated_toc = ''
+    if headings:
+        generated_toc = '<nav aria-label="文档目录"><h2>目录</h2><ol>' + ''.join(f'<li>{html.escape(item)}</li>' for item in headings) + '</ol></nav>'
+
+    comments = []
+    for comment in getattr(document, 'comments', []):
+        comments.append(
+            '<li><strong>' + html.escape(str(comment.author or '匿名')) + '</strong>：' + html.escape(comment.text or '') + '</li>'
+        )
+    comment_section = '<aside class="docx-comments"><h2>批注</h2><ol>' + ''.join(comments) + '</ol></aside>' if comments else ''
+
+    header_footer: list[str] = []
+    seen_parts: set[str] = set()
+    for section in document.sections:
+        for label, part in (('header', section.header), ('footer', section.footer)):
+            key = str(part.part.partname)
+            if key in seen_parts:
+                continue
+            seen_parts.add(key)
+            content = ''.join(paragraph_html(paragraph) for paragraph in part.paragraphs if paragraph.text.strip())
+            if content:
+                header_footer.append(f'<{label}>{content}</{label}>')
+    return (
+        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<style>table{border-collapse:collapse}td,th{border:1px solid #999;padding:.35em}img{max-width:100%;height:auto}</style>'
+        '</head><body>' + ''.join(header_footer[:1]) + generated_toc + ''.join(body) + comment_section + ''.join(header_footer[1:]) + '</body></html>\n'
+    )
 
 
 def _markdown_to_html(text: str) -> str:
@@ -202,12 +316,17 @@ def _libreoffice_convert(input_path: Path, output_dir: Path, target: str) -> Pat
     if not binary:
         raise RuntimeError('缺少 LibreOffice，无法执行 Office 基础转换')
     try:
-        completed = subprocess.run(
-            [binary, '--headless', '--convert-to', target, '--outdir', str(output_dir), str(input_path)],
-            text=True,
-            capture_output=True,
-            timeout=LIBREOFFICE_CONVERT_TIMEOUT_SECONDS,
-        )
+        convert_target = LIBREOFFICE_UTF8_CSV_FILTER if target == 'csv' else target
+        with tempfile.TemporaryDirectory(prefix='streamdock_lo_profile_') as profile_dir:
+            profile_uri = Path(profile_dir).resolve().as_uri()
+            completed = subprocess.run(
+                [binary, '--headless', '--nologo', '--nodefault', '--nolockcheck', '--norestore', '--invisible',
+                 f'-env:UserInstallation={profile_uri}', '--convert-to', convert_target, '--outdir', str(output_dir), str(input_path)],
+                text=True,
+                capture_output=True,
+                timeout=LIBREOFFICE_CONVERT_TIMEOUT_SECONDS,
+                env={**os.environ, 'SAL_DISABLE_OPENCL': '1'},
+            )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f'LibreOffice 转换超时，已停止任务（{LIBREOFFICE_CONVERT_TIMEOUT_SECONDS} 秒）') from exc
     if completed.returncode != 0:
@@ -237,7 +356,25 @@ def _epub_documents(input_path: Path) -> list[str]:
     documents = []
     for item in book.get_items():
         if item.get_type() == ebooklib.ITEM_DOCUMENT:
-            documents.append(item.get_content().decode('utf-8', errors='ignore'))
+            content = item.get_content().decode('utf-8', errors='ignore')
+            try:
+                from bs4 import BeautifulSoup  # type: ignore
+                soup = BeautifulSoup(content, 'html.parser')
+                for active in soup.find_all(['script', 'iframe', 'object', 'embed']):
+                    active.decompose()
+                for tag in soup.find_all(True):
+                    for attribute in list(tag.attrs):
+                        if attribute.lower().startswith('on'):
+                            del tag.attrs[attribute]
+                    for attribute in ('href', 'src', 'xlink:href'):
+                        value = str(tag.attrs.get(attribute) or '').strip().lower()
+                        if value.startswith(('http:', 'https:', 'file:', 'ftp:', 'javascript:')):
+                            del tag.attrs[attribute]
+                content = str(soup)
+            except ImportError:  # BeautifulSoup is already a core dependency in the app.
+                content = re.sub(r'<\s*(script|iframe|object|embed)\b.*?</\s*\1\s*>', '', content, flags=re.I | re.S)
+                content = re.sub(r'\son[a-z]+\s*=\s*(["\']).*?\1', '', content, flags=re.I | re.S)
+            documents.append(content)
     return documents
 
 
@@ -282,7 +419,7 @@ def convert_document_basic(source: str, target: str, input_path: Path, output_pa
         if target == 'txt':
             output_path.write_text('\n'.join(paragraphs), encoding='utf-8')
         else:
-            output_path.write_text('<!doctype html><meta charset="utf-8">\n' + ''.join(f'<p>{html.escape(p)}</p>' for p in paragraphs), encoding='utf-8')
+            output_path.write_text(_docx_to_html(input_path), encoding='utf-8')
     elif source == 'docx' and target == 'md':
         paragraphs = _read_docx_paragraphs(input_path)
         output_path.write_text('\n\n'.join(p for p in paragraphs if p.strip()) + '\n', encoding='utf-8')

@@ -347,6 +347,18 @@
                   <option value="highlight">完成后定位文件</option>
                 </select>
               </label>
+              <label class="convert-field">
+                <span>JPEG / WebP 图片质量</span>
+                <input id="convertImageQuality" type="number" min="1" max="100" value="90" />
+              </label>
+              <label class="convert-field"><span>音频码率（kbps）</span><input id="convertAudioBitrate" type="number" min="32" max="512" value="192" /></label>
+              <label class="convert-field"><span>音频采样率（0=保留）</span><input id="convertAudioSampleRate" type="number" min="0" max="192000" value="0" /></label>
+              <label class="convert-field"><span>视频最大宽度（0=保留）</span><input id="convertVideoMaxWidth" type="number" min="0" max="7680" value="0" /></label>
+              <label class="convert-field"><span>视频帧率（0=保留）</span><input id="convertVideoFrameRate" type="number" min="0" max="240" value="0" /></label>
+              <label class="convert-field"><span>视频码率 kbps（0=使用 CRF）</span><input id="convertVideoBitrate" type="number" min="0" max="100000" value="0" /></label>
+              <label class="convert-field"><span>视频 CRF</span><input id="convertVideoCrf" type="number" min="0" max="51" value="22" /></label>
+              <label class="convert-field"><span>硬件加速</span><select id="convertHardwareAcceleration"><option value="software">软件编码（兼容）</option><option value="videotoolbox">VideoToolbox（macOS）</option></select></label>
+              <label class="convert-field"><span>加密 ZIP 密码（仅本次，不保存）</span><input id="convertArchivePassword" type="password" autocomplete="off" value="" /></label>
             </div>
 
             <div class="convert-settings-actions">

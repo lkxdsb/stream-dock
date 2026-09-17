@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import os
 import io
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,7 +13,7 @@ import httpx
 os.environ['STREAMDOCK_TASK_STORAGE_PATH'] = ''
 
 from app import FetchRequest, app, parse_progress_update, task_store
-from tasks.models import TaskKind
+from tasks.models import TaskKind, TaskStatus
 from douyin_fetch import choose_media_capture, merge_streams_to_mp4, validate_output_request
 
 
@@ -177,6 +178,9 @@ class HomePageTests(unittest.IsolatedAsyncioTestCase):
                 body = run.json()
                 self.assertTrue(body['success'])
                 self.assertTrue(Path(body['outputPath']).exists())
+                download = await client.get(f"/api/convert/tasks/{body['task']['id']}/download")
+                self.assertEqual(download.status_code, 200)
+                self.assertEqual(download.content, Path(body['outputPath']).read_bytes())
 
         self.assertEqual(probe.status_code, 200)
         self.assertEqual(probe.json()['source'], 'csv')
@@ -597,14 +601,135 @@ class BatchConversionApiTests(unittest.IsolatedAsyncioTestCase):
                     ],
                     data={'inputType': 'csv', 'outputType': 'json', 'outputPath': tmp},
                 )
+                data = response.json()
+                query = '&'.join(f"taskId={task['id']}" for task in data['tasks'])
+                download = await client.get(f'/api/convert/tasks/download?{query}')
 
         self.assertEqual(response.status_code, 200)
-        data = response.json()
         self.assertTrue(data['success'], data.get('logs'))
         self.assertEqual(data['successCount'], 2)
         self.assertEqual(len(data['tasks']), 2)
         self.assertTrue(all(task['kind'] == 'convert' for task in data['tasks']))
         self.assertTrue(all(task['status'] == 'completed' for task in data['tasks']))
+        self.assertTrue(all(row.get('taskId') for row in data['results']))
+        self.assertTrue(all(row.get('comparison', {}).get('kind') == 'table' for row in data['results']))
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(download.headers['content-type'], 'application/zip')
+
+    async def test_convert_download_rejects_output_path_not_owned_by_task(self):
+        task_store.clear(TaskKind.CONVERT)
+        task = task_store.create(TaskKind.CONVERT, '未完成转换', {'source': 'csv', 'target': 'json'})
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            response = await client.get(f'/api/convert/tasks/{task.id}/download')
+
+        self.assertEqual(response.status_code, 409)
+
+    async def test_convert_result_cleanup_deletes_only_task_owned_output(self):
+        task_store.clear(TaskKind.CONVERT)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / 'converted.json'
+            output.write_text('{"ok": true}', encoding='utf-8')
+            untouched = root / 'unrelated.txt'
+            untouched.write_text('keep', encoding='utf-8')
+            task = task_store.create(TaskKind.CONVERT, '清理测试', {'source': 'csv', 'target': 'json'})
+            task_store.update(task.id, status=TaskStatus.COMPLETED, result={'outputPath': str(output)})
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                response = await client.delete(f'/api/convert/tasks/{task.id}/result')
+                download = await client.get(f'/api/convert/tasks/{task.id}/download')
+
+            self.assertEqual(response.status_code, 200)
+            self.assertFalse(output.exists())
+            self.assertTrue(untouched.exists())
+            self.assertTrue(response.json()['task']['result']['outputDeleted'])
+            self.assertEqual(download.status_code, 404)
+
+    async def test_convert_task_comparison_is_persisted_and_task_bound(self):
+        task_store.clear(TaskKind.CONVERT)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            with tempfile.TemporaryDirectory() as tmp:
+                response = await client.post(
+                    '/api/convert/run',
+                    files={'file': ('rows.csv', 'name,score\n中文,98.5\n'.encode('utf-8'), 'text/csv')},
+                    data={'inputType': 'csv', 'outputType': 'json', 'outputPath': tmp},
+                )
+                task_id = response.json()['task']['id']
+                comparison = await client.get(f'/api/convert/tasks/{task_id}/comparison')
+
+        self.assertEqual(comparison.status_code, 200)
+        data = comparison.json()['comparison']
+        self.assertEqual(data['kind'], 'table')
+        self.assertEqual(data['before']['rows'], 1)
+        self.assertEqual(data['after']['preview'][0][0], '中文')
+
+    async def test_convert_image_preview_is_task_bound_and_decodable(self):
+        from PIL import Image
+
+        task_store.clear(TaskKind.CONVERT)
+        source = io.BytesIO()
+        Image.new('RGBA', (18, 12), (30, 90, 180, 128)).save(source, format='PNG')
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            with tempfile.TemporaryDirectory() as tmp:
+                response = await client.post(
+                    '/api/convert/run',
+                    files={'file': ('preview.png', source.getvalue(), 'image/png')},
+                    data={'inputType': 'png', 'outputType': 'webp', 'outputPath': tmp},
+                )
+                task_id = response.json()['task']['id']
+                preview = await client.get(f'/api/convert/tasks/{task_id}/preview')
+
+        self.assertEqual(preview.status_code, 200)
+        with Image.open(io.BytesIO(preview.content)) as decoded:
+            self.assertEqual(decoded.size, (18, 12))
+
+    async def test_encrypted_zip_password_is_used_but_not_persisted(self):
+        if not shutil.which('zip'):
+            self.skipTest('zip command is not installed')
+        task_store.clear(TaskKind.CONVERT)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source_dir = root / 'source'; source_dir.mkdir(); output = root / 'out'; output.mkdir()
+            (source_dir / 'secret.txt').write_text('机密中文 😀', encoding='utf-8')
+            archive = root / 'encrypted.zip'
+            subprocess.run(['zip', '-q', '-P', 's3cret!', str(archive), 'secret.txt'], cwd=source_dir, check=True)
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                response = await client.post(
+                    '/api/convert/run',
+                    files={'file': ('encrypted.zip', archive.read_bytes(), 'application/zip')},
+                    data={'inputType': 'zip', 'outputType': 'folder', 'outputPath': str(output), 'archivePassword': 's3cret!'},
+                )
+
+            data = response.json()
+            self.assertTrue(data['success'], data.get('error'))
+            self.assertEqual((Path(data['outputPath']) / 'secret.txt').read_text(encoding='utf-8'), '机密中文 😀')
+            self.assertNotIn('archivePassword', data['task']['payload'])
+            self.assertNotIn('s3cret!', str(data['task']))
+
+    async def test_split_rar_batch_upload_runs_one_complete_archive_job(self):
+        if not shutil.which('bsdtar'):
+            self.skipTest('bsdtar is not installed')
+        task_store.clear(TaskKind.CONVERT)
+        fixture_root = Path(__file__).parent / 'fixtures' / 'real'
+        parts = sorted(fixture_root.glob('rar5-vols.part*.rar'))
+        with tempfile.TemporaryDirectory() as tmp:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                response = await client.post(
+                    '/api/convert/batch-run',
+                    files=[('files', (part.name, part.read_bytes(), 'application/vnd.rar')) for part in parts],
+                    data={'inputType': 'rar', 'outputType': 'folder', 'outputPath': tmp},
+                )
+
+            data = response.json()
+            self.assertTrue(data['success'], data.get('error'))
+            self.assertEqual(data['total'], 1)
+            output = Path(data['results'][0]['outputPath'])
+            self.assertEqual((output / 'vols' / 'bigfile.txt').stat().st_size, 205000)
+            self.assertEqual((output / 'vols' / 'smallfile.txt').stat().st_size, 2050)
 
     async def test_convert_run_rejects_single_file_over_size_limit(self):
         transport = httpx.ASGITransport(app=app)

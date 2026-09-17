@@ -1,5 +1,6 @@
 import io
 import json
+import re
 import shutil
 import subprocess
 import tarfile
@@ -12,8 +13,10 @@ from unittest.mock import patch
 
 from converters.adapters.archive import convert_archive
 from converters.adapters.data import dict_to_xml, read_xlsx_rows, xml_to_dict
-from converters.adapters.document_basic import _libreoffice_convert
+from converters.adapters.document_basic import _libreoffice_convert, _text_to_rtf
+from converters.sniff import sniff_file_format, validate_declared_format
 from converters.adapters.image import convert_image
+from converters.comparison import build_conversion_comparison
 from converters.adapters.media import convert_media
 from converters.models import ConversionLevel
 from converters.pipeline import convert_file
@@ -90,6 +93,31 @@ class ConverterRegistryTests(unittest.TestCase):
                 self.assertNotEqual(capability.level, ConversionLevel.VENDOR)
                 self.assertNotEqual(capability.target, 'pdf')
 
+    def test_real_7z_fixture_extracts_with_content_and_metadata(self):
+        if not shutil.which('bsdtar'):
+            self.skipTest('bsdtar is not installed')
+        fixture = Path(__file__).parent / 'fixtures' / 'real' / 'archive.7z'
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / 'output'
+            logs = convert_archive('7z', 'folder', fixture, output)
+            hello = output / '7zip-archive' / 'hello'
+
+            self.assertEqual(hello.read_text(encoding='utf-8'), 'hello\n')
+            self.assertEqual(hello.stat().st_mode & 0o777, 0o644)
+            self.assertTrue(any('libarchive' in line for line in logs))
+
+    def test_real_rar_fixture_extracts_nested_unicode_content(self):
+        if not shutil.which('bsdtar'):
+            self.skipTest('bsdtar is not installed')
+        fixture = Path(__file__).parent / 'fixtures' / 'real' / 'archive.rar'
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / 'output'
+            convert_archive('rar', 'folder', fixture, output)
+
+            self.assertEqual((output / 'sub' / 'dir1' / 'file1.txt').read_text(encoding='utf-8'), 'file1\n')
+            self.assertTrue((output / 'sub' / 'with space' / 'long fn.txt').is_file())
+            self.assertTrue(any('ȵ' in item.name for item in (output / 'sub').iterdir()))
+
     def test_infer_input_format_handles_compound_extensions(self):
         self.assertEqual(infer_input_format('archive.tar.gz'), 'tar.gz')
         self.assertEqual(infer_input_format('rows.ndjson'), 'ndjson')
@@ -97,6 +125,132 @@ class ConverterRegistryTests(unittest.TestCase):
 
 
 class ConverterPipelineTests(unittest.TestCase):
+    def test_zip_extraction_enforces_member_and_size_limits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / 'many.zip'
+            with zipfile.ZipFile(archive, 'w') as zf:
+                zf.writestr('first.txt', '1234')
+                zf.writestr('second.txt', '5678')
+            with patch('converters.adapters.archive.MAX_ARCHIVE_MEMBERS', 1):
+                with self.assertRaisesRegex(RuntimeError, '成员过多'):
+                    convert_archive('zip', 'folder', archive, root / 'members')
+            with patch('converters.adapters.archive.MAX_ARCHIVE_EXTRACTED_BYTES', 4):
+                with self.assertRaisesRegex(RuntimeError, '解压后大小过大'):
+                    convert_archive('zip', 'folder', archive, root / 'size')
+    def test_table_comparison_reports_schema_rows_and_preview(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'source.csv'
+            output = root / 'output.json'
+            source.write_text('name,score\n中文,98.5\n', encoding='utf-8')
+            output.write_text('[{"name": "中文", "score": "98.5"}]', encoding='utf-8')
+            comparison = build_conversion_comparison('csv', 'json', source, output)
+
+        self.assertTrue(comparison['available'])
+        self.assertEqual(comparison['kind'], 'table')
+        self.assertEqual(comparison['before']['rows'], 1)
+        self.assertEqual(comparison['after']['preview'][0][0], '中文')
+        self.assertEqual(comparison['rowDelta'], 0)
+        self.assertEqual(comparison['changedPreviewCells'], 0)
+
+    def test_table_comparison_reports_workbook_structure(self):
+        from openpyxl import Workbook
+        from openpyxl.chart import BarChart, Reference
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); before_path = root / 'before.xlsx'; after_path = root / 'after.xlsx'
+            workbook = Workbook(); sheet = workbook.active; sheet.append(['v']); sheet.append([1]); sheet['A3'] = '=A2+1'
+            sheet.merge_cells('A4:B4'); sheet.row_dimensions[2].hidden = True
+            chart = BarChart(); chart.add_data(Reference(sheet, min_col=1, min_row=1, max_row=2), titles_from_data=True); sheet.add_chart(chart, 'D2')
+            workbook.create_sheet('第二表')['A1'] = '中文'; workbook.save(before_path)
+            Workbook().save(after_path)
+
+            comparison = build_conversion_comparison('xlsx', 'xlsx', before_path, after_path)
+
+            self.assertTrue(comparison['workbookStructureChanged'])
+            self.assertEqual(comparison['before']['sheets'], 2)
+            self.assertEqual(comparison['before']['formulas'], 1)
+            self.assertEqual(comparison['before']['mergedRanges'], 1)
+            self.assertEqual(comparison['before']['hiddenRows'], 1)
+            self.assertEqual(comparison['before']['charts'], 1)
+
+    def test_text_comparison_uses_rendered_rtf_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'source.txt'
+            output = root / 'output.rtf'
+            source.write_text('第一行中文 😀\n', encoding='utf-8')
+            output.write_text(_text_to_rtf('第一行中文 😀\n'), encoding='ascii')
+            comparison = build_conversion_comparison('txt', 'rtf', source, output)
+
+        self.assertTrue(comparison['available'])
+        self.assertEqual(comparison['kind'], 'text')
+        self.assertIn('第一行中文 😀', comparison['after']['sample'])
+        self.assertEqual(comparison['addedLines'], 0)
+        self.assertEqual(comparison['removedLines'], 0)
+
+    def test_image_conversion_preserves_icc_and_reports_lossy_quality(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'source.png'
+            output = root / 'output.webp'
+            Image.new('RGBA', (12, 8), (20, 40, 60, 128)).save(source, icc_profile=b'profile-data')
+            logs = convert_image('png', 'webp', source, output)
+            with Image.open(output) as converted:
+                self.assertEqual(converted.size, (12, 8))
+                self.assertEqual(converted.info.get('icc_profile'), b'profile-data')
+
+        self.assertTrue(any('质量' in line for line in logs))
+
+    def test_multiframe_tiff_to_png_preserves_all_frames_as_apng(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'animation.tiff'
+            output = root / 'animation.png'
+            first = Image.new('RGB', (10, 6), (255, 0, 0))
+            second = Image.new('RGB', (10, 6), (0, 0, 255))
+            first.save(source, save_all=True, append_images=[second])
+
+            logs = convert_image('tiff', 'png', source, output)
+            with Image.open(output) as converted:
+                self.assertEqual(converted.n_frames, 2)
+                converted.seek(1)
+                self.assertEqual(converted.convert('RGB').getpixel((0, 0)), (0, 0, 255))
+
+        self.assertTrue(any('APNG' in line for line in logs))
+
+    def test_multiframe_tiff_to_jpg_refuses_silent_frame_loss(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'animation.tiff'
+            first = Image.new('RGB', (10, 6), 'red'); second = Image.new('RGB', (10, 6), 'blue')
+            first.save(source, save_all=True, append_images=[second])
+
+            with self.assertRaisesRegex(RuntimeError, '无法完整保留所有帧'):
+                convert_image('tiff', 'jpg', source, root / 'output.jpg')
+
+    def test_apng_to_gif_preserves_all_frames(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'animation.png'
+            output = root / 'animation.gif'
+            frames = [Image.new('RGBA', (9, 7), color) for color in ((255, 0, 0, 255), (0, 255, 0, 255), (0, 0, 255, 255))]
+            frames[0].save(source, save_all=True, append_images=frames[1:], duration=[80, 90, 100], loop=0)
+
+            logs = convert_image('png', 'gif', source, output)
+            with Image.open(output) as converted:
+                self.assertEqual(converted.n_frames, 3)
+
+        self.assertTrue(any('3 帧' in line for line in logs))
     def test_conversion_timeout_terminates_worker_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -140,6 +294,56 @@ class ConverterPipelineTests(unittest.TestCase):
             self.assertEqual(parsed['app']['name'], 'StreamDock')
             self.assertEqual(parsed['app']['port'], 8002)
 
+    def test_json_array_to_toml_reports_a_supported_user_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'items.json'
+            source.write_text('[{"name": "StreamDock"}]', encoding='utf-8')
+
+            result = convert_file(source, source.name, 'json', 'toml', root)
+
+        self.assertFalse(result.success)
+        self.assertIn('顶层数组', result.error)
+        self.assertNotIn('list indices', result.error)
+
+    def test_tabular_txt_output_is_accepted_as_txt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'items.json'
+            source.write_text('[{"name": "中文", "note": "emoji 😀"}]', encoding='utf-8')
+
+            result = convert_file(source, source.name, 'json', 'txt', root)
+
+            self.assertTrue(result.success, result.error)
+            self.assertIn('\t', result.output_path.read_text(encoding='utf-8'))
+
+
+    def test_rtf_writer_uses_unicode_escapes_for_cjk_and_emoji(self):
+        rtf = _text_to_rtf('第一行中文 😀\\n')
+
+        self.assertTrue(rtf.isascii())
+        self.assertIn(r'\u31532?', rtf)
+        self.assertIn(r'\u-10179?', rtf)  # high surrogate for U+1F600
+
+    def test_sniff_recognizes_ndjson_amr_and_tar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ndjson = root / 'rows.ndjson'
+            ndjson.write_text('{"name":"甲","note":"a,b"}\n{"name":"乙"}\n', encoding='utf-8')
+            amr = root / 'sample.amr'
+            amr.write_bytes(b'#!AMR\n\x00\x01')
+            archive = root / 'sample.tar'
+            payload = b'hello'
+            with tarfile.open(archive, 'w') as tf:
+                info = tarfile.TarInfo('hello.txt')
+                info.size = len(payload)
+                tf.addfile(info, io.BytesIO(payload))
+
+            self.assertEqual(sniff_file_format(ndjson), 'ndjson')
+            self.assertEqual(sniff_file_format(amr), 'amr')
+            self.assertEqual(sniff_file_format(archive), 'tar')
+            self.assertTrue(validate_declared_format(ndjson, 'ndjson')[0])
+
     def test_xlsx_reader_preserves_zero_header(self):
         from openpyxl import Workbook
 
@@ -154,6 +358,76 @@ class ConverterPipelineTests(unittest.TestCase):
             rows = read_xlsx_rows(path)
 
         self.assertEqual(rows, [{'0': 'value', 'column_2': 'fallback'}])
+
+    def test_xlsx_formula_without_cached_value_has_clear_export_policy(self):
+        from openpyxl import Workbook
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'formula.xlsx'
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(['total'])
+            sheet.append(['=SUM(1, 2)'])
+            workbook.save(path)
+            with self.assertRaisesRegex(RuntimeError, '仅导出计算值'):
+                read_xlsx_rows(path)
+
+    def test_xlsx_text_export_rejects_multiple_nonempty_sheets(self):
+        from openpyxl import Workbook
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'multi.xlsx'
+            workbook = Workbook(); workbook.active.append(['sheet-one'])
+            workbook.create_sheet('第二表').append(['sheet-two'])
+            workbook.save(source)
+
+            result = convert_file(source, source.name, 'xlsx', 'csv', root)
+
+            self.assertFalse(result.success)
+            self.assertIn('多个非空工作表', result.error)
+
+    def test_xlsx_reader_handles_missing_worksheet_dimensions(self):
+        from openpyxl import Workbook
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original = root / 'original.xlsx'
+            source = root / 'missing-dimensions.xlsx'
+            workbook = Workbook(); workbook.active.append(['sheet-one'])
+            workbook.create_sheet('第二表').append(['sheet-two'])
+            workbook.save(original)
+            with zipfile.ZipFile(original) as incoming, zipfile.ZipFile(source, 'w', zipfile.ZIP_DEFLATED) as outgoing:
+                for info in incoming.infolist():
+                    data = incoming.read(info.filename)
+                    if info.filename.startswith('xl/worksheets/sheet') and info.filename.endswith('.xml'):
+                        data = re.sub(br'<dimension\s+ref="[^"]+"\s*/>', b'', data)
+                    outgoing.writestr(info, data)
+
+            with self.assertRaisesRegex(RuntimeError, '多个非空工作表'):
+                read_xlsx_rows(source)
+
+    def test_xlsx_csv_logs_unrepresentable_structure_downgrades(self):
+        from openpyxl import Workbook
+        from openpyxl.chart import BarChart, Reference
+        from openpyxl.styles import Font
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'structured.xlsx'
+            workbook = Workbook(); sheet = workbook.active
+            sheet.append(['name', 'score']); sheet.append(['张三', 98]); sheet.append(['李四', 87])
+            sheet['A1'].font = Font(bold=True); sheet.merge_cells('A4:B4'); sheet['A4'] = '合并'
+            sheet.row_dimensions[3].hidden = True
+            chart = BarChart(); chart.add_data(Reference(sheet, min_col=2, min_row=1, max_row=3), titles_from_data=True); sheet.add_chart(chart, 'D2')
+            workbook.save(source)
+
+            result = convert_file(source, source.name, 'xlsx', 'csv', root)
+
+            self.assertTrue(result.success, result.error)
+            joined = '\n'.join(result.logs)
+            for keyword in ('合并单元格', '隐藏行列', '图表对象', '单元格样式'):
+                self.assertIn(keyword, joined)
 
     def test_xml_reader_preserves_mixed_content_text(self):
         root = ET.fromstring('<root>leading text<child>value</child></root>')
@@ -290,6 +564,91 @@ class ConverterPipelineTests(unittest.TestCase):
             self.assertIn('00:00:01,200 --> 00:00:03,000', content)
             self.assertIn('第一句', content)
 
+    def test_docx_to_html_preserves_table_image_header_and_footer(self):
+        from docx import Document
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'rich.docx'
+            image_path = root / 'figure.png'
+            Image.new('RGB', (8, 6), 'red').save(image_path)
+            document = Document()
+            document.sections[0].header.paragraphs[0].text = '页眉中文'
+            document.add_heading('丰富文档', level=1)
+            paragraph = document.add_paragraph('正文 emoji 😀')
+            document.add_comment(paragraph.runs[0], text='请复核这段内容', author='审阅人', initials='QA')
+            paragraph.add_run().add_picture(str(image_path))
+            table = document.add_table(rows=2, cols=2)
+            table.cell(0, 0).text = '姓名'; table.cell(0, 1).text = '分数'
+            table.cell(1, 0).text = '张三'; table.cell(1, 1).text = '98'
+            document.sections[0].footer.paragraphs[0].text = '页脚内容'
+            document.save(source)
+
+            result = convert_file(source, source.name, 'docx', 'html', root)
+
+            self.assertTrue(result.success, result.error)
+            content = result.output_path.read_text(encoding='utf-8')
+            self.assertIn('<table>', content)
+            self.assertIn('张三', content)
+            self.assertIn('data:image/png;base64,', content)
+            self.assertIn('页眉中文', content)
+            self.assertIn('页脚内容', content)
+            self.assertIn('<nav aria-label="文档目录">', content)
+            self.assertIn('请复核这段内容', content)
+            self.assertIn('审阅人', content)
+
+    def test_xml_external_entity_is_rejected_before_parse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'unsafe.xml'
+            source.write_text(
+                '<?xml version="1.0"?><!DOCTYPE root [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><root>&xxe;</root>',
+                encoding='utf-8',
+            )
+
+            result = convert_file(source, source.name, 'xml', 'json', root)
+
+            self.assertFalse(result.success)
+            self.assertIn('XML 外部实体', result.error)
+
+    def test_svg_script_and_external_resource_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'unsafe.svg'
+            source.write_text(
+                '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><image href="https://example.invalid/x.png"/></svg>',
+                encoding='utf-8',
+            )
+
+            result = convert_file(source, source.name, 'svg', 'png', root)
+
+            self.assertFalse(result.success)
+            self.assertIn('SVG 包含脚本', result.error)
+
+    def test_docx_external_relationship_is_rejected_before_conversion(self):
+        from docx import Document
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            clean = root / 'clean.docx'
+            source = root / 'external.docx'
+            document = Document(); document.add_paragraph('正文'); document.save(clean)
+            with zipfile.ZipFile(clean) as incoming, zipfile.ZipFile(source, 'w', zipfile.ZIP_DEFLATED) as outgoing:
+                for info in incoming.infolist():
+                    data = incoming.read(info.filename)
+                    if info.filename == 'word/_rels/document.xml.rels':
+                        data = data.replace(
+                            b'</Relationships>',
+                            b'<Relationship Id="rIdExternal" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid/" TargetMode="External"/></Relationships>',
+                        )
+                    outgoing.writestr(info, data)
+
+            result = convert_file(source, source.name, 'docx', 'html', root)
+
+            self.assertFalse(result.success)
+            self.assertIn('外部链接关系', result.error)
+
     def test_pipeline_converts_png_to_ico(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -342,6 +701,30 @@ class ConverterPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '不安全路径'):
                 convert_archive('zip', 'folder', archive, tmp_path / 'out')
             self.assertFalse((tmp_path / 'pwned.txt').exists())
+
+    def test_archive_extraction_rejects_extreme_compression_ratio(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / 'bomb.zip'
+            with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr('repeated.bin', b'0' * (2 * 1024 * 1024))
+
+            with self.assertRaisesRegex(RuntimeError, '压缩炸弹'):
+                convert_archive('zip', 'folder', archive, root / 'out')
+
+    def test_archive_packing_rejects_symbolic_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            folder = root / 'source'
+            folder.mkdir()
+            (folder / 'real.txt').write_text('safe', encoding='utf-8')
+            try:
+                (folder / 'alias.txt').symlink_to(folder / 'real.txt')
+            except OSError:
+                self.skipTest('current filesystem does not support symlinks')
+
+            with self.assertRaisesRegex(RuntimeError, '符号链接'):
+                convert_archive('folder', 'zip', folder, root / 'out.zip')
 
     def test_archive_extraction_rejects_tar_special_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -452,10 +835,49 @@ class ConverterPipelineTests(unittest.TestCase):
                     mocked_run.return_value.returncode = 0
                     mocked_run.return_value.stderr = ''
 
-                    convert_media('mp4', 'mp3', input_file, output_file)
+                    convert_media('mp4', 'mp3', input_file, output_file, options={'audioBitrateKbps': 96, 'audioSampleRate': 22050})
 
             self.assertIn('timeout', mocked_run.call_args.kwargs)
             self.assertGreater(mocked_run.call_args.kwargs['timeout'], 0)
+            self.assertIn('-map_metadata', mocked_run.call_args.args[0])
+            self.assertIn('-map_chapters', mocked_run.call_args.args[0])
+            self.assertIn('96k', mocked_run.call_args.args[0])
+            self.assertIn('22050', mocked_run.call_args.args[0])
+
+    def test_media_conversion_maps_cover_only_when_probe_finds_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / 'demo.m4a'
+            output_file = tmp_path / 'demo.mp3'
+            input_file.write_bytes(b'fake')
+
+            with patch('converters.adapters.media.shutil.which', return_value='/usr/bin/tool'):
+                with patch('converters.adapters.media._attached_picture_stream', return_value=2):
+                    with patch('converters.adapters.media.subprocess.run') as mocked_run:
+                        mocked_run.return_value.returncode = 0
+                        mocked_run.return_value.stderr = ''
+                        convert_media('m4a', 'mp3', input_file, output_file)
+
+            command = mocked_run.call_args.args[0]
+            self.assertIn('0:2', command)
+            self.assertIn('attached_pic', command)
+
+    def test_video_conversion_maps_subtitles_and_uses_container_codec(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / 'demo.mkv'
+            output_file = tmp_path / 'demo.mp4'
+            input_file.write_bytes(b'fake')
+
+            with patch('converters.adapters.media.shutil.which', return_value='/usr/bin/ffmpeg'):
+                with patch('converters.adapters.media.subprocess.run') as mocked_run:
+                    mocked_run.return_value.returncode = 0
+                    mocked_run.return_value.stderr = ''
+                    convert_media('mkv', 'mp4', input_file, output_file)
+
+            command = mocked_run.call_args.args[0]
+            self.assertIn('0:s?', command)
+            self.assertEqual(command[command.index('-c:s') + 1], 'mov_text')
 
     def test_liberoffice_conversion_reports_timeout_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -470,6 +892,24 @@ class ConverterPipelineTests(unittest.TestCase):
                 ):
                     with self.assertRaisesRegex(RuntimeError, '超时'):
                         _libreoffice_convert(input_file, tmp_path, 'pdf')
+
+    def test_libreoffice_csv_conversion_requests_utf8_filter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / 'demo.xls'
+            input_file.write_bytes(b'fake')
+            expected = tmp_path / 'demo.csv'
+
+            with patch('converters.adapters.document_basic.shutil.which', return_value='/usr/bin/soffice'):
+                with patch('converters.adapters.document_basic.subprocess.run') as mocked_run:
+                    mocked_run.return_value.returncode = 0
+                    mocked_run.return_value.stderr = ''
+                    mocked_run.return_value.stdout = ''
+                    expected.write_text('姓名,emoji\n中文,😀\n', encoding='utf-8')
+                    produced = _libreoffice_convert(input_file, tmp_path, 'csv')
+
+        self.assertEqual(produced, expected)
+        self.assertIn('csv:Text - txt - csv (StarCalc):44,34,76,1', mocked_run.call_args.args[0])
 
 
 if __name__ == '__main__':

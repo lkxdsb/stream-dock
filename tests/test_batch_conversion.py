@@ -2,10 +2,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from converters.batch import BatchInput, convert_batch_files, validate_batch_route
+from converters.batch import BatchInput, collapse_split_archive_inputs, convert_batch_files, validate_batch_route
 
 
 class BatchConversionTests(unittest.TestCase):
+    def test_split_rar_inputs_collapse_to_primary_volume(self):
+        inputs = [BatchInput(f'archive.part{number}.rar', 'rar', Path(f'/tmp/archive.part{number}.rar')) for number in (3, 1, 2)]
+        collapsed = collapse_split_archive_inputs(inputs)
+        self.assertEqual([item.filename for item in collapsed], ['archive.part1.rar'])
+
+    def test_split_rar_inputs_reject_missing_volume(self):
+        inputs = [BatchInput(f'archive.part{number}.rar', 'rar') for number in (1, 3)]
+        with self.assertRaisesRegex(RuntimeError, '缺少卷'):
+            collapse_split_archive_inputs(inputs)
+
     def test_validate_batch_route_accepts_identical_sources(self):
         validation = validate_batch_route(['a.csv', 'b.csv'], 'json')
         self.assertTrue(validation.success, validation.error)

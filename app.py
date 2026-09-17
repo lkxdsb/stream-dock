@@ -19,13 +19,15 @@ from urllib.parse import quote, urlparse
 from uuid import uuid4
 
 import requests
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from converters.batch import BatchInput, convert_batch_files, make_batch_inputs, validate_batch_route
+from converters.batch import BatchInput, collapse_split_archive_inputs, convert_batch_files, make_batch_inputs, validate_batch_route
+from converters.comparison import build_conversion_comparison
 from converters.models import ConversionLevel
 from converters.executor import convert_file_with_timeout
 from converters.registry import find_capability, infer_input_format, list_capabilities, normalize_format, targets_for_source
@@ -46,7 +48,7 @@ from tasks.pdf_queue import PdfQueue
 from tasks.subtitle_queue import SubtitleQueue
 from tasks.models import TaskKind, TaskStatus
 from tasks.store import TaskStore
-from runtime_checks import augmented_path, cleanup_task_partials, deep_media_quality, ensure_system_proxy_environment, environment_health, network_subprocess_environment, prepare_output_directory, validate_media_output
+from runtime_checks import augmented_path, cleanup_task_partials, deep_media_quality, ensure_system_proxy_environment, environment_health, network_subprocess_environment, prepare_output_directory, resolve_tool_path, validate_media_output
 from subtitles.service import export_subtitles, normalize_format as normalize_subtitle_format, parse_subtitles
 
 ensure_system_proxy_environment()
@@ -76,10 +78,32 @@ CONVERT_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_CONVERT_TIMEOUT_SECONDS', '1
 MEDIA_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_MEDIA_TIMEOUT_SECONDS', str(20 * 60)))
 MEDIA_IDLE_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_MEDIA_IDLE_TIMEOUT_SECONDS', str(5 * 60)))
 MAX_SUBTITLE_FILE_BYTES = int(os.getenv('STREAMDOCK_MAX_SUBTITLE_FILE_BYTES', str(5 * 1024 * 1024)))
+CONVERT_RETRY_ROOT = Path(tempfile.gettempdir()) / 'streamdock-convert-retry-inputs'
+CONVERT_PREVIEW_ROOT = Path(tempfile.gettempdir()) / 'streamdock-convert-previews'
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app = FastAPI(title='Douyin Local Fetch UI')
 app.mount('/static', StaticFiles(directory=str(STATIC_DIR)), name='static')
+
+
+def _normalized_media_options(
+    audio_bitrate: int = 192,
+    audio_sample_rate: int = 0,
+    video_max_width: int = 0,
+    video_frame_rate: int = 0,
+    video_bitrate: int = 0,
+    video_crf: int = 22,
+    hardware_acceleration: str = 'software',
+) -> dict[str, object]:
+    return {
+        'audioBitrateKbps': max(32, min(512, audio_bitrate)),
+        'audioSampleRate': max(0, min(192000, audio_sample_rate)),
+        'videoMaxWidth': max(0, min(7680, video_max_width)),
+        'videoFrameRate': max(0, min(240, video_frame_rate)),
+        'videoBitrateKbps': max(0, min(100000, video_bitrate)),
+        'videoCrf': max(0, min(51, video_crf)),
+        'hardwareAcceleration': hardware_acceleration if hardware_acceleration in {'software', 'videotoolbox'} else 'software',
+    }
 
 
 def parse_progress_update(line: str) -> tuple[float | None, str] | None:
@@ -1412,14 +1436,26 @@ async def convert_run(
     outputPath: str = Form(...),
     inputType: str | None = Form(None),
     namingStrategy: str = Form('append'),
+    imageQuality: int = Form(90),
+    audioBitrateKbps: int = Form(192),
+    audioSampleRate: int = Form(0),
+    videoMaxWidth: int = Form(0),
+    videoFrameRate: int = Form(0),
+    videoBitrateKbps: int = Form(0),
+    videoCrf: int = Form(22),
+    hardwareAcceleration: str = Form('software'),
+    archivePassword: str = Form(''),
 ):
     filename = file.filename or 'input'
     source = inputType or infer_input_format(filename)
     target = outputType
+    media_options = _normalized_media_options(audioBitrateKbps, audioSampleRate, videoMaxWidth, videoFrameRate, videoBitrateKbps, videoCrf, hardwareAcceleration)
+    archive_options = {'password': archivePassword} if archivePassword else {}
     capability = find_capability(source, target)
     if capability is None:
         await file.close()
         return JSONResponse({'success': False, 'error': f'暂不支持 {source.upper()} → {target.upper()} 转换路径', 'logs': []})
+    comparison: dict | None = None
     with tempfile.TemporaryDirectory(prefix='streamdock_convert_') as tmp_dir:
         input_path = Path(tmp_dir) / Path(filename).name
         try:
@@ -1435,8 +1471,9 @@ async def convert_run(
         task = task_store.create(
             TaskKind.CONVERT,
             f'{Path(filename).name} → {normalize_format(target).upper()}',
-            {'filename': Path(filename).name, 'source': source, 'target': target, 'outputPath': outputPath},
+            {'filename': Path(filename).name, 'source': source, 'target': target, 'outputPath': outputPath, 'imageQuality': max(1, min(100, imageQuality)), 'mediaOptions': media_options, 'archiveEncrypted': bool(archivePassword)},
         )
+        _retain_convert_input(task.id, filename, input_path)
         task_store.update(task.id, status=TaskStatus.RUNNING, logs=['正在转换文件'], stage='转换中', progress=15)
         result = await asyncio.to_thread(
             convert_file_with_timeout,
@@ -1447,8 +1484,15 @@ async def convert_run(
             Path(outputPath).expanduser(),
             timeout_seconds=CONVERT_TIMEOUT_SECONDS,
             naming_strategy=namingStrategy,
+            image_quality=imageQuality,
+            media_options=media_options,
+            archive_options=archive_options,
         )
+        if result.success and result.output_path:
+            comparison = build_conversion_comparison(source, target, input_path, result.output_path)
     body = result.to_dict()
+    if comparison is not None:
+        body['comparison'] = comparison
     body['capability'] = capability.to_dict()
     task_store.update(
         task.id,
@@ -1470,6 +1514,15 @@ async def convert_batch_run(
     outputPath: str = Form(...),
     inputType: str | None = Form(None),
     namingStrategy: str = Form('append'),
+    imageQuality: int = Form(90),
+    audioBitrateKbps: int = Form(192),
+    audioSampleRate: int = Form(0),
+    videoMaxWidth: int = Form(0),
+    videoFrameRate: int = Form(0),
+    videoBitrateKbps: int = Form(0),
+    videoCrf: int = Form(22),
+    hardwareAcceleration: str = Form('software'),
+    archivePassword: str = Form(''),
 ):
     filenames = [file.filename or 'input' for file in files]
     if len(files) > MAX_CONVERT_BATCH_FILES:
@@ -1494,8 +1547,11 @@ async def convert_batch_run(
         )
 
     target = normalize_format(outputType)
+    media_options = _normalized_media_options(audioBitrateKbps, audioSampleRate, videoMaxWidth, videoFrameRate, videoBitrateKbps, videoCrf, hardwareAcceleration)
+    archive_options = {'password': archivePassword} if archivePassword else {}
     output_dir = Path(outputPath).expanduser()
     tasks = []
+    comparisons: dict[str, dict] = {}
     with tempfile.TemporaryDirectory(prefix='streamdock_batch_convert_') as tmp_dir:
         tmp_path = Path(tmp_dir)
         batch_inputs: list[BatchInput] = []
@@ -1521,6 +1577,11 @@ async def convert_batch_run(
                 await upload.close()
             raise
 
+        try:
+            batch_inputs = list(collapse_split_archive_inputs(batch_inputs))
+        except RuntimeError as exc:
+            return JSONResponse({'success': False, 'error': str(exc), 'tasks': []}, status_code=400)
+
         for item in batch_inputs:
             valid, detected = validate_declared_format(item.input_path, item.source)
             if not valid:
@@ -1537,8 +1598,9 @@ async def convert_batch_run(
             task = task_store.create(
                 TaskKind.CONVERT,
                 f'{item.filename} → {target.upper()}',
-                {'filename': item.filename, 'source': item.source, 'target': target, 'outputPath': str(output_dir)},
+                {'filename': item.filename, 'source': item.source, 'target': target, 'outputPath': str(output_dir), 'imageQuality': max(1, min(100, imageQuality)), 'mediaOptions': media_options, 'archiveEncrypted': bool(archivePassword)},
             )
+            _retain_convert_input(task.id, item.filename, item.input_path)
             task_store.update(task.id, status=TaskStatus.RUNNING, logs=['正在等待批量转换执行'], stage='等待批量转换', progress=5)
             tasks.append(task)
 
@@ -1549,10 +1611,19 @@ async def convert_batch_run(
             output_dir,
             timeout_seconds=CONVERT_TIMEOUT_SECONDS,
             naming_strategy=namingStrategy,
+            image_quality=imageQuality,
+            media_options=media_options,
+            archive_options=archive_options,
         )
+        for task, row, item in zip(tasks, result.get('results', []), batch_inputs):
+            if row.get('success') and row.get('outputPath') and item.input_path:
+                comparisons[task.id] = build_conversion_comparison(item.source, target, item.input_path, Path(str(row['outputPath'])))
 
     rows = result.get('results', [])
-    for task, row in zip(tasks, rows):
+    for task, row, item in zip(tasks, rows, batch_inputs):
+        row['taskId'] = task.id
+        if task.id in comparisons:
+            row['comparison'] = comparisons[task.id]
         status = TaskStatus.COMPLETED if row.get('success') else TaskStatus.FAILED
         task_store.update(
             task.id,
@@ -1577,6 +1648,158 @@ async def convert_batch_run(
 def convert_select_output_dir():
     success, selected_path, error = select_output_directory_with_system_dialog()
     return JSONResponse({'success': success, 'path': selected_path, 'error': error})
+
+
+def _completed_convert_output(task_id: str) -> tuple[object, Path]:
+    """Resolve a downloadable output strictly from its completed conversion task."""
+    task = task_store.get(task_id)
+    if task is None or task.kind != TaskKind.CONVERT:
+        raise HTTPException(status_code=404, detail='转换任务不存在')
+    if task.status != TaskStatus.COMPLETED:
+        raise HTTPException(status_code=409, detail='转换任务尚未成功完成，暂时不能下载')
+    output_value = (task.result or {}).get('outputPath')
+    if not output_value:
+        raise HTTPException(status_code=404, detail='任务没有可下载的输出文件')
+    output = Path(str(output_value)).expanduser().resolve()
+    if not output.exists() or not (output.is_file() or output.is_dir()):
+        raise HTTPException(status_code=404, detail='转换结果已不存在或已被清理')
+    return task, output
+
+
+def _retain_convert_input(task_id: str, filename: str, source: Path) -> Path:
+    destination = CONVERT_RETRY_ROOT / task_id / Path(filename).name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    return destination
+
+
+def _cleanup_convert_retry_input(task_id: str) -> None:
+    shutil.rmtree(CONVERT_RETRY_ROOT / task_id, ignore_errors=True)
+
+
+def _cleanup_convert_preview(task_id: str) -> None:
+    shutil.rmtree(CONVERT_PREVIEW_ROOT / task_id, ignore_errors=True)
+
+
+def _media_preview(output: Path, task_id: str) -> Path:
+    preview_dir = CONVERT_PREVIEW_ROOT / task_id
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    preview = preview_dir / 'preview.jpg'
+    if preview.is_file() and preview.stat().st_mtime >= output.stat().st_mtime:
+        return preview
+    ffmpeg = resolve_tool_path('ffmpeg')
+    video = subprocess.run(
+        [ffmpeg, '-y', '-ss', '0.1', '-i', str(output), '-frames:v', '1', '-vf', 'scale=960:-2', str(preview)],
+        capture_output=True,
+        timeout=60,
+    )
+    if video.returncode == 0 and preview.is_file() and preview.stat().st_size:
+        return preview
+    preview.unlink(missing_ok=True)
+    audio = subprocess.run(
+        [ffmpeg, '-y', '-i', str(output), '-filter_complex', 'aformat=channel_layouts=mono,showwavespic=s=960x360:colors=0x2f6fed', '-frames:v', '1', str(preview)],
+        capture_output=True,
+        timeout=60,
+    )
+    if audio.returncode != 0 or not preview.is_file() or not preview.stat().st_size:
+        raise RuntimeError('无法生成音视频预览缩略图')
+    return preview
+
+
+def _download_archive(outputs: list[tuple[str, Path]], filename: str) -> FileResponse:
+    """Package task-owned outputs and remove the temporary archive after send."""
+    temp_file = tempfile.NamedTemporaryFile(prefix='streamdock_convert_download_', suffix='.zip', delete=False)
+    archive_path = Path(temp_file.name)
+    temp_file.close()
+    try:
+        with zipfile.ZipFile(archive_path, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            for task_id, output in outputs:
+                # Prefix members so same-named batch results cannot overwrite
+                # one another after extraction.
+                prefix = Path(f'{task_id}_{output.stem}')
+                if output.is_file():
+                    archive.write(output, prefix / output.name)
+                    continue
+                for candidate in output.rglob('*'):
+                    if not candidate.is_file() or candidate.is_symlink():
+                        continue
+                    archive.write(candidate, prefix / candidate.relative_to(output))
+    except Exception:
+        archive_path.unlink(missing_ok=True)
+        raise
+    return FileResponse(
+        archive_path,
+        media_type='application/zip',
+        filename=filename,
+        background=BackgroundTask(lambda: archive_path.unlink(missing_ok=True)),
+    )
+
+
+@app.get('/api/convert/tasks/{task_id}/download')
+def download_convert_task(task_id: str):
+    """Download one task output without accepting a server-local path."""
+    _, output = _completed_convert_output(task_id)
+    if output.is_file():
+        return FileResponse(output, filename=output.name)
+    return _download_archive([(task_id, output)], f'{output.name}.zip')
+
+
+@app.get('/api/convert/tasks/download')
+def download_convert_tasks(task_id: list[str] = Query(..., alias='taskId')):
+    """Package successful, task-owned conversion results for batch download."""
+    unique_ids = list(dict.fromkeys(task_id))
+    if not unique_ids:
+        raise HTTPException(status_code=400, detail='请至少提供一个转换任务 ID')
+    outputs = [(item, _completed_convert_output(item)[1]) for item in unique_ids]
+    return _download_archive(outputs, 'streamdock-conversion-results.zip')
+
+
+@app.delete('/api/convert/tasks/{task_id}/result')
+def cleanup_convert_task_result(task_id: str):
+    """Delete only the output owned by one completed conversion task."""
+    task, output = _completed_convert_output(task_id)
+    try:
+        if output.is_dir():
+            shutil.rmtree(output)
+        else:
+            output.unlink()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f'清理转换结果失败：{exc}') from exc
+    result = dict(task.result or {})
+    result.update({'outputPath': None, 'outputDeleted': True, 'outputName': output.name})
+    updated = task_store.update(
+        task_id,
+        result=result,
+        logs=[*(task.logs or []), f'已清理转换结果：{output.name}'],
+    )
+    _cleanup_convert_retry_input(task_id)
+    _cleanup_convert_preview(task_id)
+    return JSONResponse({'success': True, 'task': updated.to_dict() if updated else None})
+
+
+@app.get('/api/convert/tasks/{task_id}/comparison')
+def get_convert_task_comparison(task_id: str):
+    task = task_store.get(task_id)
+    if task is None or task.kind != TaskKind.CONVERT:
+        return JSONResponse({'success': False, 'error': '转换任务不存在'}, status_code=404)
+    comparison = (task.result or {}).get('comparison')
+    if not isinstance(comparison, dict):
+        return JSONResponse({'success': False, 'error': '该任务没有可用的前后对比'}, status_code=404)
+    return JSONResponse({'success': True, 'comparison': comparison})
+
+
+@app.get('/api/convert/tasks/{task_id}/preview')
+def get_convert_task_preview(task_id: str):
+    _, output = _completed_convert_output(task_id)
+    suffix = output.suffix.lower()
+    if suffix in {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tif', '.tiff'}:
+        return FileResponse(output)
+    if suffix in {'.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus', '.aiff', '.wma', '.amr', '.mp4', '.mov', '.mkv', '.webm', '.avi', '.flv', '.m4v', '.3gp', '.ts'}:
+        try:
+            return FileResponse(_media_preview(output, task_id), media_type='image/jpeg')
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
+    return JSONResponse({'success': False, 'error': '该结果类型暂不支持可视化预览'}, status_code=400)
 
 
 @app.get('/api/tasks')
@@ -1611,6 +1834,9 @@ def cancel_task(task_id: str):
         if isinstance(subtitle_job, dict) and subtitle_job.get('status') in {'pending', 'running'}:
             return JSONResponse({'success': False, 'error': '视频已可用，但字幕仍在后台识别；请等待字幕任务结束后再删除记录'}, status_code=409)
         deleted = task_store.delete(task_id)
+        if task.kind == TaskKind.CONVERT:
+            _cleanup_convert_retry_input(task_id)
+            _cleanup_convert_preview(task_id)
         return JSONResponse({'success': True, 'deleted': True, 'task': deleted.to_dict() if deleted else None})
     if task.kind == TaskKind.PDF:
         if not pdf_queue.cancel(task_id):
@@ -1635,8 +1861,23 @@ def retry_task(task_id: str):
         return JSONResponse({'success': False, 'error': '任务不存在'}, status_code=404)
     if task.status not in {TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.SKIPPED}:
         return JSONResponse({'success': False, 'error': '只有失败、取消或跳过的任务可以重新执行'}, status_code=409)
+    if task.kind == TaskKind.CONVERT:
+        if bool(task.payload.get('archiveEncrypted')):
+            return JSONResponse({'success': False, 'error': '为安全起见未保存压缩包密码，请重新选择文件并输入密码'}, status_code=409)
+        filename = str(task.payload.get('filename') or 'input')
+        stored = CONVERT_RETRY_ROOT / task.id / Path(filename).name
+        if not stored.is_file():
+            return JSONResponse({'success': False, 'error': '原始上传文件已被清理，请重新选择文件后执行'}, status_code=409)
+        source, target = str(task.payload.get('source') or ''), str(task.payload.get('target') or '')
+        output_dir = Path(str(task.payload.get('outputPath') or '')).expanduser()
+        retry = task_store.create(TaskKind.CONVERT, task.title, {**task.payload, 'retryOf': task.id})
+        retry_input = _retain_convert_input(retry.id, filename, stored)
+        result = convert_file_with_timeout(retry_input, filename, source, target, output_dir, timeout_seconds=CONVERT_TIMEOUT_SECONDS, image_quality=int(task.payload.get('imageQuality') or 90), media_options=dict(task.payload.get('mediaOptions') or {}))
+        body = result.to_dict()
+        task_store.update(retry.id, status=TaskStatus.COMPLETED if result.success else TaskStatus.FAILED, logs=result.logs, result=body, error=result.error, stage='已完成' if result.success else '失败', progress=100 if result.success else None)
+        return JSONResponse({'success': result.success, 'mode': 'convert-retry', 'task': task_store.get(retry.id).to_dict(), **body})
     if task.kind != TaskKind.MEDIA:
-        return JSONResponse({'success': False, 'error': '转换任务不会保留原始上传文件，请重新选择文件后执行'}, status_code=409)
+        return JSONResponse({'success': False, 'error': '当前任务类型不支持重新执行'}, status_code=409)
     payload = dict(task.payload)
     for key in ('bilibiliCookie', 'bilibiliCookieFile'):
         if payload.get(key) == '[REDACTED]':
@@ -1666,7 +1907,15 @@ def clear_finished_tasks(kind: str | None = None):
             kind_filter = TaskKind(kind)
         except ValueError:
             return JSONResponse({'success': False, 'error': '未知任务类型'}, status_code=400)
+    finished = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.SKIPPED, TaskStatus.CANCELLED}
+    retry_task_ids = [
+        task.id for task in task_store.list(kind_filter)
+        if task.kind == TaskKind.CONVERT and task.status in finished
+    ]
     deleted = task_store.clear_finished(kind_filter)
+    for task_id in retry_task_ids:
+        _cleanup_convert_retry_input(task_id)
+        _cleanup_convert_preview(task_id)
     return JSONResponse({'success': True, 'deleted': deleted})
 
 

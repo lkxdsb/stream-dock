@@ -194,13 +194,33 @@ def download_media(
             referer=referer,
             progress_callback=progress_callback,
         )
-    response = requests.get(url, headers=headers, timeout=60, stream=True)
+    resume_path = destination.with_name(f'{destination.name}.download')
+    existing = resume_path.stat().st_size if resume_path.is_file() else 0
+    request_headers = dict(headers)
+    if existing:
+        request_headers['Range'] = f'bytes={existing}-'
+    response = requests.get(url, headers=request_headers, timeout=60, stream=True)
     try:
+        if response.status_code == 416 and existing:
+            content_range = str(response.headers.get('content-range') or '')
+            try:
+                remote_size = int(content_range.rsplit('/', 1)[1])
+            except (IndexError, ValueError):
+                remote_size = -1
+            if remote_size == existing:
+                resume_path.replace(destination)
+                if progress_callback:
+                    progress_callback(100)
+                return destination
         response.raise_for_status()
-        total = int(response.headers.get('content-length') or 0)
-        written = 0
+        resumed = existing > 0 and response.status_code == 206
+        if existing and not resumed:
+            existing = 0
+        remaining = int(response.headers.get('content-length') or 0)
+        total = existing + remaining if remaining else 0
+        written = existing
         last_reported = -1
-        with destination.open('wb') as output:
+        with resume_path.open('ab' if resumed else 'wb') as output:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if not chunk:
                     continue
@@ -213,6 +233,7 @@ def download_media(
                         last_reported = percent
         if progress_callback and total <= 0:
             progress_callback(100)
+        resume_path.replace(destination)
     finally:
         response.close()
     return destination

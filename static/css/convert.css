@@ -1474,6 +1474,19 @@ button.convert-orbit-route:hover { transform: translateY(-1px); border-color: rg
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.conversion-table-preview {
+  max-height: 230px;
+  overflow: auto;
+  margin-top: 12px;
+  border: 1px solid rgba(70,63,56,.12);
+  border-radius: 10px;
+}
+.conversion-table-preview table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.conversion-table-preview th, .conversion-table-preview td { padding: 7px 9px; text-align: left; border-bottom: 1px solid rgba(70,63,56,.08); white-space: nowrap; }
+.conversion-table-preview th { position: sticky; top: 0; background: #f8f5f0; }
+.conversion-diff { max-height: 260px; }
+.conversion-media-preview { display: block; width: min(100%, 720px); max-height: 420px; object-fit: contain; margin: 10px 0 14px; border-radius: 12px; background: #171717; }
 .convert-vendor-list a {
   display: inline-flex;
   align-items: center;

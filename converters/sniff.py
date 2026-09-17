@@ -86,6 +86,18 @@ def sniff_file_format(path: Path) -> str | None:
         return '7z'
     if header.startswith(b'{\\rtf'):
         return 'rtf'
+    # AMR is deliberately a small, header-only format.  It is binary audio,
+    # not a text file, even though its magic starts with printable bytes.
+    if header.startswith((b'#!AMR\n', b'#!AMR-WB\n')):
+        return 'amr'
+    # A plain TAR header has no magic at byte zero.  Check it after compressed
+    # TAR detection (which starts with gzip) but before treating its mostly-NUL
+    # header as text.
+    try:
+        if tarfile.is_tarfile(path):
+            return 'tar'
+    except (OSError, tarfile.TarError):
+        pass
 
     try:
         text = header.decode('utf-8-sig').strip()
@@ -97,6 +109,16 @@ def sniff_file_format(path: Path) -> str | None:
         try:
             json.loads(text)
             return 'json'
+        except json.JSONDecodeError:
+            pass
+    # NDJSON is a sequence of JSON values, so it must be recognized before
+    # CSV's delimiter heuristic sees commas inside each JSON object.
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) > 1:
+        try:
+            for line in lines:
+                json.loads(line)
+            return 'ndjson'
         except json.JSONDecodeError:
             pass
     lowered = text.lower()
@@ -125,8 +147,17 @@ def validate_declared_format(path: Path, declared: str) -> tuple[bool, str | Non
     text_family = {'txt', 'md', 'markdown', 'yaml', 'toml', 'lrc', 'srt', 'vtt', 'ass'}
     if declared in text_family and detected == 'txt':
         return True, detected
+    # The tabular TXT export is intentionally tab-delimited so that columns
+    # survive the conversion.  It is still a .txt output, despite the content
+    # sniffer correctly recognizing the delimiter.
+    if declared == 'txt' and detected in {'csv', 'tsv'}:
+        return True, detected
     # 单列 CSV/TSV 与纯文本在内容上无法可靠区分，保留扩展名声明。
     if declared in {'csv', 'tsv'} and detected == 'txt':
+        return True, detected
+    # A one-record NDJSON document is also valid JSON.  Preserve the declared
+    # extension instead of rejecting this unambiguous edge case.
+    if declared == 'ndjson' and detected == 'json':
         return True, detected
     if declared in {'html', 'xml', 'svg'} and detected in {'html', 'xml'}:
         return True, detected

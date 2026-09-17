@@ -144,6 +144,37 @@
     return [resolution, codecs, validation.sizeLabel, '校验通过'].filter(Boolean).join(' · ');
   }
 
+  function conversionComparisonSection(task) {
+    if (task.kind !== 'convert') return '';
+    const comparison = task.result?.comparison;
+    if (!comparison) return '';
+    if (!comparison.available) {
+      return `<section class="task-detail-section"><h3>转换前后对比</h3><span>${escapeHtml(comparison.reason || '暂不可用')}</span></section>`;
+    }
+    if (comparison.kind === 'table') {
+      const before = comparison.before || {};
+      const after = comparison.after || {};
+      const preview = (after.preview || []).map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('');
+      const headers = (after.headers || []).map((header) => `<th>${escapeHtml(header)}</th>`).join('');
+      const workbookRows = (before.sheets > 1 || after.sheets > 1 || before.formulas || after.formulas || before.mergedRanges || after.mergedRanges || before.charts || after.charts)
+        ? detailRow('工作簿结构', `工作表 ${before.sheets || 1}→${after.sheets || 1} · 公式 ${before.formulas || 0}→${after.formulas || 0} · 合并 ${before.mergedRanges || 0}→${after.mergedRanges || 0} · 图表 ${before.charts || 0}→${after.charts || 0}`)
+        + detailRow('隐藏行列', `${before.hiddenRows || 0}/${before.hiddenColumns || 0} → ${after.hiddenRows || 0}/${after.hiddenColumns || 0}`) : '';
+      return `<section class="task-detail-section"><h3>转换前后对比 · 表格</h3><div class="task-detail-grid">${detailRow('转换前', `${before.rows || 0} 行 × ${before.columns || 0} 列`)}${detailRow('转换后', `${after.rows || 0} 行 × ${after.columns || 0} 列`)}${detailRow('行列变化', `${comparison.rowDelta >= 0 ? '+' : ''}${comparison.rowDelta || 0} 行 · ${comparison.columnDelta >= 0 ? '+' : ''}${comparison.columnDelta || 0} 列`)}${detailRow('列结构', comparison.schemaChanged ? '已变化' : '保持一致')}${detailRow('预览区变化', `${comparison.changedPreviewCells || 0} 个单元格`)}${workbookRows}</div>${headers ? `<div class="conversion-table-preview"><table><thead><tr>${headers}</tr></thead><tbody>${preview}</tbody></table></div>` : ''}</section>`;
+    }
+    if (comparison.kind === 'text') {
+      const before = comparison.before || {};
+      const after = comparison.after || {};
+      return `<section class="task-detail-section"><h3>转换前后对比 · 文本</h3><div class="task-detail-grid">${detailRow('转换前', `${before.lines || 0} 行 · ${before.characters || 0} 字符`)}${detailRow('转换后', `${after.lines || 0} 行 · ${after.characters || 0} 字符`)}${detailRow('行变化', `+${comparison.addedLines || 0} / -${comparison.removedLines || 0}`)}</div><pre class="task-detail-logs conversion-diff">${escapeHtml((comparison.diff || []).join('\n') || '文本内容未发生可见变化')}</pre></section>`;
+    }
+    const before = comparison.before || {};
+    const after = comparison.after || {};
+    const label = comparison.kind === 'image' ? '图片' : '音视频';
+    const preview = `<img class="conversion-media-preview" src="/api/convert/tasks/${encodeURIComponent(task.id)}/preview" alt="转换结果预览" loading="lazy" />`;
+    const beforeText = comparison.kind === 'image' ? `${before.width || '-'}×${before.height || '-'} · ${before.mode || '-'} · ${before.frames || 1} 帧` : `${before.durationSeconds || 0} 秒 · ${before.format || '-'}`;
+    const afterText = comparison.kind === 'image' ? `${after.width || '-'}×${after.height || '-'} · ${after.mode || '-'} · ${after.frames || 1} 帧` : `${after.durationSeconds || 0} 秒 · ${after.format || '-'}`;
+    return `<section class="task-detail-section"><h3>转换前后对比 · ${label}</h3>${preview}<div class="task-detail-grid">${detailRow('转换前', beforeText)}${detailRow('转换后', afterText)}${detailRow('视频编码', after.videoCodec || '')}${detailRow('音频编码', after.audioCodec || '')}</div></section>`;
+  }
+
   function compactActivity(task) {
     if (task.status === 'completed' && subtitleJobActive(task)) {
       return subtitleJob(task).message || '视频已可用，字幕正在后台识别';
@@ -507,6 +538,7 @@
         ${detailRow('质量评分', result.validation.qualityScore != null ? `${result.validation.qualityScore} · ${result.validation.qualityLevel || ''}` : '')}
         ${detailRow('实际格式', result.validation.format || result.validation.detectedFormat || '')}
       </div>${(result.validation.warnings || []).length ? `<div class="task-detail-error">${escapeHtml(result.validation.warnings.join('\n'))}</div>` : ''}<div id="deepQualityResult"></div></section>` : ''}
+      ${conversionComparisonSection(task)}
       <section class="task-detail-section">
         <h3>运行记录</h3>
         <pre class="task-detail-logs">${escapeHtml((task.logs || []).filter(Boolean).join('\n') || '暂无运行记录')}</pre>
@@ -515,9 +547,10 @@
 
     detailFooter.innerHTML = `
       ${outputPath ? '<button class="task-detail-action primary" type="button" data-open-file>打开文件</button><button class="task-detail-action" type="button" data-open-directory>打开目录</button><button class="task-detail-action" type="button" data-copy-output>复制路径</button>' : ''}
+      ${task.kind === 'convert' && task.status === 'completed' && outputPath ? `<a class="task-detail-action primary" href="/api/convert/tasks/${encodeURIComponent(task.id)}/download">下载结果</a><button class="task-detail-action danger" type="button" data-cleanup-convert-result>清理结果</button>` : ''}
       ${task.error ? '<button class="task-detail-action" type="button" data-copy-error>复制错误</button>' : ''}
       ${task.kind === 'media' && ['failed', 'cancelled', 'skipped'].includes(task.status) ? '<button class="task-detail-action primary" type="button" data-retry-task>重新识别并执行</button>' : ''}
-      ${task.kind === 'convert' && task.status === 'failed' ? '<button class="task-detail-action primary" type="button" data-reselect-file>重新选择文件</button>' : ''}
+      ${task.kind === 'convert' && task.status === 'failed' ? '<button class="task-detail-action primary" type="button" data-retry-convert>重新执行</button><button class="task-detail-action" type="button" data-reselect-file>重新选择文件</button>' : ''}
       ${task.kind === 'media' && ['pending', 'running'].includes(task.status) ? '<button class="task-detail-action" type="button" data-cancel-detail>取消任务</button>' : ''}
       ${task.kind === 'media' && task.status === 'completed' && outputPath ? '<button class="task-detail-action" type="button" data-deep-quality>深度质量检测</button>' : ''}
       ${task.kind === 'media' && subtitleFiles.length ? '<button class="task-detail-action primary" type="button" data-edit-subtitle>编辑字幕</button>' : ''}
@@ -537,6 +570,15 @@
     bindAction(detailFooter.querySelector('[data-copy-output]'), async () => {
       await navigator.clipboard?.writeText(outputPath);
       window.StreamDockUI?.showToast?.('路径已复制');
+    });
+    bindAction(detailFooter.querySelector('[data-cleanup-convert-result]'), async () => {
+      if (!window.confirm('确定清理该任务的转换结果吗？清理后不能下载或打开此文件。')) return;
+      const response = await fetch(`/api/convert/tasks/${encodeURIComponent(task.id)}/result`, { method: 'DELETE' });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.detail || data.error || '清理结果失败');
+      closeDetail();
+      window.StreamDockUI?.showToast?.('已清理转换结果，任务记录仍保留');
+      await refresh();
     });
     bindAction(detailFooter.querySelector('[data-copy-error]'), async () => {
       await navigator.clipboard?.writeText(task.error || '');
@@ -559,6 +601,14 @@
       closeDetail();
       document.querySelector('[data-convert-nav="workbench"]')?.click();
       window.setTimeout(() => document.getElementById('convertPickButton')?.focus(), 120);
+    });
+    bindAction(detailFooter.querySelector('[data-retry-convert]'), async () => {
+      const response = await fetch(`/api/tasks/${encodeURIComponent(task.id)}/retry`, { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || data.detail || '重新执行失败');
+      closeDetail();
+      window.StreamDockUI?.showToast?.('转换已重新执行完成');
+      await refresh();
     });
     bindAction(detailFooter.querySelector('[data-cancel-detail]'), async () => {
       await cancelTask(task.id);

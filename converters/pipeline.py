@@ -12,13 +12,14 @@ from .adapters.media import convert_media
 from .adapters.subtitle import convert_subtitle
 from .models import ConversionLevel, ConversionResult
 from .registry import find_capability, normalize_format
+from .security import validate_conversion_input_security
 from runtime_checks import cleanup_partial, commit_partial, partial_output_path, prepare_output_directory, validate_general_output
 
 DATA_FORMATS = {'csv', 'tsv', 'xlsx', 'json', 'ndjson', 'yaml', 'xml', 'toml', 'txt'}
 IMAGE_FORMATS = {'png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'gif', 'ico', 'ppm', 'pgm', 'pbm', 'pnm'}
 MEDIA_FORMATS = {'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'aiff', 'wma', 'amr', 'mp4', 'mov', 'mkv', 'webm', 'avi', 'flv', 'm4v', '3gp', 'ts'}
 SUBTITLE_FORMATS = {'srt', 'vtt', 'ass', 'lrc'}
-ARCHIVE_FORMATS = {'zip', 'tar', 'tar.gz', 'gz', 'bz2', 'folder'}
+ARCHIVE_FORMATS = {'zip', 'tar', 'tar.gz', 'gz', 'bz2', '7z', 'rar', 'folder'}
 DOCUMENT_FORMATS = {
     'md', 'markdown', 'html', 'txt', 'rtf',
     'doc', 'docx', 'odt',
@@ -58,7 +59,7 @@ def build_output_path(input_name: str, output_dir: Path, target: str, naming_str
         index += 1
 
 
-def convert_file(input_path: Path, input_name: str, source: str, target: str, output_dir: Path, *, naming_strategy: str = 'append') -> ConversionResult:
+def convert_file(input_path: Path, input_name: str, source: str, target: str, output_dir: Path, *, naming_strategy: str = 'append', image_quality: int | None = None, media_options: dict | None = None, archive_options: dict | None = None) -> ConversionResult:
     source = normalize_format(source)
     target = normalize_format(target)
     capability = find_capability(source, target)
@@ -72,6 +73,7 @@ def convert_file(input_path: Path, input_name: str, source: str, target: str, ou
 
     try:
         prepare_output_directory(output_dir)
+        validate_conversion_input_security(source, input_path)
         output_path = build_output_path(input_name, output_dir, target, naming_strategy=naming_strategy)
         if source == 'gif' and target == 'png':
             # GIF → PNG 会导出多帧，因此输出是一个帧目录而不是单个 PNG 文件。
@@ -82,13 +84,13 @@ def convert_file(input_path: Path, input_name: str, source: str, target: str, ou
         if source in {'csv', 'tsv', 'json', 'ndjson', 'yaml', 'xml', 'toml'} or (source == 'xlsx' and target in {'csv', 'json', 'tsv'}) or (source == 'txt' and target in {'csv', 'xlsx'}):
             logs += convert_data(source, target, input_path, partial_path)
         elif source in IMAGE_FORMATS and target in IMAGE_FORMATS:
-            logs += convert_image(source, target, input_path, partial_path)
+            logs += convert_image(source, target, input_path, partial_path, quality=image_quality)
         elif source in MEDIA_FORMATS and target in MEDIA_FORMATS | {'gif'}:
-            logs += convert_media(source, target, input_path, partial_path)
+            logs += convert_media(source, target, input_path, partial_path, options=media_options)
         elif source in SUBTITLE_FORMATS or (source == 'txt' and target == 'srt'):
             logs += convert_subtitle(source, target, input_path, partial_path)
         elif source in ARCHIVE_FORMATS or target in ARCHIVE_FORMATS:
-            logs += convert_archive(source, target, input_path, partial_path)
+            logs += convert_archive(source, target, input_path, partial_path, options=archive_options)
         else:
             logs += convert_document_basic(source, target, input_path, partial_path)
         validation_target = 'folder' if source == 'gif' and target == 'png' else target

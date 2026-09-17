@@ -16,6 +16,8 @@ output*/
 downloads/
 media/tasks/
 pdf_engine/output/
+.streamdock-complex-corpus/
+report_figures/
 *.streamdock-part.*
 cookies*.txt
 cookies*.json

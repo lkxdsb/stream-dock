@@ -5,7 +5,10 @@
     outputPath: '~/Downloads/StreamDock',
     namingStrategy: 'append',
     afterDoneAction: 'none',
-    defaultLevel: 'all'
+    defaultLevel: 'all',
+    imageQuality: 90,
+    audioBitrateKbps: 192, audioSampleRate: 0, videoMaxWidth: 0, videoFrameRate: 0,
+    videoBitrateKbps: 0, videoCrf: 22, hardwareAcceleration: 'software'
   };
 
   const defaultOutputPath = document.getElementById('convertDefaultOutputPath');
@@ -13,6 +16,14 @@
   const namingStrategy = document.getElementById('convertNamingStrategy');
   const afterDoneAction = document.getElementById('convertAfterDoneAction');
   const defaultLevel = document.getElementById('convertDefaultLevel');
+  const imageQuality = document.getElementById('convertImageQuality');
+  const audioBitrate = document.getElementById('convertAudioBitrate');
+  const audioSampleRate = document.getElementById('convertAudioSampleRate');
+  const videoMaxWidth = document.getElementById('convertVideoMaxWidth');
+  const videoFrameRate = document.getElementById('convertVideoFrameRate');
+  const videoBitrate = document.getElementById('convertVideoBitrate');
+  const videoCrf = document.getElementById('convertVideoCrf');
+  const hardwareAcceleration = document.getElementById('convertHardwareAcceleration');
   const saveButton = document.getElementById('convertSaveSettingsButton');
   const resetButton = document.getElementById('convertResetSettingsButton');
   const status = document.getElementById('convertSettingsStatus');
@@ -35,7 +46,12 @@
       outputPath: defaultOutputPath?.value || defaults.outputPath,
       namingStrategy: namingStrategy?.value || defaults.namingStrategy,
       afterDoneAction: afterDoneAction?.value || defaults.afterDoneAction,
-      defaultLevel: defaultLevel?.value || defaults.defaultLevel
+      defaultLevel: defaultLevel?.value || defaults.defaultLevel,
+      imageQuality: Number(imageQuality?.value || defaults.imageQuality),
+      audioBitrateKbps: Number(audioBitrate?.value || defaults.audioBitrateKbps), audioSampleRate: Number(audioSampleRate?.value || 0),
+      videoMaxWidth: Number(videoMaxWidth?.value || 0), videoFrameRate: Number(videoFrameRate?.value || 0),
+      videoBitrateKbps: Number(videoBitrate?.value || 0), videoCrf: Number(videoCrf?.value || defaults.videoCrf),
+      hardwareAcceleration: hardwareAcceleration?.value || defaults.hardwareAcceleration
     };
   }
 
@@ -44,6 +60,14 @@
     if (namingStrategy) namingStrategy.value = settings.namingStrategy || defaults.namingStrategy;
     if (afterDoneAction) afterDoneAction.value = settings.afterDoneAction || defaults.afterDoneAction;
     if (defaultLevel) defaultLevel.value = settings.defaultLevel || defaults.defaultLevel;
+    if (imageQuality) imageQuality.value = settings.imageQuality || defaults.imageQuality;
+    if (audioBitrate) audioBitrate.value = settings.audioBitrateKbps || defaults.audioBitrateKbps;
+    if (audioSampleRate) audioSampleRate.value = settings.audioSampleRate || 0;
+    if (videoMaxWidth) videoMaxWidth.value = settings.videoMaxWidth || 0;
+    if (videoFrameRate) videoFrameRate.value = settings.videoFrameRate || 0;
+    if (videoBitrate) videoBitrate.value = settings.videoBitrateKbps || 0;
+    if (videoCrf) videoCrf.value = settings.videoCrf ?? defaults.videoCrf;
+    if (hardwareAcceleration) hardwareAcceleration.value = settings.hardwareAcceleration || defaults.hardwareAcceleration;
     if (workbenchOutputPath) workbenchOutputPath.value = settings.outputPath || defaults.outputPath;
   }
 
@@ -92,7 +116,7 @@
 
   resetButton?.addEventListener('click', reset);
 
-  [namingStrategy, afterDoneAction, defaultLevel].forEach((control) => {
+  [namingStrategy, afterDoneAction, defaultLevel, imageQuality, audioBitrate, audioSampleRate, videoMaxWidth, videoFrameRate, videoBitrate, videoCrf, hardwareAcceleration].forEach((control) => {
     control?.addEventListener('change', () => {
       setStatus('设置已修改，点击“保存设置”后生效。');
     });

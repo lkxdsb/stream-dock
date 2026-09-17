@@ -68,6 +68,7 @@ STABLE_ARCHIVE = [
     ('zip', 'tar'), ('tar', 'zip'), ('tar.gz', 'zip'),
     ('zip', 'folder'), ('tar', 'folder'), ('tar.gz', 'folder'), ('gz', 'folder'), ('bz2', 'folder'),
     ('folder', 'zip'), ('folder', 'tar.gz'),
+    ('7z', 'folder'), ('7z', 'zip'), ('rar', 'folder'), ('rar', 'zip'),
 ]
 BASIC_LIGHT_DOCS = [
     ('md', 'html'), ('md', 'txt'), ('md', 'docx'), ('md', 'pdf'),
@@ -108,7 +109,7 @@ CAPABILITIES: tuple[ConversionCapability, ...] = tuple(
     + [_cap(a, b, ConversionLevel.STABLE, '音频', 'ffmpeg', '成熟音频编码转换，使用本机 ffmpeg。') for a, b in STABLE_AUDIO]
     + [_cap(a, b, ConversionLevel.STABLE, '视频', 'ffmpeg', '常规视频封装、转码、音频提取和 GIF 导出。') for a, b in STABLE_VIDEO]
     + [_cap(a, b, ConversionLevel.STABLE, '字幕', 'local', '字幕文本格式转换，复杂样式会降级为文本。') for a, b in STABLE_SUBTITLE]
-    + [_cap(a, b, ConversionLevel.STABLE, '压缩包', 'python-archive', '普通压缩包转换与解压，第一版不支持加密压缩包。') for a, b in STABLE_ARCHIVE]
+    + [_cap(a, b, ConversionLevel.STABLE, '压缩包', 'python-archive', 'ZIP/TAR/7Z/RAR 本地转换与安全解压；支持 ZipCrypto ZIP 密码和 RAR 分卷上传。', '压缩包会检查路径穿越、链接、成员数、解压大小和异常压缩比。') for a, b in STABLE_ARCHIVE]
     + [_cap(a, b, ConversionLevel.BASIC, '轻文档', 'python-docx/markdown/reportlab', 'Markdown、HTML、TXT、RTF 与 DOCX 的基础本地转换。', '适合普通文本型文档，复杂样式会降级。') for a, b in BASIC_LIGHT_DOCS]
     + [_cap(a, b, ConversionLevel.BASIC, 'Office 基础', 'python-docx/libreoffice', '常见 Office 与开放文档格式基础转换。', '依赖本机 LibreOffice；复杂排版、公式、批注、动画可能有损。') for a, b in BASIC_OFFICE_DOCS]
     + [_cap(a, b, ConversionLevel.BASIC, '电子书', 'ebooklib', 'EPUB 内容抽取为 HTML、TXT、Markdown 等轻文档格式。', '适合非 DRM 的普通 EPUB；复杂目录和脚注可能简化。') for a, b in BASIC_EBOOK_DOCS]

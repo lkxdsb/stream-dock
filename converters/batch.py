@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any, Sequence
 
 from .models import ConversionCapability, ConversionResult
@@ -73,6 +74,30 @@ def make_batch_inputs(filenames: Sequence[str], input_type: str | None = None) -
     return tuple(items)
 
 
+def collapse_split_archive_inputs(inputs: Sequence[BatchInput]) -> tuple[BatchInput, ...]:
+    """Collapse uploaded RAR volumes to one conversion job per complete set."""
+    pattern = re.compile(r'^(?P<base>.+)\.part(?P<number>\d+)\.rar$', re.I)
+    matches = [(item, pattern.match(item.filename)) for item in inputs]
+    if not any(match for _, match in matches):
+        return tuple(inputs)
+    if any(match is None for _, match in matches):
+        raise RuntimeError('分卷 RAR 请一次只上传同组 .partN.rar 文件')
+    groups: dict[str, list[tuple[int, BatchInput]]] = {}
+    for item, match in matches:
+        assert match is not None
+        groups.setdefault(match.group('base').lower(), []).append((int(match.group('number')), item))
+    primaries: list[BatchInput] = []
+    for base, parts in groups.items():
+        parts.sort(key=lambda pair: pair[0])
+        numbers = [number for number, _ in parts]
+        expected = list(range(1, max(numbers) + 1))
+        if numbers != expected:
+            missing = sorted(set(expected) - set(numbers))
+            raise RuntimeError(f'分卷 RAR {base} 不完整，缺少卷：{missing}')
+        primaries.append(parts[0][1])
+    return tuple(primaries)
+
+
 def validate_batch_route(filenames: Sequence[str], target: str, input_type: str | None = None) -> BatchRouteValidation:
     if not filenames:
         return BatchRouteValidation(False, target=normalize_format(target), error='请先选择至少一个文件')
@@ -110,6 +135,9 @@ def convert_batch_files(
     *,
     timeout_seconds: int | None = None,
     naming_strategy: str = 'append',
+    image_quality: int | None = None,
+    media_options: dict | None = None,
+    archive_options: dict | None = None,
 ) -> dict[str, object]:
     target = normalize_format(target)
     rows: list[BatchConversionRow] = []
@@ -128,6 +156,9 @@ def convert_batch_files(
                 output_dir,
                 timeout_seconds=timeout_seconds,
                 naming_strategy=naming_strategy,
+                image_quality=image_quality,
+                media_options=media_options,
+                archive_options=archive_options,
             )
         else:
             result = convert_file(
@@ -137,6 +168,9 @@ def convert_batch_files(
                 target,
                 output_dir,
                 naming_strategy=naming_strategy,
+                image_quality=image_quality,
+                media_options=media_options,
+                archive_options=archive_options,
             )
         rows.append(
             BatchConversionRow(

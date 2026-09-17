@@ -103,6 +103,18 @@ def resolve_tool_path(command: str) -> str:
     return command
 
 
+def _tool_version(command: str, path: str) -> str:
+    try:
+        completed = subprocess.run(
+            [path, '--version'], text=True, capture_output=True, timeout=5,
+            env={**os.environ, 'PATH': augmented_path()},
+        )
+        first_line = (completed.stdout or completed.stderr).splitlines()[0].strip()
+        return first_line or path
+    except (OSError, IndexError, subprocess.TimeoutExpired):
+        return path
+
+
 def format_bytes(value: int) -> str:
     units = ('B', 'KB', 'MB', 'GB', 'TB')
     size = float(max(0, value))
@@ -346,25 +358,55 @@ def environment_health(output_path: str | None = None) -> dict[str, Any]:
     for name, command, required in (
         ('FFmpeg', 'ffmpeg', True),
         ('FFprobe', 'ffprobe', True),
+        ('LibreOffice', 'soffice', False),
+        ('Libarchive', 'bsdtar', False),
     ):
         found = shutil.which(command, path=augmented_path())
         checks.append({
             'key': command,
             'name': name,
             'status': 'ok' if found else 'missing',
-            'detail': found or f'未找到 {command}',
+            'detail': _tool_version(command, found) if found else f'未找到 {command}',
             'required': required,
         })
     try:
-        import PIL  # noqa: F401
-        checks.append({'key': 'pillow', 'name': '图片转换', 'status': 'ok', 'detail': 'Pillow 可用', 'required': False})
+        import PIL
+        checks.append({'key': 'pillow', 'name': '图片转换', 'status': 'ok', 'detail': f'Pillow {PIL.__version__}', 'required': False})
     except ImportError:
         checks.append({'key': 'pillow', 'name': '图片转换', 'status': 'missing', 'detail': '未安装 Pillow', 'required': False})
     try:
-        import openpyxl  # noqa: F401
-        checks.append({'key': 'openpyxl', 'name': '表格转换', 'status': 'ok', 'detail': 'openpyxl 可用', 'required': False})
+        import openpyxl
+        checks.append({'key': 'openpyxl', 'name': '表格转换', 'status': 'ok', 'detail': f'openpyxl {openpyxl.__version__}', 'required': False})
     except ImportError:
         checks.append({'key': 'openpyxl', 'name': '表格转换', 'status': 'missing', 'detail': '未安装 openpyxl', 'required': False})
+
+    try:
+        import cairosvg
+        checks.append({'key': 'cairosvg', 'name': 'SVG 转换', 'status': 'ok', 'detail': f'CairoSVG {cairosvg.__version__}', 'required': False})
+    except ImportError:
+        checks.append({'key': 'cairosvg', 'name': 'SVG 转换', 'status': 'missing', 'detail': '未安装 CairoSVG', 'required': False})
+
+    font_tool = shutil.which('fc-list', path=augmented_path())
+    if font_tool:
+        try:
+            completed = subprocess.run([font_tool, ':', 'family'], text=True, capture_output=True, timeout=10)
+            families = {line.strip() for line in completed.stdout.splitlines() if line.strip()}
+            cjk = sorted(name for name in families if re.search(r'PingFang|Hiragino|Songti|Heiti|Noto.*CJK|Source Han|SimSun|YaHei|STSong', name, re.I))
+            checks.append({
+                'key': 'fonts', 'name': '中文字体', 'status': 'ok' if cjk else 'missing',
+                'detail': (f'检测到 {len(families)} 个字体族；中文候选：' + '、'.join(cjk[:4])) if cjk else '未检测到常用中文字体，Office/PDF 排版可能降级',
+                'required': False,
+            })
+        except (OSError, subprocess.TimeoutExpired):
+            checks.append({'key': 'fonts', 'name': '中文字体', 'status': 'error', 'detail': '字体列表读取失败', 'required': False})
+    else:
+        checks.append({'key': 'fonts', 'name': '中文字体', 'status': 'missing', 'detail': '未找到 fontconfig，无法诊断字体缺失', 'required': False})
+
+    try:
+        import rarfile
+        checks.append({'key': 'rarfile', 'name': 'RAR/分卷压缩包', 'status': 'ok', 'detail': f'rarfile {rarfile.__version__}', 'required': False})
+    except ImportError:
+        checks.append({'key': 'rarfile', 'name': 'RAR/分卷压缩包', 'status': 'missing', 'detail': '未安装 rarfile', 'required': False})
 
     try:
         from playwright.sync_api import sync_playwright
@@ -433,6 +475,7 @@ def environment_health(output_path: str | None = None) -> dict[str, Any]:
         checks.append({'key': 'output', 'name': '输出目录', 'status': 'error', 'detail': str(exc), 'required': True})
     healthy = all(item['status'] == 'ok' for item in checks if item['required'])
     available_count = sum(item['status'] == 'ok' for item in checks)
+    from converters.engine_limits import configured_engine_limits
     return {
         'healthy': healthy,
         'summary': {
@@ -442,4 +485,10 @@ def environment_health(output_path: str | None = None) -> dict[str, Any]:
             'requiredTotal': sum(bool(item['required']) for item in checks),
         },
         'checks': checks,
+        'conversionLimits': {
+            'engineConcurrency': configured_engine_limits(),
+            'cpuSeconds': int(os.getenv('STREAMDOCK_CONVERT_CPU_LIMIT_SECONDS', '120')),
+            'memoryMb': int(os.getenv('STREAMDOCK_CONVERT_MEMORY_LIMIT_MB', '4096')),
+            'outputMb': int(os.getenv('STREAMDOCK_CONVERT_OUTPUT_LIMIT_MB', '2048')),
+        },
     }

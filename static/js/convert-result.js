@@ -9,7 +9,7 @@
       <div class="convert-result-row ${row.success ? 'success' : 'error'}">
         <strong>${escapeHtml(row.filename)}</strong>
         <span>${escapeHtml((row.source || '').toUpperCase())} → ${escapeHtml((row.target || '').toUpperCase())}</span>
-        ${row.outputPath ? `<code>${escapeHtml(row.outputPath)}</code>${row.validation?.valid ? `<span>校验通过${row.validation.sizeLabel ? ` · ${escapeHtml(row.validation.sizeLabel)}` : ''}</span>` : ''}` : `<span>${escapeHtml(row.error || '转换失败')}</span>`}
+        ${row.outputPath ? `<code>${escapeHtml(row.outputPath)}</code>${row.validation?.valid ? `<span>校验通过${row.validation.sizeLabel ? ` · ${escapeHtml(row.validation.sizeLabel)}` : ''}</span>` : ''}${row.taskId ? `<a class="convert-download-link" href="/api/convert/tasks/${encodeURIComponent(row.taskId)}/download">下载结果</a>` : ''}` : `<span>${escapeHtml(row.error || '转换失败')}</span>`}
       </div>
     `).join('');
   }
@@ -38,13 +38,18 @@
       if (!resultBox) return;
       const path = typeof data === 'string' ? data : data?.outputPath;
       const validation = typeof data === 'object' ? data?.validation : null;
-      resultBox.innerHTML = `<strong>转换完成${validation?.valid ? ' · 校验通过' : ''}</strong><span>输出文件：${escapeHtml(path)}</span>${validation?.sizeLabel ? `<span>文件大小：${escapeHtml(validation.sizeLabel)}</span>` : ''}`;
+      const taskId = typeof data === 'object' ? data?.task?.id : '';
+      const download = taskId ? `<a class="convert-download-link" href="/api/convert/tasks/${encodeURIComponent(taskId)}/download">下载到本机</a>` : '';
+      resultBox.innerHTML = `<strong>转换完成${validation?.valid ? ' · 校验通过' : ''}</strong><span>输出文件：${escapeHtml(path)}</span>${validation?.sizeLabel ? `<span>文件大小：${escapeHtml(validation.sizeLabel)}</span>` : ''}${download}`;
     },
     batch(data) {
       if (!resultBox) return;
+      const successful = (data.results || []).filter((row) => row.success && row.taskId).map((row) => `taskId=${encodeURIComponent(row.taskId)}`);
+      const batchDownload = successful.length ? `<a class="convert-download-link" href="/api/convert/tasks/download?${successful.join('&')}">打包下载全部成功结果</a>` : '';
       resultBox.innerHTML = `
         <strong>批量转换完成</strong>
         <span>${escapeHtml(data.successCount)} 个成功，${escapeHtml(data.failedCount)} 个失败，共 ${escapeHtml(data.total)} 个文件。</span>
+        ${batchDownload}
         <div class="convert-result-list">${resultRows(data.results || [])}</div>
       `;
     },

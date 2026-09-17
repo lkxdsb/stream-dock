@@ -287,6 +287,15 @@
     form.append('outputPath', outputPath.value || '~/Downloads/StreamDock');
     const convertSettings = window.StreamDockConvertSettings?.get?.() || {};
     form.append('namingStrategy', convertSettings.namingStrategy || 'append');
+    form.append('imageQuality', String(convertSettings.imageQuality || 90));
+    form.append('audioBitrateKbps', String(convertSettings.audioBitrateKbps || 192));
+    form.append('audioSampleRate', String(convertSettings.audioSampleRate || 0));
+    form.append('videoMaxWidth', String(convertSettings.videoMaxWidth || 0));
+    form.append('videoFrameRate', String(convertSettings.videoFrameRate || 0));
+    form.append('videoBitrateKbps', String(convertSettings.videoBitrateKbps || 0));
+    form.append('videoCrf', String(convertSettings.videoCrf ?? 22));
+    form.append('hardwareAcceleration', convertSettings.hardwareAcceleration || 'software');
+    form.append('archivePassword', document.getElementById('convertArchivePassword')?.value || '');
 
     const label = `${currentSource.toUpperCase()} → ${outputType.value.toUpperCase()}`;
     setLog([batchMode ? '开始批量转换...' : '开始转换...', label, `文件数量：${selectedFiles.length}`]);

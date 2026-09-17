@@ -29,7 +29,7 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
 
 ### 文件格式转换
 
-- 当前能力矩阵登记了 176 条转换路径，覆盖文档、表格、图片、音频、视频、字幕、电子书和压缩包。
+- 当前能力矩阵登记了 180 条转换路径，覆盖文档、表格、图片、音频、视频、字幕、电子书和压缩包。
 - 成熟路径使用 Pillow、openpyxl、python-docx、FFmpeg 等本地引擎。
 - Office 与开放文档格式可调用 LibreOffice；复杂排版、公式、批注和动画可能有损。
 - 支持格式探测、目标格式校验、同格式批量任务、超时控制、临时文件清理和结果打开。
@@ -305,6 +305,16 @@ conda run -n jj python -m pytest -q
 for file in static/js/*.js; do node --check "$file"; done
 git diff --check
 ```
+
+文件转换不能只跑单元测试；还必须执行真实文件黄金样例、随机模糊测试和全路径矩阵：
+
+```bash
+python scripts/test_conversion_robustness.py
+python scripts/test_conversion_fuzz.py --iterations 100
+python scripts/test_conversion_matrix_real.py
+```
+
+具体内容级断言和降级策略见 [`docs/CONVERSION_QUALITY_VALIDATION.md`](docs/CONVERSION_QUALITY_VALIDATION.md)。
 
 ## 项目结构
 

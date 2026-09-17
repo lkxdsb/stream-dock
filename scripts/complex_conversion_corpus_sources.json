@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "description": "Public, non-executable complex conversion fixtures. Files are downloaded into the ignored .streamdock-complex-corpus directory.",
+  "fixtures": [
+    {
+      "id": "ffmpeg-amr-nb-speech",
+      "format": "amr",
+      "relativePath": "public/amr/sample.amr",
+      "url": "https://samples.ffmpeg.org/A-codecs/amr/sample.amr",
+      "sha256": "d1e3add01472f1ea86b20563db9471169b2bf8293829bd1ae12a8d7d4d5b356e",
+      "license": "FFmpeg public test sample; test-only local use",
+      "features": ["AMR-NB", "51.46 seconds", "8 kHz mono", "real speech sample"]
+    },
+    {
+      "id": "libreoffice-ww8-bnc875715",
+      "format": "doc",
+      "relativePath": "public/office/bnc875715.doc",
+      "url": "https://raw.githubusercontent.com/LibreOffice/core/master/sw/qa/extras/ww8import/data/bnc875715.doc",
+      "sha256": "4a8de0f362a73a29b4eae71847c3bdce48ea541c18d6259bc7716465b0cb680e",
+      "license": "MPL-2.0 (LibreOffice test corpus)",
+      "features": ["binary Word 97-2003", "multiple pages", "multiple sections"]
+    },
+    {
+      "id": "libreoffice-xls-universal-content",
+      "format": "xls",
+      "relativePath": "public/office/universal-content.xls",
+      "url": "https://raw.githubusercontent.com/LibreOffice/core/master/sc/qa/unit/data/xls/universal-content.xls",
+      "sha256": "3f84bf513e191642835acbd56a40361bdcf1e4ef1a094b5a444b80f240fd889c",
+      "license": "MPL-2.0 (LibreOffice test corpus)",
+      "features": ["binary Excel 97-2003", "two sheets", "formulas", "merged cells"]
+    },
+    {
+      "id": "libreoffice-ppt-indentation-bullets",
+      "format": "ppt",
+      "relativePath": "public/office/ppt-indentation-bullets.ppt",
+      "url": "https://raw.githubusercontent.com/LibreOffice/core/master/sd/qa/unit/data/ppt/ppt-indentation-bullets.ppt",
+      "sha256": "59091fa1e735abdf2d16bfeb92128c5c92b2c53eafeba5cbb5a243ebf8065359",
+      "license": "MPL-2.0 (LibreOffice test corpus)",
+      "features": ["binary PowerPoint 97-2003", "nested bullets", "indentation"]
+    },
+    {
+      "id": "libreoffice-odt-comments",
+      "format": "odt",
+      "relativePath": "public/office/fdo38244.odt",
+      "url": "https://raw.githubusercontent.com/LibreOffice/core/master/sw/qa/extras/odfexport/data/fdo38244.odt",
+      "sha256": "afed3b64830e34bd1bbd8a32d24ac815910a2e15413534c0e2bc857b093f7b36",
+      "license": "MPL-2.0 (LibreOffice test corpus)",
+      "features": ["OpenDocument Text", "two annotations", "formatted text"]
+    },
+    {
+      "id": "libreoffice-ods-many-charts",
+      "format": "ods",
+      "relativePath": "public/office/many_charts.ods",
+      "url": "https://raw.githubusercontent.com/LibreOffice/core/master/sc/qa/unit/data/ods/many_charts.ods",
+      "sha256": "dd73693f3110339e3f37683a064a7d0fb80548a81ef61216fa04ad6b395accec",
+      "license": "MPL-2.0 (LibreOffice test corpus)",
+      "features": ["OpenDocument Spreadsheet", "43 tables", "40 chart objects", "40 drawing frames"]
+    },
+    {
+      "id": "libreoffice-odp-shapes",
+      "format": "odp",
+      "relativePath": "public/office/shapes-test.odp",
+      "url": "https://raw.githubusercontent.com/LibreOffice/core/master/sd/qa/unit/data/odp/shapes-test.odp",
+      "sha256": "643b9011d19caa28e03ce127fc12039bd77bc034770770922d52225b0f45ec70",
+      "license": "MPL-2.0 (LibreOffice test corpus)",
+      "features": ["OpenDocument Presentation", "multiple shapes", "embedded pictures", "tables"]
+    },
+    {
+      "id": "pillow-apng-iss634",
+      "format": "png",
+      "relativePath": "public/images/iss634.apng",
+      "url": "https://raw.githubusercontent.com/python-pillow/Pillow/main/Tests/images/iss634.apng",
+      "sha256": "26740ffe297aebbe2655c60440e41826dda4b57cb675f53875f45ca13d6185f5",
+      "license": "MIT-CMU (Pillow test corpus)",
+      "features": ["APNG", "41 RGBA frames", "frame timing", "transparency"]
+    },
+    {
+      "id": "pillow-gif-disposal-transparency",
+      "format": "gif",
+      "relativePath": "public/images/dispose_bgnd_transparency.gif",
+      "url": "https://raw.githubusercontent.com/python-pillow/Pillow/main/Tests/images/dispose_bgnd_transparency.gif",
+      "sha256": "e92c52953e4a66eed8290e8a1640174199026c153913a8e30ef687602d404849",
+      "license": "MIT-CMU (Pillow test corpus)",
+      "features": ["GIF89a", "10 frames", "transparency", "background disposal"]
+    },
+    {
+      "id": "pillow-tiff-multipage-compression",
+      "format": "tiff",
+      "relativePath": "public/images/compression.tif",
+      "url": "https://raw.githubusercontent.com/python-pillow/Pillow/main/Tests/images/compression.tif",
+      "sha256": "28cf8518905e9813853b1c41c7c8e70d999fecf22bdfb04309fd00f035ed4433",
+      "license": "MIT-CMU (Pillow test corpus)",
+      "features": ["multi-page TIFF", "two non-blank frames", "mixed compression", "bilevel pixels"]
+    },
+    {
+      "id": "pillow-jpeg-large-icc",
+      "format": "jpg",
+      "relativePath": "public/images/icc_profile_big.jpg",
+      "url": "https://raw.githubusercontent.com/python-pillow/Pillow/main/Tests/images/icc_profile_big.jpg",
+      "sha256": "9329fadea9654d127bdf1f5c31d0583a5797282ffc45d668662da4df6ee4c3dd",
+      "license": "MIT-CMU (Pillow test corpus)",
+      "features": ["progressive JPEG", "large ICC profile", "300 DPI"]
+    },
+    {
+      "id": "pillow-png-exif",
+      "format": "png",
+      "relativePath": "public/images/exif.png",
+      "url": "https://raw.githubusercontent.com/python-pillow/Pillow/main/Tests/images/exif.png",
+      "sha256": "eb58fc260f08b8c95857128316f72ec8008ca8b2d3901aa23eba7196ae716258",
+      "license": "MIT-CMU (Pillow test corpus)",
+      "features": ["PNG", "EXIF orientation metadata", "512 by 512"]
+    },
+    {
+      "id": "idpf-accessible-epub3",
+      "format": "epub",
+      "relativePath": "public/ebook/accessible_epub_3.epub",
+      "url": "https://github.com/IDPF/epub3-samples/releases/download/20230704/accessible_epub_3.epub",
+      "sha256": "67f75b8e3cd1abe4bb143d91d5424191d5af3115c9d26ff029a38e19f8d16feb",
+      "license": "CC-BY-SA-3.0 (IDPF/W3C EPUB 3 samples)",
+      "features": ["EPUB 3", "22 XHTML documents", "images", "CSS", "accessibility metadata"]
+    }
+  ]
+}
