@@ -932,6 +932,38 @@ class HomePageOptionTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(marker, text)
 
 
+class OpenOutputPathTests(unittest.IsolatedAsyncioTestCase):
+    """Regression: an empty path used to resolve to the project cwd and open it
+    instead of the user's chosen output directory. The endpoint must reject empty
+    and cwd paths before invoking `open`.
+    """
+
+    async def _post_path(self, path_value):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://t') as client:
+            resp = await client.post(
+                '/api/open-output-path',
+                data={'path': path_value},
+            )
+        return resp
+
+    async def test_empty_path_is_rejected(self):
+        resp = await self._post_path('')
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(resp.json()['success'])
+
+    async def test_whitespace_path_is_rejected(self):
+        resp = await self._post_path('   ')
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(resp.json()['success'])
+
+    async def test_cwd_path_is_rejected(self):
+        # Even with a non-empty value, opening the process cwd would surface
+        # the project directory to the user — guard against it.
+        resp = await self._post_path(str(Path.cwd()))
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(resp.json()['success'])
+
+
 class ApiResponseShapeTests(unittest.IsolatedAsyncioTestCase):
     def test_quality_selector_submits_stable_label_not_temporary_url(self):
         script = Path('static/js/use-quality.js').read_text(encoding='utf-8')
