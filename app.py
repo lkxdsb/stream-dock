@@ -1249,8 +1249,9 @@ def subtitles_page(request: Request):
 @app.get('/web-archive', response_class=HTMLResponse)
 def web_archive_page(request: Request):
     return templates.TemplateResponse(
-        'web-archive.html',
-        {'request': request, 'title': 'StreamDock · 网页存档', 'active_nav': 'web-archive'},
+        request=request,
+        name='web-archive.html',
+        context={'request': request, 'title': 'StreamDock · 网页存档', 'active_nav': 'web-archive'},
     )
 
 
@@ -1937,7 +1938,7 @@ def clear_finished_tasks(kind: str | None = None):
 
 
 @app.post('/api/open-output-path')
-def open_output_path(path: str = Form(...)):
+def open_output_path(path: str = Form('')):
     if not path or not path.strip():
         return JSONResponse({'success': False, 'error': '输出目录为空，请先完成提取任务'}, status_code=400)
     target = Path(path).expanduser().resolve()

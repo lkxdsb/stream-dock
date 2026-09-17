@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 from pathlib import Path
@@ -127,6 +128,21 @@ def test_crawl_url_returns_markdown_and_title_from_raw_when_fit_empty():
     assert title == "Crawl Title"
     assert "Page" in out_md
     assert imgs == ["https://example.com/a.png"]
+
+
+def test_crawl_url_prefers_raw_markdown_to_avoid_fit_content_loss():
+    fake = _fake_markdown_result("# 标题\n\n中文正文\n\n| 姓名 | 分数 |\n|---|---|\n| 张三 | 98 |", "标题")
+    fake.markdown.fit_markdown = '```python\nprint("only code survived")\n```'
+    crawler = MagicMock()
+    crawler.__aenter__ = AsyncMock(return_value=crawler)
+    crawler.__aexit__ = AsyncMock(return_value=None)
+    crawler.arun = AsyncMock(return_value=fake)
+
+    with patch("web_archive.extractor.AsyncWebCrawler", return_value=crawler):
+        out_md, _, _ = crawl_url("https://example.com/p")
+
+    assert "中文正文" in out_md
+    assert "张三" in out_md
 
 
 def test_crawl_url_raises_extractor_error_when_crawl_fails():
@@ -457,43 +473,38 @@ import httpx
 import pytest
 
 
-@pytest.mark.asyncio
-async def test_web_archive_page_loads():
-    from app import app
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
-        try:
+def test_web_archive_page_loads():
+    async def run():
+        from app import app
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
             resp = await client.get('/web-archive')
-            # Template rendering may fail due to Jinja2/Starlette version mismatch in test env;
-            # the important thing is that the route is registered and reaches the template stage.
-            assert resp.status_code in (200, 500)
-            if resp.status_code == 200:
-                assert '网页存档' in resp.text
-        except Exception:
-            # Jinja2 cache TypeError is a known env version mismatch, not a code issue.
-            pass
+            assert resp.status_code == 200
+            assert '网页存档' in resp.text
+    asyncio.run(run())
 
 
-@pytest.mark.asyncio
-async def test_web_archive_extract_rejects_invalid_url():
-    from app import app
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
-        resp = await client.post('/api/web-archive/extract', json={
-            'url': 'not-a-url',
-            'outputPath': '/tmp',
-        })
-    # Pydantic validation returns 422 for invalid input
+def test_web_archive_extract_rejects_invalid_url():
+    async def run():
+        from app import app
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            return await client.post('/api/web-archive/extract', json={
+                'url': 'not-a-url',
+                'outputPath': '/tmp',
+            })
+    resp = asyncio.run(run())
+    # Pydantic validation returns 422 for invalid input.
     assert resp.status_code in (400, 422)
 
 
-@pytest.mark.asyncio
-async def test_web_archive_asset_rejects_nonexistent_task():
-    from app import app
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
-        resp = await client.get('/api/web-archive/tasks/nonexistent-id/asset?path=index.md')
-    assert resp.status_code == 404
+def test_web_archive_asset_rejects_nonexistent_task():
+    async def run():
+        from app import app
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            return await client.get('/api/web-archive/tasks/nonexistent-id/asset?path=index.md')
+    assert asyncio.run(run()).status_code == 404
 
 
 # ── Queue tests ──────────────────────────────────────────────

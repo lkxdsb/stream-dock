@@ -132,7 +132,11 @@ async def _crawl_async(url: str, raw_cookie: str | None = None) -> tuple[str, st
     markdown_field = getattr(result, "markdown", None)
     fit = getattr(markdown_field, "fit_markdown", None)
     raw = getattr(markdown_field, "raw_markdown", None)
-    markdown = (fit or raw or "").strip()
+    # `fit_markdown` is an aggressive relevance summary. On short but valid
+    # pages it can retain only a code block and silently drop headings, prose,
+    # tables and Unicode text. Archiving must favor fidelity over compactness,
+    # so use Crawl4AI's cleaned raw Markdown and only fall back to `fit`.
+    markdown = (raw or fit or "").strip()
     if not markdown:
         raise ExtractorError("页面正文提取为空")
 
