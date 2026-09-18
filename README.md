@@ -4,6 +4,25 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
 
 > 请仅处理你拥有或已获授权使用的内容，并遵守来源平台条款与当地法律。
 
+## 项目界面
+
+<p align="center">
+  <img src="docs/images/streamdock-home.png" alt="StreamDock 产品首页" width="100%" />
+</p>
+
+<table>
+  <tr>
+    <td width="50%" align="center"><strong>文件转换中心</strong></td>
+    <td width="50%" align="center"><strong>网页存档工作台</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/streamdock-convert.png" alt="StreamDock 文件转换中心" /></td>
+    <td><img src="docs/images/streamdock-web-archive.png" alt="StreamDock 网页存档工作台" /></td>
+  </tr>
+</table>
+
+截图来自当前代码在本机 `1440 × 900` 视口下的实际运行页面。
+
 ## 功能概览
 
 ### 多平台媒体解析
@@ -48,6 +67,12 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
 - 使用独立的 MinerU 环境执行深度解析，避免与主程序依赖冲突。
 - 通过异步任务展示进度、结构化 Markdown、结果文件和归档状态。
 - MinerU 不可用时会通过健康检查给出明确提示，不影响其他工作台使用。
+
+### 网页存档
+
+- 通过 Crawl4AI 渲染网页并提取完整 Markdown，保留标题、正文、表格、代码块和 Unicode 内容。
+- 将页面图片下载到本地并重写 Markdown 链接，形成可离线阅读的存档目录。
+- 可选传入用户授权的 Cookie 处理需要登录的页面，任务过程在本地队列中执行。
 
 ### 任务与运行状态
 
@@ -262,6 +287,7 @@ Windows 用户可以通过 WSL 使用该脚本，或自行安装 MinerU 后通�
 | `/use` | 媒体链接解析与下载 |
 | `/platforms` | 平台能力、限制和运行状态 |
 | `/convert` | 文件转换、批量任务和能力矩阵 |
+| `/web-archive` | 网页正文、表格、代码和图片本地存档 |
 | `/subtitles` | 字幕导入、编辑与导出 |
 | `/pdf` | PDF 分析和深度解析 |
 | `/updates` | 产品更新记录 |
@@ -312,6 +338,8 @@ git diff --check
 python scripts/test_conversion_robustness.py
 python scripts/test_conversion_fuzz.py --iterations 100
 python scripts/test_conversion_matrix_real.py
+python scripts/fetch_complex_conversion_corpus.py
+python scripts/test_conversion_complex_corpus.py
 ```
 
 具体内容级断言和降级策略见 [`docs/CONVERSION_QUALITY_VALIDATION.md`](docs/CONVERSION_QUALITY_VALIDATION.md)。
@@ -331,6 +359,7 @@ stream-dock/
 │   └── pipeline.py        # 转换探测与执行
 ├── subtitles/             # 字幕解析、校验和导出
 ├── pdf_engine/            # PDF 分析、策略、质量评估与 MinerU 适配
+├── web_archive/          # 网页渲染、Markdown 提取、图片本地化与任务队列
 ├── tasks/                 # 媒体、字幕、转换、PDF 队列与状态存储
 ├── templates/             # Jinja2 页面模板
 ├── static/                # 样式、交互脚本和图标
