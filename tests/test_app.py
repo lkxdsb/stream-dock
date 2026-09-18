@@ -1538,5 +1538,12 @@ class PlatformReliabilityApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(task_store.get(completed.id))
 
 
+class AppEntrypointTests(unittest.TestCase):
+    def test_python_app_entrypoint_starts_uvicorn(self):
+        source = Path('app.py').read_text(encoding='utf-8')
+        self.assertIn("if __name__ == '__main__':", source)
+        self.assertIn('uvicorn.run(', source)
+
+
 if __name__ == '__main__':
     unittest.main()

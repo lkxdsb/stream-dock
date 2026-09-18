@@ -2276,3 +2276,13 @@ def get_web_archive_asset(task_id: str, path: str):
         return JSONResponse({'success': False, 'error': '仅允许访问 Markdown 和图片文件'}, status_code=400)
 
     return FileResponse(target)
+
+
+if __name__ == '__main__':
+    import uvicorn
+
+    uvicorn.run(
+        app,
+        host=os.getenv('STREAMDOCK_HOST', '127.0.0.1'),
+        port=int(os.getenv('STREAMDOCK_PORT', '8002')),
+    )
