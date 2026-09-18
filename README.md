@@ -21,6 +21,17 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
   </tr>
 </table>
 
+<table>
+  <tr>
+    <td width="50%" align="center"><strong>文件转换能力矩阵</strong></td>
+    <td width="50%" align="center"><strong>平台解析能力</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/streamdock-conversion-matrix.png" alt="StreamDock 文件转换能力矩阵" /></td>
+    <td><img src="docs/images/streamdock-platform-capabilities.png" alt="StreamDock 平台解析能力" /></td>
+  </tr>
+</table>
+
 截图来自当前代码在本机 `1440 × 900` 视口下的实际运行页面。
 
 ## 功能概览
@@ -48,11 +59,32 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
 
 ### 文件格式转换
 
-- 当前能力矩阵登记了 180 条转换路径，覆盖文档、表格、图片、音频、视频、字幕、电子书和压缩包。
+- 当前能力矩阵登记了 **179 条去重转换路径、76 种格式**；其中 164 条为本地能力，15 条为专业工具建议。
 - 成熟路径使用 Pillow、openpyxl、python-docx、FFmpeg 等本地引擎。
 - Office 与开放文档格式可调用 LibreOffice；复杂排版、公式、批注和动画可能有损。
 - 支持格式探测、目标格式校验、同格式批量任务、超时控制、临时文件清理和结果打开。
 - 对暂不适合本地处理的复杂格式给出专业工具建议，而不是伪造转换结果。
+
+<details>
+<summary><strong>展开查看完整文件转换矩阵</strong></summary>
+
+> `stable` 与 `basic` 共 164 条已登记本地路径；实际可用性仍取决于 FFmpeg、LibreOffice、PDF 引擎等运行时依赖。`vendor` 共 15 条，仅提供专业工具建议，不会生成伪造结果。
+
+| 分类 | 转换路径 |
+| --- | --- |
+| 数据表格（23） | `csv → xlsx/json/tsv/txt`；`tsv → csv/xlsx/json`；`xlsx → csv/json/tsv`；`json → csv/xlsx/txt/yaml/xml/toml`；`txt → csv/xlsx`；`ndjson → json/csv`；`yaml/xml/toml → json` |
+| 图片（28） | `png → jpg/webp/bmp/tiff/ico/ppm/gif`；`jpg → png/webp/bmp/tiff/ico`；`jpeg → png/webp`；`webp/bmp/tiff/ico/ppm → png/jpg`；`pgm/pbm/pnm → png`；`gif → png` |
+| 音频（25） | `mp3 → wav/m4a/aac/flac/ogg/opus`；`wav → mp3/m4a/flac/ogg`；`m4a → mp3/wav/aac`；`aac/flac/aiff/wma/amr → mp3/wav`；`ogg/opus → mp3` |
+| 视频（19） | `mp4 → mp3/wav/m4a/gif/webm`；`mov → mp4/gif/webm`；`mkv → mp4/webm`；`webm/avi/flv → mp4/gif`；`m4v/3gp/ts → mp4` |
+| 字幕（7） | `srt ↔ vtt`；`ass → srt/vtt`；`txt → srt`；`lrc → srt/vtt` |
+| 压缩包（14） | `zip/tar/tar.gz → folder` 及相互打包转换；`gz/bz2 → folder`；`folder → zip/tar.gz`；`7z/rar → folder/zip` |
+| 轻文档（20） | `md/markdown → html/txt/docx/pdf`；`html → txt/md/docx/pdf`；`txt → html/md/docx/rtf/pdf`；`rtf → txt/html/docx` |
+| Office 基础（21） | `docx → txt/html/md/rtf/pdf`；`doc/odt → docx/txt/html`；`ppt/odp → pptx`；`pptx → pdf/png`；`xls/ods → xlsx/csv`；`xlsx → pdf/html` |
+| 电子书（4） | `epub → txt/html/md/pdf` |
+| 矢量图文档（3） | `svg → png/jpg/pdf` |
+| 专业工具建议（15） | `pdf → docx/xlsx/pptx`；`scan-pdf/image-ocr → docx/xlsx`；`complex-docx/complex-pptx → pdf`；`cad → pdf/png`；`psd → png`；`ai → pdf`；`sketch → figma`；`figma → pdf` |
+
+</details>
 
 ### 字幕工作台
 
