@@ -61,7 +61,7 @@ STABLE_VIDEO = [
     ('avi', 'mp4'), ('flv', 'mp4'), ('m4v', 'mp4'), ('3gp', 'mp4'), ('ts', 'mp4'),
     ('mp4', 'gif'), ('mov', 'gif'), ('webm', 'gif'),
     ('avi', 'gif'), ('flv', 'gif'),
-    ('mp4', 'webm'), ('mov', 'webm'), ('mkv', 'webm'), ('webm', 'mp4'),
+    ('mp4', 'webm'), ('mov', 'webm'), ('mkv', 'webm'),
 ]
 STABLE_SUBTITLE = [('srt', 'vtt'), ('vtt', 'srt'), ('ass', 'srt'), ('ass', 'vtt'), ('txt', 'srt'), ('lrc', 'srt'), ('lrc', 'vtt')]
 STABLE_ARCHIVE = [

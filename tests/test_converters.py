@@ -27,6 +27,7 @@ from converters.registry import find_capability, infer_input_format, list_capabi
 class ConverterRegistryTests(unittest.TestCase):
     def test_registry_contains_large_first_version_capability_matrix(self):
         capabilities = list_capabilities()
+        self.assertEqual(len(capabilities), len({capability.key for capability in capabilities}))
         self.assertGreaterEqual(len([c for c in capabilities if c.level == ConversionLevel.STABLE]), 45)
         self.assertGreaterEqual(len([c for c in capabilities if c.level == ConversionLevel.BASIC]), 15)
         self.assertGreaterEqual(len([c for c in capabilities if c.level == ConversionLevel.VENDOR]), 10)
