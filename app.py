@@ -60,19 +60,20 @@ BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / 'templates'
 STATIC_DIR = BASE_DIR / 'static'
 SCRIPT_PATH = BASE_DIR / 'douyin_fetch.py'
-OUTPUT_FILE_PATTERN = re.compile(r"output file:\s*(.+)$")
-PLATFORM_PATTERN = re.compile(r"platform:\s*(.+)$")
-TITLE_PATTERN = re.compile(r"title:\s*(.+)$")
-COVER_URL_PATTERN = re.compile(r"cover url:\s*(.+)$")
-COVER_FILE_PATTERN = re.compile(r"cover file:\s*(.+)$")
-SUBTITLE_FILE_PATTERN = re.compile(r"subtitle file:\s*(.+)$")
-SUBTITLE_COUNT_PATTERN = re.compile(r"subtitle count:\s*(\d+)$")
-SUBTITLE_DETAIL_PATTERN = re.compile(r"subtitle detail:\s*([^|]+)\|([^|]+)\|(.+)$")
-SUBTITLE_PENDING_PATTERN = re.compile(r"subtitle pending:\s*(true|false)$", re.IGNORECASE)
-MEDIA_KIND_PATTERN = re.compile(r"captured media kind:\s*(.+)$")
-IMAGE_FILE_PATTERN = re.compile(r"image file:\s*(.+)$")
-IMAGE_COUNT_PATTERN = re.compile(r"image count:\s*(\d+)$")
-PROGRESS_PATTERN = re.compile(r"progress:\s*([^|]*)\|(.+)$")
+_MEDIA_RESULT_PREFIX = r'^\[douyin-fetch\]\s+'
+OUTPUT_FILE_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"output file:\s*(.+)$")
+PLATFORM_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"platform:\s*(.+)$")
+TITLE_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"title:\s*(.+)$")
+COVER_URL_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"cover url:\s*(.+)$")
+COVER_FILE_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"cover file:\s*(.+)$")
+SUBTITLE_FILE_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"subtitle file:\s*(.+)$")
+SUBTITLE_COUNT_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"subtitle count:\s*(\d+)$")
+SUBTITLE_DETAIL_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"subtitle detail:\s*([^|]+)\|([^|]+)\|(.+)$", re.MULTILINE)
+SUBTITLE_PENDING_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"subtitle pending:\s*(true|false)$", re.IGNORECASE)
+MEDIA_KIND_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"captured media kind:\s*(.+)$")
+IMAGE_FILE_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"image file:\s*(.+)$")
+IMAGE_COUNT_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"image count:\s*(\d+)$")
+PROGRESS_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"progress:\s*([^|]*)\|(.+)$")
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 MAX_CONVERT_FILE_BYTES = int(os.getenv('STREAMDOCK_MAX_CONVERT_FILE_BYTES', str(500 * 1024 * 1024)))
 MAX_CONVERT_BATCH_FILES = int(os.getenv('STREAMDOCK_MAX_CONVERT_BATCH_FILES', '20'))
@@ -2022,7 +2023,13 @@ def media_cover_proxy(url: str):
     content_type = raw_content_type if raw_content_type.startswith('image/') else sniff_image_media_type(content, raw_content_type or 'image/jpeg')
     if not content_type or not content_type.startswith('image/'):
         return JSONResponse({'success': False, 'error': '远端资源不是图片'}, status_code=415)
-    headers = {'Cache-Control': 'public, max-age=3600'}
+    if content_type == 'image/svg+xml':
+        return JSONResponse({'success': False, 'error': '为避免执行主动内容，SVG 封面不提供同源预览'}, status_code=415)
+    headers = {
+        'Cache-Control': 'public, max-age=3600',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
+    }
     return Response(content=content, media_type=content_type, headers=headers)
 
 
@@ -2275,7 +2282,19 @@ def get_web_archive_asset(task_id: str, path: str):
     if target.suffix.lower() not in allowed_suffixes:
         return JSONResponse({'success': False, 'error': '仅允许访问 Markdown 和图片文件'}, status_code=400)
 
-    return FileResponse(target)
+    headers = {
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
+    }
+    if target.suffix.lower() == '.svg':
+        return FileResponse(
+            target,
+            filename=target.name,
+            content_disposition_type='attachment',
+            media_type='application/octet-stream',
+            headers=headers,
+        )
+    return FileResponse(target, headers=headers)
 
 
 if __name__ == '__main__':

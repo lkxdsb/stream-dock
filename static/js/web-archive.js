@@ -39,29 +39,55 @@
   var urlInput = document.getElementById('webArchiveUrl');
   var cookieInput = document.getElementById('webArchiveCookie');
   var advancedDetails = document.getElementById('webArchiveAdvanced');
-  var cookieStorageKey = 'streamdock.webArchive.cookie.v1';
+  var cookieStoragePrefix = 'streamdock.webArchive.cookie.v2:';
+  var cookieOrigin = '';
 
-  // Restore the locally saved Cookie (browser localStorage only, never uploaded
-  // unless the user actually starts an extraction task).
-  if (cookieInput) {
+  function archiveOrigin(value) {
     try {
-      var savedCookie = window.localStorage.getItem(cookieStorageKey);
+      var parsed = new URL((value || '').trim());
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function syncCookieForUrl() {
+    if (!cookieInput) return;
+    var nextOrigin = archiveOrigin(urlInput ? urlInput.value : '');
+    if (nextOrigin === cookieOrigin) return;
+    cookieOrigin = nextOrigin;
+    cookieInput.value = '';
+    if (!cookieOrigin) return;
+    try {
+      var savedCookie = window.sessionStorage.getItem(cookieStoragePrefix + cookieOrigin);
       if (savedCookie) {
         cookieInput.value = savedCookie;
         if (advancedDetails) advancedDetails.open = true;
       }
     } catch (_) {}
+  }
+
+  // Cookies are scoped to one origin and one browser session. They are sent to
+  // the local StreamDock service only when the user starts that origin's task.
+  if (cookieInput) {
+    try {
+      window.localStorage.removeItem('streamdock.webArchive.cookie.v1');
+    } catch (_) {}
     cookieInput.addEventListener('change', function () {
       try {
         var value = (cookieInput.value || '').trim();
-        if (value) {
-          window.localStorage.setItem(cookieStorageKey, value);
-        } else {
-          window.localStorage.removeItem(cookieStorageKey);
-        }
+        if (!cookieOrigin) return;
+        var key = cookieStoragePrefix + cookieOrigin;
+        if (value) window.sessionStorage.setItem(key, value);
+        else window.sessionStorage.removeItem(key);
       } catch (_) {}
     });
   }
+  if (urlInput) {
+    urlInput.addEventListener('input', syncCookieForUrl);
+    urlInput.addEventListener('change', syncCookieForUrl);
+  }
+  syncCookieForUrl();
   var outputPathInput = document.getElementById('webArchiveOutputPath');
   var selectDirBtn = document.getElementById('webArchiveSelectDir');
   var extractBtn = document.getElementById('webArchiveExtractBtn');

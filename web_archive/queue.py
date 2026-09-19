@@ -65,6 +65,8 @@ class WebArchiveQueue:
         self.store.update(task_id, status=TaskStatus.RUNNING, logs=['正在启动网页存档任务'], stage='正在获取页面', progress=10)
         try:
             result = self.runner({**payload, '_taskId': task_id})
+            if not bool(result.get('success')):
+                raise RuntimeError(str(result.get('error') or '网页存档失败'))
             with self._lock:
                 cancelled = task_id in self._cancelled
             if cancelled:

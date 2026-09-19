@@ -59,7 +59,7 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
 
 ### 文件格式转换
 
-- 当前能力矩阵登记了 **179 条去重转换路径、76 种格式**；其中 164 条为本地能力，15 条为专业工具建议。
+- 当前能力矩阵登记了 **179 条去重转换路径、76 种格式**；其中 163 条为本地能力，16 条为专业工具建议。
 - 成熟路径使用 Pillow、openpyxl、python-docx、FFmpeg 等本地引擎。
 - Office 与开放文档格式可调用 LibreOffice；复杂排版、公式、批注和动画可能有损。
 - 支持格式探测、目标格式校验、同格式批量任务、超时控制、临时文件清理和结果打开。
@@ -68,7 +68,7 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
 <details>
 <summary><strong>展开查看完整文件转换矩阵</strong></summary>
 
-> `stable` 与 `basic` 共 164 条已登记本地路径；实际可用性仍取决于 FFmpeg、LibreOffice、PDF 引擎等运行时依赖。`vendor` 共 15 条，仅提供专业工具建议，不会生成伪造结果。
+> `stable` 与 `basic` 共 163 条已登记本地路径；实际可用性仍取决于 FFmpeg、LibreOffice、PDF 引擎等运行时依赖。`vendor` 共 16 条，仅提供专业工具建议，不会生成伪造结果。
 
 | 分类 | 转换路径 |
 | --- | --- |
@@ -79,10 +79,10 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
 | 字幕（7） | `srt ↔ vtt`；`ass → srt/vtt`；`txt → srt`；`lrc → srt/vtt` |
 | 压缩包（14） | `zip/tar/tar.gz → folder` 及相互打包转换；`gz/bz2 → folder`；`folder → zip/tar.gz`；`7z/rar → folder/zip` |
 | 轻文档（20） | `md/markdown → html/txt/docx/pdf`；`html → txt/md/docx/pdf`；`txt → html/md/docx/rtf/pdf`；`rtf → txt/html/docx` |
-| Office 基础（21） | `docx → txt/html/md/rtf/pdf`；`doc/odt → docx/txt/html`；`ppt/odp → pptx`；`pptx → pdf/png`；`xls/ods → xlsx/csv`；`xlsx → pdf/html` |
+| Office 基础（20） | `docx → txt/html/md/rtf/pdf`；`doc/odt → docx/txt/html`；`ppt/odp → pptx`；`pptx → pdf`；`xls/ods → xlsx/csv`；`xlsx → pdf/html` |
 | 电子书（4） | `epub → txt/html/md/pdf` |
 | 矢量图文档（3） | `svg → png/jpg/pdf` |
-| 专业工具建议（15） | `pdf → docx/xlsx/pptx`；`scan-pdf/image-ocr → docx/xlsx`；`complex-docx/complex-pptx → pdf`；`cad → pdf/png`；`psd → png`；`ai → pdf`；`sketch → figma`；`figma → pdf` |
+| 专业工具建议（16） | `pptx → png`；`pdf → docx/xlsx/pptx`；`scan-pdf/image-ocr → docx/xlsx`；`complex-docx/complex-pptx → pdf`；`cad → pdf/png`；`psd → png`；`ai → pdf`；`sketch → figma`；`figma → pdf` |
 
 </details>
 
@@ -184,6 +184,12 @@ source .venv/bin/activate
 
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+```
+
+如需在平台没有原生字幕时启用本地 ASR，再安装媒体可选依赖：
+
+```bash
+python -m pip install -r requirements-media.txt
 ```
 
 Linux 如果命令名是 `python3`：
@@ -344,6 +350,15 @@ Windows 用户可以通过 WSL 使用该脚本，或自行安装 MinerU 后通�
 Cookie 仅应通过本机环境或未跟踪文件提供，不要写入源码、日志、Issue 或提交记录。
 
 ## 测试
+
+CI 使用 Python 3.11 生成的 `requirements-lock-py311.txt`，避免开发机上的框架和工具版本漂移。准备一致的测试环境可执行：
+
+```bash
+python3.11 -m venv .venv-test
+source .venv-test/bin/activate
+python -m pip install -r requirements-lock-py311.txt
+python -m pip check
+```
 
 运行完整回归测试：
 

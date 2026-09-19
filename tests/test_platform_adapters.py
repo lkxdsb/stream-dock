@@ -7,7 +7,7 @@ from unittest.mock import patch
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.adapters.bilibili import BilibiliAdapter
 from fetchers.adapters.channels import ChannelsAdapter
-from fetchers.adapters.common import classify_browser_response_candidate, choose_best_browser_media_url
+from fetchers.adapters.common import classify_browser_response_candidate, choose_best_browser_media_url, get_url_host
 from fetchers.adapters.douyin import DouyinAdapter, extract_router_data_json, resolve_share_link
 from fetchers.adapters.kuaishou import KuaishouAdapter
 from fetchers.adapters.weibo import WeiboAdapter
@@ -16,6 +16,11 @@ from fetchers.models import ExportRequest, ImageAsset, MediaFetchResult, MediaSt
 
 
 class ModelContractTests(unittest.TestCase):
+    def test_supported_host_parser_rejects_url_userinfo_confusion(self):
+        crafted = 'https://www.bilibili.com:audit@example.invalid/video/BV1audit'
+        self.assertEqual(get_url_host(crafted), '')
+        self.assertFalse(BilibiliAdapter().can_handle(crafted))
+
     def test_media_stream_records_quality_fields(self):
         stream = MediaStream(
             url="https://example.com/video.mp4",
@@ -1121,6 +1126,24 @@ class TwitterXAdapterTests(unittest.TestCase):
 
 
 class BilibiliAdapterTests(unittest.TestCase):
+    def test_bilibili_cookie_is_not_forwarded_to_cross_site_redirect(self):
+        class RedirectResponse:
+            status_code = 302
+            headers = {'location': 'https://example.invalid/steal'}
+            url = 'https://www.bilibili.com/video/BV1audit/'
+
+            def raise_for_status(self):
+                return None
+
+        adapter = BilibiliAdapter()
+        with patch('fetchers.adapters.bilibili.load_bilibili_cookies', return_value=({'SESSDATA': 'audit-dummy'}, 'manual')):
+            with patch('fetchers.adapters.bilibili.requests.get', return_value=RedirectResponse()) as mocked_get:
+                with self.assertRaisesRegex(ValueError, 'Unsupported Bilibili redirect host'):
+                    adapter.fetch_media('https://www.bilibili.com/video/BV1audit/')
+
+        self.assertEqual(mocked_get.call_count, 1)
+        self.assertEqual(mocked_get.call_args.kwargs['cookies']['SESSDATA'], 'audit-dummy')
+
     def test_bilibili_adapter_extracts_core_url_from_share_text(self):
         adapter = BilibiliAdapter()
         raw_link = "0.74 复制打开B站 https://www.bilibili.com/video/BV1xx411c7mD/?spm_id_from=333.999"

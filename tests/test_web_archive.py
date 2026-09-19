@@ -507,6 +507,25 @@ def test_web_archive_asset_rejects_nonexistent_task():
     assert asyncio.run(run()).status_code == 404
 
 
+def test_web_archive_svg_asset_is_forced_to_attachment():
+    async def run():
+        from app import app, task_store
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'active.svg').write_text('<svg><script>alert(1)</script></svg>', encoding='utf-8')
+            task = task_store.create(TaskKind.WEB_ARCHIVE, 'svg archive', {'url': 'https://example.com'})
+            task_store.update(task.id, status=TaskStatus.COMPLETED, result={'outputDir': str(root)})
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                return await client.get(f'/api/web-archive/tasks/{task.id}/asset', params={'path': 'active.svg'})
+
+    response = asyncio.run(run())
+    assert response.status_code == 200
+    assert response.headers['content-type'] == 'application/octet-stream'
+    assert response.headers['content-disposition'].startswith('attachment;')
+    assert response.headers['x-content-type-options'] == 'nosniff'
+
+
 # ── Queue tests ──────────────────────────────────────────────
 
 from web_archive.queue import WebArchiveQueue
@@ -548,3 +567,19 @@ def test_web_archive_queue_cancel_pending_task():
     time.sleep(1.5)
     updated = store.get(task_dict['id'])
     assert updated.status in {TaskStatus.CANCELLED, TaskStatus.COMPLETED}
+
+
+def test_web_archive_queue_marks_unsuccessful_runner_result_failed():
+    import time
+
+    store = TaskStore()
+    queue = WebArchiveQueue(store, lambda payload: {'success': False, 'error': 'controlled failure', 'logs': []})
+    task_dict = queue.submit({'url': 'https://example.com', 'outputPath': '/tmp'})
+    deadline = time.time() + 2
+    task = store.get(task_dict['id'])
+    while task and task.status not in {TaskStatus.COMPLETED, TaskStatus.FAILED} and time.time() < deadline:
+        time.sleep(.01)
+        task = store.get(task_dict['id'])
+    assert task is not None
+    assert task.status == TaskStatus.FAILED
+    assert 'controlled failure' in str(task.error)

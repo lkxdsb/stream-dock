@@ -10,7 +10,7 @@ import requests
 from playwright.sync_api import BrowserContext, sync_playwright
 
 from fetchers.adapters.base import BasePlatformAdapter
-from fetchers.adapters.common import collect_subtitle_tracks_from_payload, extract_balanced_json_after, host_matches
+from fetchers.adapters.common import collect_subtitle_tracks_from_payload, extract_balanced_json_after, get_url_host, host_matches
 from fetchers.models import ImageAsset, MediaFetchResult, MediaStream
 
 URL_PATTERN = re.compile(r"https?://[^\s]+")
@@ -51,7 +51,7 @@ def aweme_kind_from_url(url: str) -> str | None:
 
 def is_douyin_generic_landing_url(url: str) -> bool:
     parsed = urlparse(url)
-    host = parsed.netloc.lower().split(":", 1)[0]
+    host = get_url_host(url)
     path = (parsed.path or "/").strip("/")
     return host_matches(host, ("www.douyin.com", "douyin.com")) and path in {"", "jingxuan"}
 
@@ -72,7 +72,7 @@ def resolve_share_link(url: str) -> str:
             allow_redirects=False,
         )
         location = response.headers.get("location") or ""
-        if location and host_matches(urlparse(location).netloc.lower().split(":", 1)[0], SUPPORTED_HOSTS):
+        if location and host_matches(get_url_host(location), SUPPORTED_HOSTS):
             # Some Douyin short links resolve to the generic home page when the
             # link is expired or the request is challenged. Do not treat that as
             # a valid video URL; otherwise the probe captures the homepage demo
@@ -449,7 +449,7 @@ class DouyinAdapter(BasePlatformAdapter):
             candidate = extract_first_url(raw_link)
         except ValueError:
             candidate = raw_link
-        host = urlparse(candidate).netloc.lower().split(":", 1)[0]
+        host = get_url_host(candidate)
         return host_matches(host, self.supported_hosts)
 
     def normalize_link(self, raw_link: str) -> str:

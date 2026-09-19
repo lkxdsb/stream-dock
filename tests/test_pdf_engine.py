@@ -65,6 +65,14 @@ class PdfEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(quality['valid'])
         self.assertEqual(quality['score'], 100)
 
+    def test_pdf_quality_rejects_replacement_character_only_markdown(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / 'result.md').write_text('\ufffd' * 100, encoding='utf-8')
+            quality = evaluate_pdf_result(root)
+        self.assertFalse(quality['valid'])
+        self.assertEqual(quality['replacementRatio'], 1.0)
+
     def test_pdf_queue_completes_and_cleans_uploaded_input(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source = Path(temp_dir) / 'input.pdf'

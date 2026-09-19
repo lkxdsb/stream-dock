@@ -16,6 +16,14 @@ class BatchConversionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, '缺少卷'):
             collapse_split_archive_inputs(inputs)
 
+    def test_split_rar_inputs_reject_unbounded_volume_number(self):
+        inputs = [
+            BatchInput('archive.part1.rar', 'rar'),
+            BatchInput('archive.part1000000000.rar', 'rar'),
+        ]
+        with self.assertRaisesRegex(RuntimeError, '卷号超出'):
+            collapse_split_archive_inputs(inputs)
+
     def test_validate_batch_route_accepts_identical_sources(self):
         validation = validate_batch_route(['a.csv', 'b.csv'], 'json')
         self.assertTrue(validation.success, validation.error)

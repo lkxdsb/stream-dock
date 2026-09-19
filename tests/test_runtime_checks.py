@@ -25,6 +25,13 @@ class RuntimeChecksTests(unittest.TestCase):
             self.assertTrue(result['writable'])
             self.assertGreater(result['freeBytes'], 0)
 
+    def test_prepare_output_directory_never_deletes_legacy_probe_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / '.streamdock-write-test'
+            legacy.write_text('user-owned', encoding='utf-8')
+            prepare_output_directory(Path(tmp), minimum_free_bytes=1)
+            self.assertEqual(legacy.read_text(encoding='utf-8'), 'user-owned')
+
     def test_partial_output_path_keeps_real_extension(self):
         path = partial_output_path(Path('/tmp/demo.mp4'))
         self.assertEqual(path.name, '.demo.streamdock-part.mp4')

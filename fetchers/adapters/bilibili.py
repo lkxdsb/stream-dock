@@ -5,13 +5,13 @@ import json
 import os
 import re
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import browser_cookie3
 import requests
 
 from fetchers.adapters.base import BasePlatformAdapter
-from fetchers.adapters.common import host_matches
+from fetchers.adapters.common import ensure_supported_host, get_url_host, host_matches
 from fetchers.models import MediaFetchResult, MediaStream, SubtitleTrack
 
 URL_PATTERN = re.compile(r"https?://[^\s]+")
@@ -28,6 +28,28 @@ MANUAL_COOKIE_ENV = "BILIBILI_COOKIE"
 MANUAL_COOKIE_FILE_ENV = "BILIBILI_COOKIE_FILE"
 MANUAL_COOKIE_OVERRIDE = contextvars.ContextVar("bilibili_manual_cookie_override", default=None)
 MANUAL_COOKIE_FILE_OVERRIDE = contextvars.ContextVar("bilibili_manual_cookie_file_override", default=None)
+
+
+def _get_page_with_scoped_cookies(url: str, cookies: dict[str, str] | None, *, max_redirects: int = 5):
+    """Follow only Bilibili redirects before attaching cookies to the next hop."""
+    current = ensure_supported_host(url, ("bilibili.com",), "Bilibili")
+    for _ in range(max_redirects + 1):
+        response = requests.get(
+            current,
+            headers={"User-Agent": USER_AGENT, "Referer": "https://www.bilibili.com/"},
+            cookies=cookies,
+            timeout=30,
+            allow_redirects=False,
+        )
+        if 300 <= int(getattr(response, 'status_code', 200)) < 400:
+            location = str((getattr(response, 'headers', {}) or {}).get('location') or '').strip()
+            if not location:
+                response.raise_for_status()
+                return response
+            current = ensure_supported_host(urljoin(current, location), ("bilibili.com",), "Bilibili redirect")
+            continue
+        return response
+    raise RuntimeError('Bilibili 页面重定向次数过多')
 
 
 def parse_cookie_header(raw_cookie: str) -> dict[str, str]:
@@ -155,7 +177,7 @@ class BilibiliAdapter(BasePlatformAdapter):
         except ValueError:
             candidate = raw_link
         parsed = urlparse(candidate)
-        host = parsed.netloc.lower().split(":", 1)[0]
+        host = get_url_host(candidate)
         if host_matches(host, ("b23.tv",)):
             return True
         if not host_matches(host, ("bilibili.com",)):
@@ -165,7 +187,7 @@ class BilibiliAdapter(BasePlatformAdapter):
     def normalize_link(self, raw_link: str) -> str:
         candidate = extract_first_url(raw_link).strip()
         parsed = urlparse(candidate)
-        host = parsed.netloc.lower().split(":", 1)[0]
+        host = get_url_host(candidate)
         if host_matches(host, ("b23.tv",)):
             response = requests.get(
                 candidate,
@@ -182,15 +204,12 @@ class BilibiliAdapter(BasePlatformAdapter):
         return candidate
 
     def fetch_media(self, normalized_link: str) -> MediaFetchResult:
+        ensure_supported_host(normalized_link, ("bilibili.com",), "Bilibili")
         cookies, cookie_source = load_bilibili_cookies()
-        page_response = requests.get(
-            normalized_link,
-            headers={"User-Agent": USER_AGENT, "Referer": "https://www.bilibili.com/"},
-            cookies=cookies,
-            timeout=30,
-        )
+        page_response = _get_page_with_scoped_cookies(normalized_link, cookies)
         page_response.raise_for_status()
         final_url = page_response.url
+        ensure_supported_host(final_url, ("bilibili.com",), "Bilibili redirect")
         initial_state = self._extract_initial_state(page_response.text)
         video_data = initial_state.get("videoData") or {}
 

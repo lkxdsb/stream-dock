@@ -82,7 +82,7 @@ BASIC_OFFICE_DOCS = [
     ('doc', 'docx'), ('doc', 'txt'), ('doc', 'html'),
     ('odt', 'docx'), ('odt', 'txt'), ('odt', 'html'),
     ('ppt', 'pptx'), ('odp', 'pptx'),
-    ('pptx', 'pdf'), ('pptx', 'png'),
+    ('pptx', 'pdf'),
     ('xls', 'xlsx'), ('xls', 'csv'),
     ('ods', 'xlsx'), ('ods', 'csv'),
     ('xlsx', 'pdf'), ('xlsx', 'html'),
@@ -94,6 +94,7 @@ BASIC_VECTOR_DOCS = [
     ('svg', 'png'), ('svg', 'jpg'), ('svg', 'pdf'),
 ]
 VENDOR_ONLY = [
+    ('pptx', 'png'),
     ('pdf', 'docx'), ('pdf', 'xlsx'), ('pdf', 'pptx'),
     ('scan-pdf', 'docx'), ('scan-pdf', 'xlsx'),
     ('image-ocr', 'docx'), ('image-ocr', 'xlsx'),

@@ -38,6 +38,7 @@ class ConverterRegistryTests(unittest.TestCase):
         self.assertEqual(find_capability('mp4', 'mp3').level, ConversionLevel.STABLE)
         self.assertEqual(find_capability('md', 'pdf').level, ConversionLevel.BASIC)
         self.assertEqual(find_capability('pdf', 'docx').level, ConversionLevel.VENDOR)
+        self.assertEqual(find_capability('pptx', 'png').level, ConversionLevel.VENDOR)
 
 
 
@@ -626,6 +627,20 @@ class ConverterPipelineTests(unittest.TestCase):
 
             self.assertFalse(result.success)
             self.assertIn('SVG 包含脚本', result.error)
+
+    def test_svg_character_reference_cannot_hide_external_file_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'unsafe-encoded.svg'
+            source.write_text(
+                '<svg xmlns="http://www.w3.org/2000/svg"><image href="f&#105;le:///mock/a.png"/></svg>',
+                encoding='utf-8',
+            )
+
+            result = convert_file(source, source.name, 'svg', 'png', root)
+
+            self.assertFalse(result.success)
+            self.assertIn('SVG 包含外部资源引用', result.error)
 
     def test_docx_external_relationship_is_rejected_before_conversion(self):
         from docx import Document

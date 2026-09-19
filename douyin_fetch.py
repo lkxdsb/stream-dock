@@ -29,7 +29,10 @@ SUPPORTED_OUTPUT_TYPES = set(OUTPUT_FORMATS)
 
 
 def log(message: str) -> None:
-    print(f"[douyin-fetch] {message}", flush=True)
+    # The parent process consumes these records as a line protocol.  Never let
+    # untrusted platform metadata create a second machine-readable record.
+    safe_message = str(message).replace('\r', ' ').replace('\n', ' ')
+    print(f"[douyin-fetch] {safe_message}", flush=True)
 
 
 def progress(value: float | None, stage: str) -> None:

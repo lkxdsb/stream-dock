@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -130,13 +131,17 @@ def prepare_output_directory(path: Path, *, minimum_free_bytes: int = MIN_OUTPUT
     path.mkdir(parents=True, exist_ok=True)
     if not path.is_dir():
         raise RuntimeError('输出路径不是有效目录')
-    probe = path / '.streamdock-write-test'
+    probe: Path | None = None
     try:
-        probe.write_bytes(b'ok')
+        descriptor, probe_name = tempfile.mkstemp(prefix='.streamdock-write-test-', dir=path)
+        probe = Path(probe_name)
+        with os.fdopen(descriptor, 'wb') as handle:
+            handle.write(b'ok')
     except OSError as exc:
         raise RuntimeError(f'输出目录不可写：{path}') from exc
     finally:
-        probe.unlink(missing_ok=True)
+        if probe is not None:
+            probe.unlink(missing_ok=True)
     free_bytes = shutil.disk_usage(path).free
     if free_bytes < minimum_free_bytes:
         raise RuntimeError(

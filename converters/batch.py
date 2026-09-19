@@ -10,6 +10,9 @@ from .pipeline import convert_file
 from .registry import find_capability, infer_input_format, normalize_format
 
 
+MAX_SPLIT_RAR_PARTS = 1000
+
+
 @dataclass(frozen=True)
 class BatchInput:
     filename: str
@@ -85,15 +88,16 @@ def collapse_split_archive_inputs(inputs: Sequence[BatchInput]) -> tuple[BatchIn
     groups: dict[str, list[tuple[int, BatchInput]]] = {}
     for item, match in matches:
         assert match is not None
-        groups.setdefault(match.group('base').lower(), []).append((int(match.group('number')), item))
+        number = int(match.group('number'))
+        if number < 1 or number > MAX_SPLIT_RAR_PARTS:
+            raise RuntimeError(f'分卷 RAR 卷号超出本次上传范围：part{number}')
+        groups.setdefault(match.group('base').lower(), []).append((number, item))
     primaries: list[BatchInput] = []
     for base, parts in groups.items():
         parts.sort(key=lambda pair: pair[0])
         numbers = [number for number, _ in parts]
-        expected = list(range(1, max(numbers) + 1))
-        if numbers != expected:
-            missing = sorted(set(expected) - set(numbers))
-            raise RuntimeError(f'分卷 RAR {base} 不完整，缺少卷：{missing}')
+        if not numbers or numbers[0] != 1 or any(current != previous + 1 for previous, current in zip(numbers, numbers[1:])):
+            raise RuntimeError(f'分卷 RAR {base} 不完整，缺少卷或卷号未从 1 开始连续')
         primaries.append(parts[0][1])
     return tuple(primaries)
 

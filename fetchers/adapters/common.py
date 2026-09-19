@@ -35,7 +35,16 @@ def extract_first_url(raw_text: str) -> str:
 
 
 def get_url_host(url: str) -> str:
-    return urlparse(url).netloc.lower().split(":", 1)[0]
+    """Return a normalized HTTP(S) hostname, rejecting URL userinfo."""
+    try:
+        parsed = urlsplit(str(url or '').strip())
+        if parsed.scheme.lower() not in {'http', 'https'}:
+            return ''
+        if parsed.username is not None or parsed.password is not None:
+            return ''
+        return (parsed.hostname or '').lower().rstrip('.')
+    except ValueError:
+        return ''
 
 
 def host_matches(host: str, supported_hosts: tuple[str, ...]) -> bool:

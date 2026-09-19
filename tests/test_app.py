@@ -22,10 +22,16 @@ class TestIsolationTests(unittest.TestCase):
         self.assertIsNone(task_store.storage_path)
 
     def test_progress_parser_keeps_stage_when_value_is_malformed(self):
-        self.assertEqual(parse_progress_update('progress: 42.5|正在下载'), (42.5, '正在下载'))
-        self.assertEqual(parse_progress_update('progress: |等待处理'), (None, '等待处理'))
-        self.assertEqual(parse_progress_update('progress: 1.2.3|仍记录阶段'), (None, '仍记录阶段'))
+        self.assertEqual(parse_progress_update('[douyin-fetch] progress: 42.5|正在下载'), (42.5, '正在下载'))
+        self.assertEqual(parse_progress_update('[douyin-fetch] progress: |等待处理'), (None, '等待处理'))
+        self.assertEqual(parse_progress_update('[douyin-fetch] progress: 1.2.3|仍记录阶段'), (None, '仍记录阶段'))
         self.assertIsNone(parse_progress_update('ordinary log line'))
+
+    def test_media_result_parser_does_not_treat_title_text_as_subtitle_record(self):
+        from app import SUBTITLE_FILE_PATTERN, extract_all_matches
+
+        stdout = '[douyin-fetch] title: demo subtitle file: /tmp/not-owned.srt\n'
+        self.assertEqual(extract_all_matches(stdout, SUBTITLE_FILE_PATTERN), [])
 
 
 class HomePageTests(unittest.IsolatedAsyncioTestCase):
@@ -1391,6 +1397,21 @@ class MediaTaskAssetTests(unittest.IsolatedAsyncioTestCase):
 
 
 class MediaCoverProxyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cover_proxy_rejects_active_svg_content(self):
+        class FakeResponse:
+            headers = {'content-type': 'image/svg+xml'}
+            content = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+
+            def raise_for_status(self):
+                return None
+
+        transport = httpx.ASGITransport(app=app)
+        with patch('app.requests.get', return_value=FakeResponse()):
+            async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                response = await client.get('/api/media/cover-proxy', params={'url': 'https://example.com/cover.svg'})
+
+        self.assertEqual(response.status_code, 415)
+
     async def test_cover_proxy_adds_bilibili_referer_and_returns_image(self):
         class FakeResponse:
             headers = {'content-type': 'image/jpeg'}

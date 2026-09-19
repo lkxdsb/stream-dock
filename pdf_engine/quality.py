@@ -11,6 +11,8 @@ def evaluate_pdf_result(output_dir: Path) -> dict[str, object]:
     text = '\n'.join(path.read_text(encoding='utf-8', errors='replace') for path in markdown_files)
     replacement_count = text.count('\ufffd')
     non_space = sum(1 for char in text if not char.isspace())
+    readable_count = max(0, non_space - replacement_count)
+    replacement_ratio = replacement_count / non_space if non_space else 0.0
     malformed_json = 0
     for path in json_files:
         try:
@@ -24,9 +26,16 @@ def evaluate_pdf_result(output_dir: Path) -> dict[str, object]:
         warnings.append(f'{malformed_json} 个 JSON 结果无法读取')
     if replacement_count:
         warnings.append(f'检测到 {replacement_count} 个疑似乱码字符')
+    hard_fail = (
+        not markdown_files
+        or non_space == 0
+        or malformed_json > 0
+        or readable_count == 0
+        or replacement_ratio >= 0.20
+    )
     score = max(0, 100 - (45 if not markdown_files or non_space == 0 else 0) - malformed_json * 15 - min(replacement_count, 20))
     return {
-        'valid': score >= 60,
+        'valid': not hard_fail and score >= 60,
         'score': score,
         'level': '良好' if score >= 90 else '可用' if score >= 60 else '需要重试',
         'markdownFiles': len(markdown_files),
@@ -34,5 +43,6 @@ def evaluate_pdf_result(output_dir: Path) -> dict[str, object]:
         'imageFiles': len(image_files),
         'textCharacters': non_space,
         'replacementCharacters': replacement_count,
+        'replacementRatio': round(replacement_ratio, 4),
         'warnings': warnings,
     }
