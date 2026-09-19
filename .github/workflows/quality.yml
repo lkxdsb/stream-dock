@@ -1,0 +1,30 @@
+name: Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python-311:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install native conversion engines
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libreoffice
+      - name: Install declared test environment
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-lock-py311.txt
+          python -m pip check
+      - name: Run Python regression suite
+        run: python -m pytest -q
+      - name: Run real-file conversion matrix
+        run: python scripts/test_conversion_matrix_real.py
+      - name: Check browser scripts
+        run: find static/js -name '*.js' -print0 | xargs -0 -n1 node --check

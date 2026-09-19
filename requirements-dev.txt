@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Test-only dependencies used by the real-file conversion fixtures.
+pytest>=8.3,<9
+python-pptx>=1.0,<2

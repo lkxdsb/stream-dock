@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Optional ASR fallback for platforms that do not expose native captions.
+faster-whisper>=1.1,<2
