@@ -63,6 +63,7 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
 - 成熟路径使用 Pillow、openpyxl、python-docx、FFmpeg 等本地引擎。
 - Office 与开放文档格式可调用 LibreOffice；复杂排版、公式、批注和动画可能有损。
 - 支持格式探测、目标格式校验、同格式批量任务、超时控制、临时文件清理和结果打开。
+- 每个转换任务使用独立的输入/输出工作区；下载接口按任务 ID 读取带 SHA-256 清单的不可变产物，用户目录中的同名发布文件不会反向污染历史任务。
 - 对暂不适合本地处理的复杂格式给出专业工具建议，而不是伪造转换结果。
 
 <details>
@@ -339,6 +340,7 @@ Windows 用户可以通过 WSL 使用该脚本，或自行安装 MinerU 后通�
 | --- | --- |
 | `STREAMDOCK_PORT` | `start_streamdock.command` 使用的监听端口，默认 `8002` |
 | `STREAMDOCK_TASK_STORAGE_PATH` | 自定义任务状态存储路径 |
+| `STREAMDOCK_ARTIFACT_ROOT` | 自定义转换任务工作区与产物清单目录（默认 `~/.streamdock/artifacts`） |
 | `STREAMDOCK_MINERU_EXECUTABLE` | 指定 MinerU 可执行文件 |
 | `STREAMDOCK_SUBTITLE_ASR_MODEL` | 指定 ASR 模型，默认 `base` |
 | `STREAMDOCK_SUBTITLE_ASR_DEVICE` | 指定 ASR 设备，默认 `cpu` |

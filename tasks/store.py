@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 import shutil
 from threading import Lock
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from tasks.models import TaskItem, TaskKind, TaskStatus, utc_now_iso
@@ -17,9 +17,10 @@ logger = logging.getLogger(__name__)
 
 
 class TaskStore:
-    def __init__(self, max_items: int = 300, storage_path: Path | None = None) -> None:
+    def __init__(self, max_items: int = 300, storage_path: Path | None = None, on_remove: Callable[[TaskItem], None] | None = None) -> None:
         self.max_items = max_items
         self.storage_path = storage_path
+        self.on_remove = on_remove
         self._items: OrderedDict[str, TaskItem] = OrderedDict()
         self._lock = Lock()
         self._load()
@@ -150,7 +151,14 @@ class TaskStore:
         with self._lock:
             self._items[task.id] = task
             while len(self._items) > self.max_items:
-                self._items.popitem(last=False)
+                removable_id = next((
+                    item_id for item_id, item in self._items.items()
+                    if item.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.SKIPPED, TaskStatus.CANCELLED}
+                ), None)
+                if removable_id is None:
+                    break
+                removed = self._items.pop(removable_id)
+                self._notify_removed(removed)
             self._persist_locked()
         return task
 
@@ -218,13 +226,16 @@ class TaskStore:
         with self._lock:
             if kind is None:
                 deleted_count = len(self._items)
+                removed = list(self._items.values())
                 self._items.clear()
+                for task in removed:
+                    self._notify_removed(task)
                 self._persist_locked()
                 return deleted_count
 
             task_ids = [task_id for task_id, task in self._items.items() if task.kind == kind]
             for task_id in task_ids:
-                del self._items[task_id]
+                self._notify_removed(self._items.pop(task_id))
             self._persist_locked()
             return len(task_ids)
 
@@ -243,7 +254,7 @@ class TaskStore:
                 )
             ]
             for task_id in task_ids:
-                del self._items[task_id]
+                self._notify_removed(self._items.pop(task_id))
             self._persist_locked()
             return len(task_ids)
 
@@ -251,5 +262,14 @@ class TaskStore:
         with self._lock:
             task = self._items.pop(task_id, None)
             if task is not None:
+                self._notify_removed(task)
                 self._persist_locked()
             return task
+
+    def _notify_removed(self, task: TaskItem) -> None:
+        if self.on_remove is None:
+            return
+        try:
+            self.on_remove(task)
+        except Exception as exc:
+            logger.warning('清理任务关联资源失败 %s：%s', task.id, exc)

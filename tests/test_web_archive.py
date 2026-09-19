@@ -22,7 +22,7 @@ from web_archive.extractor import (
     _MARKDOWN_IMAGE_RE,
     _infer_image_extension,
 )
-from web_archive.pipeline import sanitize_title
+from web_archive.pipeline import build_output_dir, sanitize_title
 from web_archive.models import ExtractRequest, WebArchiveResult
 
 
@@ -364,6 +364,15 @@ def test_sanitize_title_truncates_long_titles():
 
 def test_sanitize_title_handles_empty_string():
     assert sanitize_title('') == 'untitled'
+
+
+def test_archive_output_directory_is_task_unique_for_same_title():
+    with tempfile.TemporaryDirectory() as tmp:
+        first = build_output_dir(tmp, '相同标题', 'a' * 32)
+        second = build_output_dir(tmp, '相同标题', 'b' * 32)
+
+        assert first != second
+        assert first.is_dir() and second.is_dir()
 
 
 # ── Model tests ──────────────────────────────────────────────

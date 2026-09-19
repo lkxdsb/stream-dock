@@ -142,12 +142,14 @@ def convert_batch_files(
     image_quality: int | None = None,
     media_options: dict | None = None,
     archive_options: dict | None = None,
+    output_dirs: Sequence[Path] | None = None,
 ) -> dict[str, object]:
     target = normalize_format(target)
     rows: list[BatchConversionRow] = []
     logs = [f'批量转换任务：{len(inputs)} 个文件', f'目标格式：{target.upper()}']
 
     for index, item in enumerate(inputs, start=1):
+        item_output_dir = output_dirs[index - 1] if output_dirs is not None else output_dir
         if item.input_path is None:
             result = ConversionResult(False, error='缺少临时输入文件')
         elif timeout_seconds:
@@ -157,7 +159,7 @@ def convert_batch_files(
                 item.filename,
                 item.source,
                 target,
-                output_dir,
+                item_output_dir,
                 timeout_seconds=timeout_seconds,
                 naming_strategy=naming_strategy,
                 image_quality=image_quality,
@@ -170,7 +172,7 @@ def convert_batch_files(
                 item.filename,
                 item.source,
                 target,
-                output_dir,
+                item_output_dir,
                 naming_strategy=naming_strategy,
                 image_quality=image_quality,
                 media_options=media_options,

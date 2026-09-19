@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import os
 import io
+import json
 import shutil
 from pathlib import Path
 from unittest.mock import patch
@@ -622,6 +623,28 @@ class BatchConversionApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(download.status_code, 200)
         self.assertEqual(download.headers['content-type'], 'application/zip')
 
+    async def test_convert_batch_same_filenames_keep_distinct_real_contents(self):
+        task_store.clear(TaskKind.CONVERT)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            with tempfile.TemporaryDirectory() as tmp:
+                response = await client.post(
+                    '/api/convert/batch-run',
+                    files=[
+                        ('files', ('same.csv', 'name,note\n甲,第一份😀\n'.encode(), 'text/csv')),
+                        ('files', ('same.csv', 'name,note\n乙,第二份中文\n'.encode(), 'text/csv')),
+                    ],
+                    data={'inputType': 'csv', 'outputType': 'json', 'outputPath': tmp},
+                )
+                data = response.json()
+                outputs = [Path(row['outputPath']) for row in data['results']]
+                decoded = [json.loads(path.read_text(encoding='utf-8')) for path in outputs]
+
+        self.assertTrue(data['success'], data.get('logs'))
+        self.assertEqual(len(set(outputs)), 2)
+        self.assertEqual([rows[0]['name'] for rows in decoded], ['甲', '乙'])
+        self.assertEqual([rows[0]['note'] for rows in decoded], ['第一份😀', '第二份中文'])
+
     async def test_convert_download_rejects_output_path_not_owned_by_task(self):
         task_store.clear(TaskKind.CONVERT)
         task = task_store.create(TaskKind.CONVERT, '未完成转换', {'source': 'csv', 'target': 'json'})
@@ -635,19 +658,22 @@ class BatchConversionApiTests(unittest.IsolatedAsyncioTestCase):
         task_store.clear(TaskKind.CONVERT)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            output = root / 'converted.json'
-            output.write_text('{"ok": true}', encoding='utf-8')
             untouched = root / 'unrelated.txt'
             untouched.write_text('keep', encoding='utf-8')
-            task = task_store.create(TaskKind.CONVERT, '清理测试', {'source': 'csv', 'target': 'json'})
-            task_store.update(task.id, status=TaskStatus.COMPLETED, result={'outputPath': str(output)})
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
-                response = await client.delete(f'/api/convert/tasks/{task.id}/result')
-                download = await client.get(f'/api/convert/tasks/{task.id}/download')
+                run = await client.post(
+                    '/api/convert/run',
+                    files={'file': ('cleanup.csv', b'name\nAda\n', 'text/csv')},
+                    data={'inputType': 'csv', 'outputType': 'json', 'outputPath': str(root)},
+                )
+                task = run.json()['task']
+                published = Path(run.json()['outputPath'])
+                response = await client.delete(f"/api/convert/tasks/{task['id']}/result")
+                download = await client.get(f"/api/convert/tasks/{task['id']}/download")
 
             self.assertEqual(response.status_code, 200)
-            self.assertFalse(output.exists())
+            self.assertTrue(published.exists())
             self.assertTrue(untouched.exists())
             self.assertTrue(response.json()['task']['result']['outputDeleted'])
             self.assertEqual(download.status_code, 404)

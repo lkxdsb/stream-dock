@@ -31,13 +31,14 @@ def sanitize_title(title: str) -> str:
     return sanitized[:_MAX_TITLE_LENGTH]
 
 
-def build_output_dir(output_path: str, page_title: str) -> Path:
+def build_output_dir(output_path: str, page_title: str, task_id: str = '') -> Path:
     base = Path(output_path).expanduser()
     date_prefix = datetime.now().strftime('%Y-%m-%d')
     safe_title = sanitize_title(page_title)
-    dir_name = f'{date_prefix}_{safe_title}'
+    unique_suffix = f'_{task_id}' if task_id else ''
+    dir_name = f'{date_prefix}_{safe_title}{unique_suffix}'
     target = base / 'web-archive' / dir_name
-    target.mkdir(parents=True, exist_ok=True)
+    target.mkdir(parents=True, exist_ok=False)
     return target
 
 
@@ -77,7 +78,7 @@ def run_web_archive(payload: dict[str, Any]) -> dict[str, Any]:
         logs.append(f'页面标题: {page_title}')
 
         report('正在下载图片', 70)
-        output_dir = build_output_dir(output_path, page_title)
+        output_dir = build_output_dir(output_path, page_title, task_id)
         images_dir = output_dir / 'images'
         markdown, downloaded, skipped = localize_images_in_markdown(
             markdown, url, images_dir, image_urls, raw_cookie=cookie

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import asyncio
+import json
 import signal
 import shutil
 import subprocess
@@ -48,6 +49,7 @@ from tasks.pdf_queue import PdfQueue
 from tasks.subtitle_queue import SubtitleQueue
 from tasks.models import TaskKind, TaskStatus
 from tasks.store import TaskStore
+from tasks.artifacts import artifact_summary, publish_artifact, remove_task_workspace, resolve_artifact, retain_input, seal_artifact, task_output_dir, task_workspace
 from runtime_checks import augmented_path, cleanup_task_partials, deep_media_quality, ensure_system_proxy_environment, environment_health, network_subprocess_environment, prepare_output_directory, resolve_tool_path, validate_media_output
 from subtitles.service import export_subtitles, normalize_format as normalize_subtitle_format, parse_subtitles
 from web_archive.models import ExtractRequest
@@ -82,7 +84,6 @@ CONVERT_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_CONVERT_TIMEOUT_SECONDS', '1
 MEDIA_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_MEDIA_TIMEOUT_SECONDS', str(20 * 60)))
 MEDIA_IDLE_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_MEDIA_IDLE_TIMEOUT_SECONDS', str(5 * 60)))
 MAX_SUBTITLE_FILE_BYTES = int(os.getenv('STREAMDOCK_MAX_SUBTITLE_FILE_BYTES', str(5 * 1024 * 1024)))
-CONVERT_RETRY_ROOT = Path(tempfile.gettempdir()) / 'streamdock-convert-retry-inputs'
 CONVERT_PREVIEW_ROOT = Path(tempfile.gettempdir()) / 'streamdock-convert-previews'
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -130,7 +131,13 @@ def _task_storage_path() -> Path | None:
     return Path.home() / '.streamdock' / 'tasks.json'
 
 
-task_store = TaskStore(storage_path=_task_storage_path())
+def _cleanup_removed_task(task) -> None:
+    if task.kind == TaskKind.CONVERT:
+        remove_task_workspace(task.id)
+        shutil.rmtree(CONVERT_PREVIEW_ROOT / task.id, ignore_errors=True)
+
+
+task_store = TaskStore(storage_path=_task_storage_path(), on_remove=_cleanup_removed_task)
 _media_processes: dict[str, subprocess.Popen[str]] = {}
 _media_process_lock = Lock()
 _pdf_processes: dict[str, subprocess.Popen[str]] = {}
@@ -1465,6 +1472,7 @@ async def convert_run(
     target = outputType
     media_options = _normalized_media_options(audioBitrateKbps, audioSampleRate, videoMaxWidth, videoFrameRate, videoBitrateKbps, videoCrf, hardwareAcceleration)
     archive_options = {'password': archivePassword} if archivePassword else {}
+    manifest: dict | None = None
     capability = find_capability(source, target)
     if capability is None:
         await file.close()
@@ -1485,7 +1493,7 @@ async def convert_run(
         task = task_store.create(
             TaskKind.CONVERT,
             f'{Path(filename).name} → {normalize_format(target).upper()}',
-            {'filename': Path(filename).name, 'source': source, 'target': target, 'outputPath': outputPath, 'imageQuality': max(1, min(100, imageQuality)), 'mediaOptions': media_options, 'archiveEncrypted': bool(archivePassword)},
+            {'filename': Path(filename).name, 'source': source, 'target': target, 'outputPath': outputPath, 'namingStrategy': namingStrategy, 'imageQuality': max(1, min(100, imageQuality)), 'mediaOptions': media_options, 'archiveEncrypted': bool(archivePassword)},
         )
         _retain_convert_input(task.id, filename, input_path)
         task_store.update(task.id, status=TaskStatus.RUNNING, logs=['正在转换文件'], stage='转换中', progress=15)
@@ -1495,7 +1503,7 @@ async def convert_run(
             filename,
             source,
             target,
-            Path(outputPath).expanduser(),
+            task_output_dir(task.id),
             timeout_seconds=CONVERT_TIMEOUT_SECONDS,
             naming_strategy=namingStrategy,
             image_quality=imageQuality,
@@ -1504,7 +1512,22 @@ async def convert_run(
         )
         if result.success and result.output_path:
             comparison = build_conversion_comparison(source, target, input_path, result.output_path)
+            try:
+                manifest = seal_artifact(task.id, result.output_path)
+                published = publish_artifact(
+                    result.output_path,
+                    Path(outputPath).expanduser(),
+                    result.output_path.name,
+                    collision_strategy=namingStrategy,
+                )
+                result.output_path = published
+            except Exception as exc:
+                result.success = False
+                result.error = f'发布转换结果失败：{exc}'
+                result.output_path = None
     body = result.to_dict()
+    if result.success and result.output_path and manifest is not None:
+        body['artifact'] = artifact_summary(manifest)
     if comparison is not None:
         body['comparison'] = comparison
     body['capability'] = capability.to_dict()
@@ -1574,7 +1597,11 @@ async def convert_batch_run(
         try:
             for upload, source_input in zip(files, source_inputs):
                 safe_name = Path(source_input.filename).name
-                input_path = tmp_path / safe_name
+                if re.search(r'\.part\d+\.rar$', safe_name, re.I):
+                    input_path = tmp_path / 'split-archive' / safe_name
+                    input_path.parent.mkdir(parents=True, exist_ok=True)
+                else:
+                    input_path = tmp_path / f'{len(batch_inputs):04d}_{safe_name}'
                 try:
                     written = await save_upload_with_limits(
                         upload,
@@ -1612,7 +1639,7 @@ async def convert_batch_run(
             task = task_store.create(
                 TaskKind.CONVERT,
                 f'{item.filename} → {target.upper()}',
-                {'filename': item.filename, 'source': item.source, 'target': target, 'outputPath': str(output_dir), 'imageQuality': max(1, min(100, imageQuality)), 'mediaOptions': media_options, 'archiveEncrypted': bool(archivePassword)},
+                {'filename': item.filename, 'source': item.source, 'target': target, 'outputPath': str(output_dir), 'namingStrategy': namingStrategy, 'imageQuality': max(1, min(100, imageQuality)), 'mediaOptions': media_options, 'archiveEncrypted': bool(archivePassword)},
             )
             _retain_convert_input(task.id, item.filename, item.input_path)
             task_store.update(task.id, status=TaskStatus.RUNNING, logs=['正在等待批量转换执行'], stage='等待批量转换', progress=5)
@@ -1628,12 +1655,31 @@ async def convert_batch_run(
             image_quality=imageQuality,
             media_options=media_options,
             archive_options=archive_options,
+            output_dirs=[task_output_dir(task.id) for task in tasks],
         )
         for task, row, item in zip(tasks, result.get('results', []), batch_inputs):
             if row.get('success') and row.get('outputPath') and item.input_path:
-                comparisons[task.id] = build_conversion_comparison(item.source, target, item.input_path, Path(str(row['outputPath'])))
+                artifact_output = Path(str(row['outputPath']))
+                comparisons[task.id] = build_conversion_comparison(item.source, target, item.input_path, artifact_output)
+                try:
+                    row['artifact'] = artifact_summary(seal_artifact(task.id, artifact_output))
+                    published = publish_artifact(
+                        artifact_output,
+                        output_dir,
+                        artifact_output.name,
+                        collision_strategy=namingStrategy,
+                    )
+                    row['outputPath'] = str(published)
+                except Exception as exc:
+                    row['success'] = False
+                    row['error'] = f'发布转换结果失败：{exc}'
 
     rows = result.get('results', [])
+    success_count = sum(1 for row in rows if row.get('success'))
+    result['successCount'] = success_count
+    result['failedCount'] = len(rows) - success_count
+    result['success'] = success_count == len(rows)
+
     for task, row, item in zip(tasks, rows, batch_inputs):
         row['taskId'] = task.id
         if task.id in comparisons:
@@ -1671,24 +1717,22 @@ def _completed_convert_output(task_id: str) -> tuple[object, Path]:
         raise HTTPException(status_code=404, detail='转换任务不存在')
     if task.status != TaskStatus.COMPLETED:
         raise HTTPException(status_code=409, detail='转换任务尚未成功完成，暂时不能下载')
-    output_value = (task.result or {}).get('outputPath')
-    if not output_value:
+    if not (task.result or {}).get('artifact'):
         raise HTTPException(status_code=404, detail='任务没有可下载的输出文件')
-    output = Path(str(output_value)).expanduser().resolve()
-    if not output.exists() or not (output.is_file() or output.is_dir()):
-        raise HTTPException(status_code=404, detail='转换结果已不存在或已被清理')
+    try:
+        output, _ = resolve_artifact(task_id)
+    except (FileNotFoundError, ValueError, OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=404, detail=f'转换结果已不存在、被替换或已被清理：{exc}') from exc
     return task, output
 
 
 def _retain_convert_input(task_id: str, filename: str, source: Path) -> Path:
-    destination = CONVERT_RETRY_ROOT / task_id / Path(filename).name
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, destination)
-    return destination
+    return retain_input(task_id, filename, source)
 
 
 def _cleanup_convert_retry_input(task_id: str) -> None:
-    shutil.rmtree(CONVERT_RETRY_ROOT / task_id, ignore_errors=True)
+    input_dir = task_workspace(task_id) / 'input'
+    shutil.rmtree(input_dir, ignore_errors=True)
 
 
 def _cleanup_convert_preview(task_id: str) -> None:
@@ -1773,14 +1817,11 @@ def cleanup_convert_task_result(task_id: str):
     """Delete only the output owned by one completed conversion task."""
     task, output = _completed_convert_output(task_id)
     try:
-        if output.is_dir():
-            shutil.rmtree(output)
-        else:
-            output.unlink()
+        remove_task_workspace(task_id)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f'清理转换结果失败：{exc}') from exc
     result = dict(task.result or {})
-    result.update({'outputPath': None, 'outputDeleted': True, 'outputName': output.name})
+    result.update({'artifact': None, 'outputDeleted': True, 'outputName': output.name})
     updated = task_store.update(
         task_id,
         result=result,
@@ -1849,7 +1890,7 @@ def cancel_task(task_id: str):
             return JSONResponse({'success': False, 'error': '视频已可用，但字幕仍在后台识别；请等待字幕任务结束后再删除记录'}, status_code=409)
         deleted = task_store.delete(task_id)
         if task.kind == TaskKind.CONVERT:
-            _cleanup_convert_retry_input(task_id)
+            remove_task_workspace(task_id)
             _cleanup_convert_preview(task_id)
         return JSONResponse({'success': True, 'deleted': True, 'task': deleted.to_dict() if deleted else None})
     if task.kind == TaskKind.PDF:
@@ -1884,15 +1925,28 @@ def retry_task(task_id: str):
         if bool(task.payload.get('archiveEncrypted')):
             return JSONResponse({'success': False, 'error': '为安全起见未保存压缩包密码，请重新选择文件并输入密码'}, status_code=409)
         filename = str(task.payload.get('filename') or 'input')
-        stored = CONVERT_RETRY_ROOT / task.id / Path(filename).name
-        if not stored.is_file():
+        stored_candidates = list((task_workspace(task.id) / 'input').glob(f'[0-9][0-9][0-9][0-9]_{Path(filename).name}'))
+        stored = stored_candidates[0] if stored_candidates else None
+        if stored is None or not stored.is_file():
             return JSONResponse({'success': False, 'error': '原始上传文件已被清理，请重新选择文件后执行'}, status_code=409)
         source, target = str(task.payload.get('source') or ''), str(task.payload.get('target') or '')
         output_dir = Path(str(task.payload.get('outputPath') or '')).expanduser()
         retry = task_store.create(TaskKind.CONVERT, task.title, {**task.payload, 'retryOf': task.id})
         retry_input = _retain_convert_input(retry.id, filename, stored)
-        result = convert_file_with_timeout(retry_input, filename, source, target, output_dir, timeout_seconds=CONVERT_TIMEOUT_SECONDS, image_quality=int(task.payload.get('imageQuality') or 90), media_options=dict(task.payload.get('mediaOptions') or {}))
+        task_store.update(retry.id, status=TaskStatus.RUNNING, logs=['正在重新执行转换'], stage='转换中', progress=15)
+        naming_strategy = str(task.payload.get('namingStrategy') or 'append')
+        result = convert_file_with_timeout(retry_input, filename, source, target, task_output_dir(retry.id), timeout_seconds=CONVERT_TIMEOUT_SECONDS, naming_strategy=naming_strategy, image_quality=int(task.payload.get('imageQuality') or 90), media_options=dict(task.payload.get('mediaOptions') or {}))
         body = result.to_dict()
+        if result.success and result.output_path:
+            try:
+                body['artifact'] = artifact_summary(seal_artifact(retry.id, result.output_path))
+                result.output_path = publish_artifact(result.output_path, output_dir, result.output_path.name, collision_strategy=naming_strategy)
+                body['outputPath'] = str(result.output_path)
+            except Exception as exc:
+                result.success = False
+                result.error = f'发布转换结果失败：{exc}'
+                result.output_path = None
+                body = result.to_dict()
         task_store.update(retry.id, status=TaskStatus.COMPLETED if result.success else TaskStatus.FAILED, logs=result.logs, result=body, error=result.error, stage='已完成' if result.success else '失败', progress=100 if result.success else None)
         return JSONResponse({'success': result.success, 'mode': 'convert-retry', 'task': task_store.get(retry.id).to_dict(), **body})
     if task.kind != TaskKind.MEDIA:
@@ -1933,7 +1987,7 @@ def clear_finished_tasks(kind: str | None = None):
     ]
     deleted = task_store.clear_finished(kind_filter)
     for task_id in retry_task_ids:
-        _cleanup_convert_retry_input(task_id)
+        remove_task_workspace(task_id)
         _cleanup_convert_preview(task_id)
     return JSONResponse({'success': True, 'deleted': deleted})
 

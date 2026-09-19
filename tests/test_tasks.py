@@ -137,11 +137,19 @@ def test_task_store_clear_deletes_only_matching_kind():
 def test_task_store_evicts_oldest_task_when_max_items_is_exceeded():
     store = TaskStore(max_items=2)
     first = store.create(kind=TaskKind.CONVERT, title='first', payload={})
+    store.update(first.id, status=TaskStatus.COMPLETED)
     second = store.create(kind=TaskKind.MEDIA, title='second', payload={})
     third = store.create(kind=TaskKind.CONVERT, title='third', payload={})
 
     assert store.get(first.id) is None
     assert [task.id for task in store.list()] == [third.id, second.id]
+
+
+def test_task_store_never_evicts_active_tasks_to_enforce_history_limit():
+    store = TaskStore(max_items=2)
+    tasks = [store.create(kind=TaskKind.CONVERT, title=str(index), payload={}) for index in range(3)]
+
+    assert [task.id for task in store.list()] == [task.id for task in reversed(tasks)]
 
 
 def test_task_store_persists_completed_history():
