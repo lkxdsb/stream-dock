@@ -33,6 +33,10 @@ class TaskStore:
         except OSError as exc:
             logger.warning('无法读取任务历史文件 %s：%s', self.storage_path, exc)
             return
+        except UnicodeDecodeError as exc:
+            backup_path = self._backup_corrupt_storage()
+            logger.warning('任务历史文件编码已损坏，已保留备份 %s：%s', backup_path or '（备份失败）', exc)
+            return
         except json.JSONDecodeError as exc:
             backup_path = self._backup_corrupt_storage()
             logger.warning('任务历史文件 JSON 已损坏，已保留备份 %s：%s', backup_path or '（备份失败）', exc)

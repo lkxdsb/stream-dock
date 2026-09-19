@@ -269,6 +269,22 @@ class ConverterPipelineTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn('超时', result.error)
 
+    def test_conversion_worker_drains_large_result_before_join(self):
+        from converters.models import ConversionResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'sample.csv'
+            output = root / 'sample.json'
+            source.write_text('name\nAda\n', encoding='utf-8')
+            output.write_text('[{"name":"Ada"}]', encoding='utf-8')
+            oversized_logs = ['x' * 300_000]
+            with patch('converters.executor.convert_file', return_value=ConversionResult(True, output_path=output, logs=oversized_logs)):
+                result = convert_file_with_timeout(source, source.name, 'csv', 'json', root, timeout_seconds=3)
+
+        self.assertTrue(result.success, result.error)
+        self.assertEqual(len(result.logs[-1]), 300_000)
+
     def test_pipeline_converts_csv_to_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

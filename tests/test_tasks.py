@@ -229,6 +229,18 @@ def test_task_store_backs_up_invalid_json_without_deleting_it():
         assert backups[0].read_text(encoding='utf-8') == '{not-json'
 
 
+def test_task_store_backs_up_non_utf8_history_without_crashing():
+    with tempfile.TemporaryDirectory() as tmp:
+        storage = Path(tmp) / 'tasks.json'
+        storage.write_bytes(b'\xff\xfe\x00broken')
+
+        store = TaskStore(storage_path=storage)
+
+        assert store.list() == []
+        assert storage.read_bytes() == b'\xff\xfe\x00broken'
+        assert len(list(Path(tmp).glob('tasks.json.corrupt*.bak'))) == 1
+
+
 def test_task_store_marks_only_background_subtitle_as_interrupted_after_restart():
     with tempfile.TemporaryDirectory() as tmp:
         storage = Path(tmp) / 'tasks.json'

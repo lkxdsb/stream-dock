@@ -49,6 +49,7 @@ from tasks.pdf_queue import PdfQueue
 from tasks.subtitle_queue import SubtitleQueue
 from tasks.models import TaskKind, TaskStatus
 from tasks.store import TaskStore
+from tasks.sqlite_store import SQLiteTaskStore, migrate_legacy_json
 from tasks.artifacts import artifact_summary, publish_artifact, remove_task_workspace, resolve_artifact, retain_input, seal_artifact, task_output_dir, task_workspace
 from runtime_checks import augmented_path, cleanup_task_partials, deep_media_quality, ensure_system_proxy_environment, environment_health, network_subprocess_environment, prepare_output_directory, resolve_tool_path, validate_media_output
 from subtitles.service import export_subtitles, normalize_format as normalize_subtitle_format, parse_subtitles
@@ -128,7 +129,7 @@ def _task_storage_path() -> Path | None:
     if configured is not None:
         configured = configured.strip()
         return Path(configured).expanduser() if configured else None
-    return Path.home() / '.streamdock' / 'tasks.json'
+    return Path.home() / '.streamdock' / 'tasks.sqlite3'
 
 
 def _cleanup_removed_task(task) -> None:
@@ -137,7 +138,21 @@ def _cleanup_removed_task(task) -> None:
         shutil.rmtree(CONVERT_PREVIEW_ROOT / task.id, ignore_errors=True)
 
 
-task_store = TaskStore(storage_path=_task_storage_path(), on_remove=_cleanup_removed_task)
+def _create_task_store():
+    storage_path = _task_storage_path()
+    if storage_path is None:
+        return TaskStore(storage_path=None, on_remove=_cleanup_removed_task)
+    if storage_path.suffix.lower() not in {'.sqlite', '.sqlite3', '.db'}:
+        return TaskStore(storage_path=storage_path, on_remove=_cleanup_removed_task)
+    database_exists = storage_path.exists()
+    store = SQLiteTaskStore(storage_path=storage_path, on_remove=_cleanup_removed_task)
+    legacy_path = storage_path.with_name('tasks.json')
+    if not database_exists and legacy_path.exists():
+        migrate_legacy_json(legacy_path, store)
+    return store
+
+
+task_store = _create_task_store()
 _media_processes: dict[str, subprocess.Popen[str]] = {}
 _media_process_lock = Lock()
 _pdf_processes: dict[str, subprocess.Popen[str]] = {}

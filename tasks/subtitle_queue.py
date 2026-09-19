@@ -45,6 +45,7 @@ class SubtitleQueue:
             with self._lock:
                 if not self._queue:
                     self._active_task_id = None
+                    self._worker = None
                     return
                 task_id, payload = self._queue.popleft()
                 self._queued_ids.discard(task_id)

@@ -592,3 +592,24 @@ def test_web_archive_queue_marks_unsuccessful_runner_result_failed():
     assert task is not None
     assert task.status == TaskStatus.FAILED
     assert 'controlled failure' in str(task.error)
+
+
+def test_web_archive_queue_injects_shared_store_for_progress_updates():
+    import time
+
+    store = TaskStore()
+    observed = []
+
+    def runner(payload):
+        observed.append(payload.get('_taskStore') is store)
+        payload['_taskStore'].update(payload['_taskId'], stage='下载图片', progress=70)
+        return {'success': True, 'logs': []}
+
+    queue = WebArchiveQueue(store, runner)
+    submitted = queue.submit({'url': 'https://example.com', 'outputPath': '/tmp'})
+    deadline = time.time() + 2
+    while time.time() < deadline and store.get(submitted['id']).status != TaskStatus.COMPLETED:
+        time.sleep(.01)
+
+    assert observed == [True]
+    assert store.get(submitted['id']).status == TaskStatus.COMPLETED

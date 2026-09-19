@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
+import signal
 from pathlib import Path
 from queue import Empty
 
@@ -35,6 +36,11 @@ def _apply_resource_limits(timeout_seconds: int) -> None:
 def _convert_worker(queue, args: tuple[str, str, str, str, str, str, int | None, dict | None, dict | None, int]) -> None:
     input_path, input_name, source, target, output_dir, naming_strategy, image_quality, media_options, archive_options, timeout_seconds = args
     try:
+        if hasattr(os, 'setsid'):
+            try:
+                os.setsid()
+            except OSError:
+                pass
         _apply_resource_limits(timeout_seconds)
         result = convert_file(
             Path(input_path),
@@ -50,6 +56,32 @@ def _convert_worker(queue, args: tuple[str, str, str, str, str, str, int | None,
         queue.put(result.to_dict())
     except BaseException as exc:  # pragma: no cover - process boundary guard
         queue.put({'success': False, 'outputPath': None, 'logs': [], 'error': str(exc), 'vendorRecommendations': []})
+
+
+def _terminate_process_tree(process: mp.Process, grace_seconds: float = 3) -> None:
+    if not process.is_alive():
+        process.join(timeout=0)
+        return
+    used_group = False
+    if hasattr(os, 'getpgid') and hasattr(os, 'killpg'):
+        try:
+            if os.getpgid(process.pid) == process.pid:
+                os.killpg(process.pid, signal.SIGTERM)
+                used_group = True
+        except (OSError, ProcessLookupError):
+            pass
+    if not used_group:
+        process.terminate()
+    process.join(grace_seconds)
+    if process.is_alive():
+        if used_group:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
+        else:
+            process.kill()
+        process.join(grace_seconds)
 
 
 def convert_file_with_timeout(
@@ -76,14 +108,19 @@ def convert_file_with_timeout(
                 daemon=True,
             )
             process.start()
-            process.join(timeout_seconds)
-            if process.is_alive():
-                process.terminate()
-                process.join(3)
-                return ConversionResult(False, error=f'转换超时（{timeout_seconds} 秒），已终止任务')
             try:
-                data = queue.get_nowait()
+                # Drain the IPC payload before join. Joining first can deadlock
+                # when multiprocessing's feeder thread is flushing a large result.
+                data = queue.get(timeout=max(0, timeout_seconds))
             except Empty:
+                data = None
+            if data is None and process.is_alive():
+                _terminate_process_tree(process)
+                return ConversionResult(False, error=f'转换超时（{timeout_seconds} 秒），已终止任务')
+            process.join(3)
+            if process.is_alive():
+                _terminate_process_tree(process)
+            if data is None:
                 if process.exitcode and process.exitcode < 0:
                     return ConversionResult(False, error=f'{engine} 转换子进程被系统终止，可能超出 CPU、内存或输出大小配额')
                 return ConversionResult(False, error='转换子进程未返回结果')

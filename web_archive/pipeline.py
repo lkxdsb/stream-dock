@@ -47,13 +47,12 @@ def run_web_archive(payload: dict[str, Any]) -> dict[str, Any]:
     output_path = str(payload.get('outputPath') or '').strip()
     cookie = str(payload.get('cookie') or '').strip() or None
     task_id = str(payload.get('_taskId') or '').strip()
+    task_store = payload.get('_taskStore')
 
     def report(stage: str, progress: float) -> None:
-        if task_id:
+        if task_id and task_store is not None:
             try:
-                from tasks.store import TaskStore
-                store = TaskStore(storage_path=Path.home() / '.streamdock' / 'tasks.json')
-                store.update(task_id, stage=stage, progress=progress)
+                task_store.update(task_id, stage=stage, progress=progress)
             except Exception:
                 pass
 

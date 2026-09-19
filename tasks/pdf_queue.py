@@ -52,6 +52,7 @@ class PdfQueue:
         while True:
             with self._lock:
                 if not self._queue:
+                    self._worker = None
                     return
                 task_id, payload = self._queue.popleft()
                 cancelled = task_id in self._cancelled

@@ -80,6 +80,7 @@ class MediaQueue:
         while True:
             with self._lock:
                 if not self._queue:
+                    self._worker = None
                     return
                 paused = self._paused
                 if paused:

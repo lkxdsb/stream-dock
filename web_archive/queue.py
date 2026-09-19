@@ -54,6 +54,7 @@ class WebArchiveQueue:
         while True:
             with self._lock:
                 if not self._queue:
+                    self._worker = None
                     return
                 task_id, payload = self._queue.popleft()
                 cancelled = task_id in self._cancelled
@@ -64,7 +65,7 @@ class WebArchiveQueue:
     def _run_one(self, task_id: str, payload: dict[str, Any]) -> None:
         self.store.update(task_id, status=TaskStatus.RUNNING, logs=['正在启动网页存档任务'], stage='正在获取页面', progress=10)
         try:
-            result = self.runner({**payload, '_taskId': task_id})
+            result = self.runner({**payload, '_taskId': task_id, '_taskStore': self.store})
             if not bool(result.get('success')):
                 raise RuntimeError(str(result.get('error') or '网页存档失败'))
             with self._lock:
