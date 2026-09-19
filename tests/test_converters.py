@@ -298,6 +298,43 @@ class ConverterPipelineTests(unittest.TestCase):
             self.assertTrue(result.output_path.exists())
             self.assertIn('Ada', result.output_path.read_text(encoding='utf-8'))
 
+    def test_sniffer_reads_only_bounded_header_instead_of_entire_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'large.txt'
+            source.write_bytes(b'name,value\n' + b'Ada,1\n' * 20_000)
+            with patch.object(Path, 'read_bytes', side_effect=AssertionError('must not read entire file')):
+                self.assertEqual(sniff_file_format(source), 'csv')
+
+    def test_comparison_rejects_oversized_text_without_full_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / 'before.txt'; after = root / 'after.txt'
+            before.write_text('A' * 32, encoding='utf-8'); after.write_text('B' * 32, encoding='utf-8')
+            with patch('converters.comparison.MAX_COMPARISON_INPUT_BYTES', 16):
+                comparison = build_conversion_comparison('txt', 'txt', before, after)
+            self.assertFalse(comparison['available'])
+            self.assertIn('读取上限', comparison['reason'])
+
+    def test_single_stream_decompression_enforces_expanded_byte_budget(self):
+        import gzip
+        from converters.adapters import archive as archive_adapter
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source = root / 'large.txt.gz'; output = root / 'out'
+            with gzip.open(source, 'wb') as handle:
+                handle.write(b'A' * 4096)
+            with patch.object(archive_adapter, 'MAX_ARCHIVE_EXTRACTED_BYTES', 1024):
+                with self.assertRaisesRegex(RuntimeError, '解压后大小超出'):
+                    convert_archive('gz', 'folder', source, output)
+
+    def test_image_conversion_enforces_pixel_budget(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source = root / 'large.png'
+            Image.new('RGB', (20, 20), 'red').save(source)
+            with patch('converters.adapters.image.MAX_IMAGE_PIXELS', 100):
+                with self.assertRaisesRegex(RuntimeError, '像素数超过'):
+                    convert_image('png', 'jpg', source, root / 'out.jpg')
+
     def test_pipeline_converts_json_to_toml_when_tomllib_is_available(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -809,10 +846,8 @@ class ConverterPipelineTests(unittest.TestCase):
             with gzip.open(archive, 'wb') as handle:
                 handle.write(b'x' * (1024 * 1024))
 
-            with patch('converters.adapters.archive.shutil.copyfileobj', wraps=shutil.copyfileobj) as copy:
-                convert_archive('gz', 'folder', archive, root / 'out')
-
-            copy.assert_called_once()
+            convert_archive('gz', 'folder', archive, root / 'out')
+            self.assertEqual((root / 'out' / 'large.txt').stat().st_size, 1024 * 1024)
             self.assertEqual((root / 'out' / 'large.txt').stat().st_size, 1024 * 1024)
 
     def test_direct_gif_conversion_rejects_silent_first_frame_loss(self):

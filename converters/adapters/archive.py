@@ -139,7 +139,15 @@ def _single_compressed_to_folder(input_path: Path, output_path: Path, opener, su
         name = input_path.stem or 'extracted'
     target = output_path / name
     with opener(input_path, 'rb') as src, target.open('wb') as dst:
-        shutil.copyfileobj(src, dst)
+        copied = 0
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            copied += len(chunk)
+            if copied > MAX_ARCHIVE_EXTRACTED_BYTES:
+                raise RuntimeError(f'{suffix.upper().lstrip(".")} 解压后大小超出安全上限')
+            dst.write(chunk)
     return [f'{suffix.upper().lstrip(".")} 已解压到 {target}']
 
 

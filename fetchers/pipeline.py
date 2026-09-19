@@ -23,6 +23,7 @@ from runtime_checks import cleanup_partial, commit_partial, partial_output_path,
 
 INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
 ProgressCallback = Callable[[float | None, str], None]
+MAX_ASSET_DOWNLOAD_BYTES = int(os.getenv('STREAMDOCK_MAX_ASSET_DOWNLOAD_BYTES', str(256 * 1024 * 1024)))
 
 
 def detect_platform_adapter(raw_link: str) -> BasePlatformAdapter:
@@ -102,9 +103,16 @@ def download_sidecar_asset(
         response.raise_for_status()
         extension = infer_asset_extension(url, response.headers.get('content-type'), fallback_extension)
         final_path = available_output_path(output_dir, f'{base_name}_{safe_asset_label(label, "asset")}', extension)
+        declared = int(response.headers.get('content-length') or 0)
+        if declared > MAX_ASSET_DOWNLOAD_BYTES:
+            raise RuntimeError(f'附件超过下载上限 {MAX_ASSET_DOWNLOAD_BYTES} 字节')
+        written = 0
         with final_path.open('wb') as output:
             for chunk in response.iter_content(chunk_size=512 * 1024):
                 if chunk:
+                    written += len(chunk)
+                    if written > MAX_ASSET_DOWNLOAD_BYTES:
+                        raise RuntimeError(f'附件超过下载上限 {MAX_ASSET_DOWNLOAD_BYTES} 字节')
                     output.write(chunk)
         return final_path
     finally:
@@ -245,9 +253,13 @@ def download_image_collection(
                 try:
                     response.raise_for_status()
                     digest = hashlib.sha256()
+                    written = 0
                     with temp_target.open("wb") as output:
                         for chunk in response.iter_content(chunk_size=512 * 1024):
                             if chunk:
+                                written += len(chunk)
+                                if written > MAX_ASSET_DOWNLOAD_BYTES:
+                                    raise RuntimeError(f'图片超过下载上限 {MAX_ASSET_DOWNLOAD_BYTES} 字节')
                                 output.write(chunk)
                                 digest.update(chunk)
                     if temp_target.stat().st_size <= 0:

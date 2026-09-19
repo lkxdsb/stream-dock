@@ -36,7 +36,11 @@ def _zip_format(path: Path) -> str | None:
             if 'META-INF/container.xml' in names:
                 return 'epub'
             if 'mimetype' in names:
-                mimetype = archive.read('mimetype').decode('utf-8', errors='ignore')
+                info = archive.getinfo('mimetype')
+                if info.file_size > 256:
+                    return 'zip'
+                with archive.open(info) as handle:
+                    mimetype = handle.read(256).decode('utf-8', errors='ignore')
                 if 'opendocument.text' in mimetype:
                     return 'odt'
                 if 'opendocument.spreadsheet' in mimetype:
@@ -52,7 +56,8 @@ def _zip_format(path: Path) -> str | None:
 
 def sniff_file_format(path: Path) -> str | None:
     """Best-effort content sniffing used to reject obvious extension spoofing."""
-    header = path.read_bytes()[:8192]
+    with path.open('rb') as handle:
+        header = handle.read(8192)
     if not header:
         return None
     if header.startswith(b'%PDF-'):

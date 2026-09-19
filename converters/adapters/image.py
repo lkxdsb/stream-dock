@@ -5,6 +5,8 @@ from pathlib import Path
 
 
 IMAGE_QUALITY = max(1, min(100, int(os.getenv('STREAMDOCK_IMAGE_QUALITY', '90'))))
+MAX_IMAGE_PIXELS = int(os.getenv('STREAMDOCK_MAX_IMAGE_PIXELS', '100000000'))
+MAX_IMAGE_FRAMES = int(os.getenv('STREAMDOCK_MAX_IMAGE_FRAMES', '1000'))
 
 
 def _require_pillow():
@@ -31,6 +33,10 @@ def convert_image(source: str, target: str, input_path: Path, output_path: Path,
 
     with Image.open(input_path) as image:
         frame_count = int(getattr(image, 'n_frames', 1) or 1)
+        if image.width * image.height > MAX_IMAGE_PIXELS:
+            raise RuntimeError(f'图片像素数超过安全上限 {MAX_IMAGE_PIXELS}')
+        if frame_count > MAX_IMAGE_FRAMES:
+            raise RuntimeError(f'图片帧数超过安全上限 {MAX_IMAGE_FRAMES}')
         has_transparency = 'A' in image.getbands() or 'transparency' in image.info
         has_icc = bool(image.info.get('icc_profile'))
         has_exif = bool(image.getexif())

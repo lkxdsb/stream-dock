@@ -85,6 +85,7 @@ CONVERT_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_CONVERT_TIMEOUT_SECONDS', '1
 MEDIA_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_MEDIA_TIMEOUT_SECONDS', str(20 * 60)))
 MEDIA_IDLE_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_MEDIA_IDLE_TIMEOUT_SECONDS', str(5 * 60)))
 MAX_SUBTITLE_FILE_BYTES = int(os.getenv('STREAMDOCK_MAX_SUBTITLE_FILE_BYTES', str(5 * 1024 * 1024)))
+MAX_API_REQUEST_BYTES = int(os.getenv('STREAMDOCK_MAX_API_REQUEST_BYTES', str(1024 * 1024 * 1024)))
 CONVERT_PREVIEW_ROOT = Path(tempfile.gettempdir()) / 'streamdock-convert-previews'
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -169,6 +170,14 @@ async def local_api_only(request: Request, call_next):
                 {'success': False, 'error': '为保护本地文件，API 默认仅允许本机访问'},
                 status_code=403,
             )
+    content_length = request.headers.get('content-length')
+    if request.url.path.startswith('/api/') and content_length:
+        try:
+            declared_bytes = int(content_length)
+        except ValueError:
+            return JSONResponse({'success': False, 'error': 'Content-Length 非法'}, status_code=400)
+        if declared_bytes > MAX_API_REQUEST_BYTES:
+            return JSONResponse({'success': False, 'error': f'请求体超过上限 {MAX_API_REQUEST_BYTES} 字节'}, status_code=413)
     return await call_next(request)
 
 

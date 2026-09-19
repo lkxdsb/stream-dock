@@ -4,12 +4,14 @@ from __future__ import annotations
 import csv
 import difflib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 
 MAX_TEXT_CHARS = 12_000
 MAX_PREVIEW_ROWS = 5
+MAX_COMPARISON_INPUT_BYTES = int(os.getenv('STREAMDOCK_MAX_COMPARISON_INPUT_BYTES', str(16 * 1024 * 1024)))
 TABLE_FORMATS = {'csv', 'tsv', 'json', 'ndjson', 'xlsx'}
 TEXT_FORMATS = {'txt', 'md', 'markdown', 'html', 'rtf', 'docx'}
 IMAGE_FORMATS = {'png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'gif', 'ico'}
@@ -17,6 +19,8 @@ MEDIA_FORMATS = {'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'aiff', 'wma
 
 
 def _text_content(path: Path, format_name: str) -> str:
+    if path.stat().st_size > MAX_COMPARISON_INPUT_BYTES:
+        raise RuntimeError(f'文件超过前后对比读取上限 {MAX_COMPARISON_INPUT_BYTES} 字节')
     if format_name == 'docx':
         from docx import Document  # type: ignore
         document = Document(str(path))
@@ -57,17 +61,31 @@ def _table_summary(path: Path, format_name: str) -> dict[str, Any]:
     structure = {'sheets': 1, 'sheetNames': [], 'formulas': 0, 'mergedRanges': 0, 'hiddenRows': 0, 'hiddenColumns': 0, 'charts': 0}
     if format_name in {'csv', 'tsv'}:
         with path.open('r', encoding='utf-8-sig', newline='') as handle:
-            rows = list(csv.reader(handle, delimiter='\t' if format_name == 'tsv' else ','))
+            reader = csv.reader(handle, delimiter='\t' if format_name == 'tsv' else ',')
+            header = next(reader, [])
+            preview_rows = []
+            row_count = 0
+            for row in reader:
+                row_count += 1
+                if len(preview_rows) < MAX_PREVIEW_ROWS:
+                    preview_rows.append(row)
+            rows = [header, *preview_rows]
     elif format_name == 'json':
+        if path.stat().st_size > MAX_COMPARISON_INPUT_BYTES:
+            raise RuntimeError(f'JSON 超过前后对比读取上限 {MAX_COMPARISON_INPUT_BYTES} 字节')
         payload = json.loads(path.read_text(encoding='utf-8'))
         items = payload if isinstance(payload, list) else [payload]
         keys = sorted({key for item in items if isinstance(item, dict) for key in item})
         rows = [keys] + [[item.get(key) if isinstance(item, dict) else item for key in keys] for item in items]
     elif format_name == 'ndjson':
+        if path.stat().st_size > MAX_COMPARISON_INPUT_BYTES:
+            raise RuntimeError(f'NDJSON 超过前后对比读取上限 {MAX_COMPARISON_INPUT_BYTES} 字节')
         items = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
         keys = sorted({key for item in items if isinstance(item, dict) for key in item})
         rows = [keys] + [[item.get(key) if isinstance(item, dict) else item for key in keys] for item in items]
     else:
+        if path.stat().st_size > MAX_COMPARISON_INPUT_BYTES:
+            raise RuntimeError(f'工作簿超过前后对比读取上限 {MAX_COMPARISON_INPUT_BYTES} 字节')
         from openpyxl import load_workbook  # type: ignore
         workbook = load_workbook(path, read_only=False, data_only=False)
         structure = {
@@ -84,7 +102,7 @@ def _table_summary(path: Path, format_name: str) -> dict[str, Any]:
         workbook.close()
     headers = [str(value) if value is not None else '' for value in (rows[0] if rows else [])]
     preview = [[str(value) if value is not None else '' for value in row] for row in rows[1:1 + MAX_PREVIEW_ROWS]]
-    return {'rows': max(0, len(rows) - 1), 'columns': len(headers), 'headers': headers, 'preview': preview, **structure}
+    return {'rows': row_count if format_name in {'csv', 'tsv'} else max(0, len(rows) - 1), 'columns': len(headers), 'headers': headers, 'preview': preview, **structure}
 
 
 def _image_summary(path: Path) -> dict[str, Any]:

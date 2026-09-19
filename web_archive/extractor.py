@@ -17,6 +17,7 @@ wrapped with asyncio.run() to keep the public sync surface.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 )
+_MAX_IMAGE_BYTES = int(os.getenv('STREAMDOCK_WEB_ARCHIVE_MAX_IMAGE_BYTES', str(32 * 1024 * 1024)))
 
 _REQUESTS_TIMEOUT = 10
 _IMAGE_DOWNLOAD_TIMEOUT = 15
@@ -244,13 +246,23 @@ def localize_images_in_markdown(
         local_path = images_dir / filename
 
         try:
+            declared = int(resp.headers.get('content-length') or 0)
+            if declared > _MAX_IMAGE_BYTES:
+                raise RuntimeError('图片超过下载上限')
+            written = 0
             with open(local_path, "wb") as handle:
                 for chunk in resp.iter_content(chunk_size=8192):
+                    written += len(chunk)
+                    if written > _MAX_IMAGE_BYTES:
+                        raise RuntimeError('图片超过下载上限')
                     handle.write(chunk)
             markdown = markdown.replace(f"]({src}", f"]({local_rel}")
             downloaded += 1
         except Exception:
+            local_path.unlink(missing_ok=True)
             skipped += 1
+        finally:
+            resp.close()
 
     return markdown, downloaded, skipped
 

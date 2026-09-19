@@ -36,6 +36,14 @@ class TestIsolationTests(unittest.TestCase):
 
 
 class HomePageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_api_rejects_declared_request_body_before_multipart_parsing(self):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            with patch('app.MAX_API_REQUEST_BYTES', 8):
+                response = await client.post('/api/convert/probe', content=b'0123456789', headers={'content-type': 'application/octet-stream'})
+        self.assertEqual(response.status_code, 413)
+        self.assertIn('请求体超过', response.json()['error'])
+
     async def test_home_page_renders_demo_shell_without_real_fetch_form(self):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:

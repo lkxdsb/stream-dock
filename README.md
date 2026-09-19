@@ -341,6 +341,12 @@ Windows 用户可以通过 WSL 使用该脚本，或自行安装 MinerU 后通�
 | `STREAMDOCK_PORT` | `start_streamdock.command` 使用的监听端口，默认 `8002` |
 | `STREAMDOCK_TASK_STORAGE_PATH` | 自定义任务状态存储路径 |
 | `STREAMDOCK_ARTIFACT_ROOT` | 自定义转换任务工作区与产物清单目录（默认 `~/.streamdock/artifacts`） |
+| `STREAMDOCK_MAX_API_REQUEST_BYTES` | API 请求体声明大小上限，默认 1 GiB；反向代理仍应配置对应限制 |
+| `STREAMDOCK_MAX_ARCHIVE_EXTRACTED_BYTES` | 压缩包最大展开字节数，默认 2 GiB |
+| `STREAMDOCK_MAX_IMAGE_PIXELS` / `STREAMDOCK_MAX_IMAGE_FRAMES` | 图片像素和动画帧预算 |
+| `STREAMDOCK_MAX_REMOTE_DOWNLOAD_BYTES` | 单个媒体直链最大下载字节数，默认 2 GiB |
+| `STREAMDOCK_MAX_ASSET_DOWNLOAD_BYTES` | 字幕、封面和图集单项资源上限，默认 256 MiB |
+| `STREAMDOCK_MAX_COMPARISON_INPUT_BYTES` | 转换前后对比最大读取文件大小，默认 16 MiB |
 | `STREAMDOCK_MINERU_EXECUTABLE` | 指定 MinerU 可执行文件 |
 | `STREAMDOCK_SUBTITLE_ASR_MODEL` | 指定 ASR 模型，默认 `base` |
 | `STREAMDOCK_SUBTITLE_ASR_DEVICE` | 指定 ASR 设备，默认 `cpu` |

@@ -14,6 +14,7 @@ from runtime_checks import augmented_path, network_subprocess_environment, resol
 
 HLS_DOWNLOAD_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_HLS_DOWNLOAD_TIMEOUT_SECONDS', str(20 * 60)))
 YTDLP_DOWNLOAD_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_YTDLP_DOWNLOAD_TIMEOUT_SECONDS', str(20 * 60)))
+MAX_REMOTE_DOWNLOAD_BYTES = int(os.getenv('STREAMDOCK_MAX_REMOTE_DOWNLOAD_BYTES', str(2 * 1024 * 1024 * 1024)))
 DownloadProgress = Callable[[float | None], None]
 
 
@@ -218,12 +219,16 @@ def download_media(
             existing = 0
         remaining = int(response.headers.get('content-length') or 0)
         total = existing + remaining if remaining else 0
+        if total > MAX_REMOTE_DOWNLOAD_BYTES:
+            raise RuntimeError(f'远程文件超过下载上限 {MAX_REMOTE_DOWNLOAD_BYTES} 字节')
         written = existing
         last_reported = -1
         with resume_path.open('ab' if resumed else 'wb') as output:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if not chunk:
                     continue
+                if written + len(chunk) > MAX_REMOTE_DOWNLOAD_BYTES:
+                    raise RuntimeError(f'远程文件超过下载上限 {MAX_REMOTE_DOWNLOAD_BYTES} 字节')
                 output.write(chunk)
                 written += len(chunk)
                 if progress_callback and total > 0:
