@@ -11,6 +11,7 @@ python scripts/test_conversion_fuzz.py --iterations 100
 python scripts/test_conversion_matrix_real.py
 python scripts/fetch_complex_conversion_corpus.py
 python scripts/test_conversion_complex_corpus.py
+python scripts/verify_conversion_release.py
 ```
 
 - `test_conversion_robustness.py` covers high-risk semantic fixtures: Chinese, emoji, RTL, Unicode RTF, Office workbook structure, DOCX headers/footers/comments/table/image/TOC, APNG/GIF/TIFF frames, image quality, AMR, cover art, chapters, metadata, two audio tracks, two subtitle tracks, hardware encoding, encrypted ZIP, 7Z, RAR, split RAR, archive attributes, and malicious archives.
@@ -18,6 +19,8 @@ python scripts/test_conversion_complex_corpus.py
 - `test_conversion_matrix_real.py` generates a valid real fixture for every executable non-PDF capability, runs every route, reopens structured/document/image outputs, fully decodes media, checks audio signal and video-frame variance, and writes a route-level JSON report.
 - `fetch_complex_conversion_corpus.py` downloads pinned public FFmpeg, LibreOffice, Pillow, and IDPF/W3C fixtures into the git-ignored `.streamdock-complex-corpus/` directory and rejects any SHA-256 drift.
 - `test_conversion_complex_corpus.py` supplements the full matrix with real user files and public complex files. It currently exercises binary Office, ODF, AMR speech, HEVC/AAC video, large multi-sheet XLSX, multi-frame/metadata-bearing images, and a multi-document EPUB. Every successful output is reopened independently and checked for structure, duration/dimensions, decodability, and semantic overlap. Expected fidelity guards such as multi-frame-to-single-image and multi-sheet-to-flat-table rejection are reported separately as `SAFE_REJECTION`.
+- `conversion_release_contract.json` pins all 152 executable non-PDF routes, 53 cross-platform robustness cases, and 39 public complex-corpus cases. A fixture-generation failure or dependency gap therefore becomes an explicit contract failure instead of silently reducing the denominator.
+- `verify_conversion_release.py` checks those fixed sets and accepted statuses, hashes all evidence reports, records engine versions and emits one release verdict. Complex text validation requires at least 70% semantic-token recall; RTF output is reopened through LibreOffice rather than the production parser.
 
 The committed binary fixtures in `tests/fixtures/real/` are tiny public archive fixtures used for real 7Z, RAR, Unicode-path, metadata, and split-volume checks. Their provenance is recorded in that directory.
 
@@ -27,6 +30,9 @@ Generated reports are written to `report_figures/`:
 - `conversion_fuzz_latest.json`
 - `conversion_matrix_real_latest.json`
 - `conversion_complex_corpus_latest.json`
+- `conversion_release_latest.json`
+
+Use `--workdir /absolute/path` for a deterministic retained workspace. `--keep` now creates a persistent directory with `mkdtemp` and prints its path; reports never claim a temporary directory that has already been deleted.
 
 The local-only `.streamdock-complex-corpus/local_sources.json` may reference user-provided files by absolute path. Those originals are never copied into the repository, and the local manifest is ignored by git. The committed public-corpus manifest records URL, license, expected SHA-256, and the complex features used by the test.
 

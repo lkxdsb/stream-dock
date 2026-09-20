@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import bz2
+import hashlib
 import json
 import os
 import shutil
@@ -28,6 +29,7 @@ from scripts.test_conversion_robustness import generate_fixtures  # noqa: E402
 
 os.environ['PATH'] = augmented_path()
 CONTENT_MARKERS = ('StreamDock', '张三', '中文', '第一', '你好', '标题', '演示文稿')
+RELEASE_CONTRACT = ROOT / 'scripts' / 'conversion_release_contract.json'
 
 
 def command(args: list[str], **kwargs) -> None:
@@ -37,6 +39,35 @@ def command(args: list[str], **kwargs) -> None:
 def require_content_marker(text: str) -> None:
     if not any(marker in text for marker in CONTENT_MARKERS):
         raise AssertionError('key semantic content marker missing')
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def artifact_summary(path: Path) -> dict[str, Any]:
+    if path.is_file():
+        return {'type': 'file', 'sha256': file_sha256(path), 'bytes': path.stat().st_size}
+    members = [
+        {'path': str(item.relative_to(path)), 'sha256': file_sha256(item), 'bytes': item.stat().st_size}
+        for item in sorted(path.rglob('*')) if item.is_file()
+    ]
+    return {'type': 'directory', 'files': len(members), 'bytes': sum(item['bytes'] for item in members), 'members': members}
+
+
+def independent_rtf_text(path: Path) -> str:
+    with tempfile.TemporaryDirectory(prefix='streamdock-matrix-rtf-') as temp_dir:
+        root = Path(temp_dir); source = root / 'source.rtf'; shutil.copy2(path, source)
+        profile = root / 'profile'; profile.mkdir()
+        command(['soffice', '--headless', f'-env:UserInstallation={profile.resolve().as_uri()}', '--convert-to', 'txt:Text', '--outdir', str(root), str(source)])
+        output = root / 'source.txt'
+        if not output.is_file():
+            raise AssertionError('LibreOffice did not reopen RTF output')
+        return output.read_text(encoding='utf-8', errors='strict')
 
 
 def build_all_fixtures(workdir: Path) -> dict[str, Path]:
@@ -192,8 +223,7 @@ def validate_output(source: str, target: str, output: Path) -> dict[str, Any]:
         text = output.read_text(encoding='utf-8')
         if not text.strip() or '\ufffd' in text: raise AssertionError('empty or replacement-character text')
         if target == 'rtf':
-            from converters.adapters.document_basic import _rtf_to_text
-            require_content_marker(_rtf_to_text(text))
+            require_content_marker(independent_rtf_text(output))
         else:
             require_content_marker(text)
         if target in {'srt', 'vtt'} and '-->' not in text: raise AssertionError('subtitle timeline missing')
@@ -223,11 +253,15 @@ def validate_output(source: str, target: str, output: Path) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--workdir', type=Path)
+    parser.add_argument('--keep', action='store_true')
     parser.add_argument('--report', type=Path, default=ROOT / 'report_figures' / 'conversion_matrix_real_latest.json')
     args = parser.parse_args()
+    artifacts_retained = bool(args.keep or args.workdir)
     context = None
     if args.workdir:
         workdir = args.workdir.expanduser().resolve(); workdir.mkdir(parents=True, exist_ok=True)
+    elif args.keep:
+        workdir = Path(tempfile.mkdtemp(prefix='streamdock-real-matrix-kept-'))
     else:
         context = tempfile.TemporaryDirectory(prefix='streamdock-real-matrix-'); workdir = Path(context.name)
     try:
@@ -239,6 +273,12 @@ def main() -> int:
             if key in seen or capability.level == ConversionLevel.VENDOR or 'pdf' in key or key == ('pptx', 'png') or capability.source == 'folder':
                 continue
             seen.add(key); routes.append(capability)
+        expected_routes = set(json.loads(RELEASE_CONTRACT.read_text(encoding='utf-8'))['matrixRoutes'])
+        actual_routes = {f'{item.source}->{item.target}' for item in routes}
+        coverage_errors = {
+            'missing': sorted(expected_routes - actual_routes),
+            'unexpected': sorted(actual_routes - expected_routes),
+        }
         results = []
         outputs = workdir / 'matrix-outputs'; outputs.mkdir()
         for index, capability in enumerate(routes):
@@ -252,17 +292,23 @@ def main() -> int:
                 result = convert_file(source_path, source_path.name, source, target, route_output, image_quality=88)
                 if not result.success or not result.output_path:
                     raise AssertionError(result.error or 'conversion produced no output')
-                row.update(status='PASS', outputPath=str(result.output_path), validation=validate_output(source, target, result.output_path))
+                row.update(status='PASS', validation=validate_output(source, target, result.output_path), artifact=artifact_summary(result.output_path))
+                if artifacts_retained:
+                    row['outputPath'] = str(result.output_path)
             except Exception as exc:
                 row['error'] = str(exc)
             row['elapsedSeconds'] = round(time.perf_counter() - started, 3); results.append(row)
         failed = [row for row in results if row['status'] != 'PASS']
-        report = {'generatedAt': time.strftime('%Y-%m-%d %H:%M:%S'), 'workdir': str(workdir), 'total': len(results), 'passed': len(results) - len(failed), 'failed': len(failed), 'results': results}
+        report = {'generatedAt': time.strftime('%Y-%m-%d %H:%M:%S'), 'workdir': str(workdir) if artifacts_retained else None, 'artifactsRetained': artifacts_retained, 'total': len(results), 'passed': len(results) - len(failed), 'failed': len(failed), 'coverage': {'expected': len(expected_routes), 'actual': len(actual_routes), **coverage_errors}, 'results': results}
         args.report.parent.mkdir(parents=True, exist_ok=True); args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         print(f'REAL_CONVERSION_MATRIX={report["passed"]}/{report["total"]} passed')
         for row in failed:
             print(f'FAIL {row["source"]}->{row["target"]}: {row.get("error")}')
-        return 0 if not failed else 1
+        if coverage_errors['missing'] or coverage_errors['unexpected']:
+            print(f'FAIL route contract mismatch: {coverage_errors}')
+        if args.keep or args.workdir:
+            print(f'WORKDIR={workdir}')
+        return 0 if not failed and not coverage_errors['missing'] and not coverage_errors['unexpected'] else 1
     finally:
         if context: context.cleanup()
 

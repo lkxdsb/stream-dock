@@ -120,8 +120,22 @@ def _read_docx_paragraphs(input_path: Path) -> list[str]:
         from docx import Document  # type: ignore
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError('缺少 python-docx，无法读取 DOCX') from exc
+    from docx.oxml.ns import qn  # type: ignore
+    from docx.table import Table  # type: ignore
+    from docx.text.paragraph import Paragraph  # type: ignore
+
     doc = Document(str(input_path))
-    return [p.text for p in doc.paragraphs]
+    blocks: list[str] = []
+    # ``Document.paragraphs`` intentionally excludes text inside tables.  For
+    # plain-text targets that silently discarded most of table-heavy reports.
+    # Walk the body in document order and flatten each table row explicitly.
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn('w:p'):
+            blocks.append(Paragraph(child, doc).text)
+        elif child.tag == qn('w:tbl'):
+            table = Table(child, doc)
+            blocks.extend('\t'.join(cell.text for cell in row.cells) for row in table.rows)
+    return blocks
 
 
 def _docx_to_html(input_path: Path) -> str:

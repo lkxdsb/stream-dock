@@ -22,9 +22,29 @@ from converters.models import ConversionLevel
 from converters.pipeline import convert_file
 from converters.executor import convert_file_with_timeout
 from converters.registry import find_capability, infer_input_format, list_capabilities
+from scripts.test_conversion_complex_corpus import validate_text_quality
 
 
 class ConverterRegistryTests(unittest.TestCase):
+    def test_release_contract_exactly_matches_executable_non_pdf_routes(self):
+        contract = json.loads((Path(__file__).parents[1] / 'scripts' / 'conversion_release_contract.json').read_text(encoding='utf-8'))
+        actual = {
+            f'{capability.source}->{capability.target}'
+            for capability in list_capabilities()
+            if capability.level != ConversionLevel.VENDOR
+            and 'pdf' not in (capability.source, capability.target)
+            and (capability.source, capability.target) != ('pptx', 'png')
+            and capability.source != 'folder'
+        }
+        self.assertEqual(set(contract['matrixRoutes']), actual)
+        self.assertEqual(len(actual), 152)
+
+    def test_complex_text_gate_rejects_five_of_one_thousand_tokens(self):
+        source = ' '.join(f'unique_token_{index}' for index in range(1000))
+        output = ' '.join(f'unique_token_{index}' for index in range(5))
+        with self.assertRaisesRegex(AssertionError, 'semantic token recall too small'):
+            validate_text_quality(source, output)
+
     def test_registry_contains_large_first_version_capability_matrix(self):
         capabilities = list_capabilities()
         self.assertEqual(len(capabilities), len({capability.key for capability in capabilities}))
@@ -668,6 +688,32 @@ class ConverterPipelineTests(unittest.TestCase):
             self.assertIn('请复核这段内容', content)
             self.assertIn('审阅人', content)
 
+    def test_docx_plain_text_targets_do_not_drop_table_content(self):
+        try:
+            from docx import Document
+        except ImportError:
+            self.skipTest('python-docx is not installed')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'table-heavy.docx'
+            document = Document()
+            document.add_paragraph('报告摘要')
+            table = document.add_table(rows=2, cols=2)
+            table.cell(0, 0).text = '姓名'; table.cell(0, 1).text = '分数'
+            table.cell(1, 0).text = '张三😀'; table.cell(1, 1).text = '98.5'
+            document.save(source)
+
+            for target in ('txt', 'md', 'rtf'):
+                result = convert_file(source, source.name, 'docx', target, root / target)
+                self.assertTrue(result.success, result.error)
+                self.assertIsNotNone(result.output_path)
+                raw = result.output_path.read_text(encoding='utf-8')
+                if target == 'rtf':
+                    self.assertGreaterEqual(raw.count('\\u'), 8)
+                    self.assertIn('98.5', raw)
+                else:
+                    for expected in ('报告摘要', '姓名', '分数', '张三', '98.5'):
+                        self.assertIn(expected, raw)
     def test_xml_external_entity_is_rejected_before_parse(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

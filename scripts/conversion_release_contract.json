@@ -1,0 +1,415 @@
+{
+  "schemaVersion": 1,
+  "description": "Pinned M7 release gate. Changes to executable routes or golden cases require an explicit reviewed contract update.",
+  "matrixRoutes": [
+    "3gp->mp4",
+    "7z->folder",
+    "7z->zip",
+    "aac->mp3",
+    "aac->wav",
+    "aiff->mp3",
+    "aiff->wav",
+    "amr->mp3",
+    "amr->wav",
+    "ass->srt",
+    "ass->vtt",
+    "avi->gif",
+    "avi->mp4",
+    "bmp->jpg",
+    "bmp->png",
+    "bz2->folder",
+    "csv->json",
+    "csv->tsv",
+    "csv->txt",
+    "csv->xlsx",
+    "doc->docx",
+    "doc->html",
+    "doc->txt",
+    "docx->html",
+    "docx->md",
+    "docx->rtf",
+    "docx->txt",
+    "epub->html",
+    "epub->md",
+    "epub->txt",
+    "flac->mp3",
+    "flac->wav",
+    "flv->gif",
+    "flv->mp4",
+    "gif->png",
+    "gz->folder",
+    "html->docx",
+    "html->md",
+    "html->txt",
+    "ico->jpg",
+    "ico->png",
+    "jpeg->png",
+    "jpeg->webp",
+    "jpg->bmp",
+    "jpg->ico",
+    "jpg->png",
+    "jpg->tiff",
+    "jpg->webp",
+    "json->csv",
+    "json->toml",
+    "json->txt",
+    "json->xlsx",
+    "json->xml",
+    "json->yaml",
+    "lrc->srt",
+    "lrc->vtt",
+    "m4a->aac",
+    "m4a->mp3",
+    "m4a->wav",
+    "m4v->mp4",
+    "markdown->docx",
+    "markdown->html",
+    "markdown->txt",
+    "md->docx",
+    "md->html",
+    "md->txt",
+    "mkv->mp4",
+    "mkv->webm",
+    "mov->gif",
+    "mov->mp4",
+    "mov->webm",
+    "mp3->aac",
+    "mp3->flac",
+    "mp3->m4a",
+    "mp3->ogg",
+    "mp3->opus",
+    "mp3->wav",
+    "mp4->gif",
+    "mp4->m4a",
+    "mp4->mp3",
+    "mp4->wav",
+    "mp4->webm",
+    "ndjson->csv",
+    "ndjson->json",
+    "odp->pptx",
+    "ods->csv",
+    "ods->xlsx",
+    "odt->docx",
+    "odt->html",
+    "odt->txt",
+    "ogg->mp3",
+    "opus->mp3",
+    "pbm->png",
+    "pgm->png",
+    "png->bmp",
+    "png->gif",
+    "png->ico",
+    "png->jpg",
+    "png->ppm",
+    "png->tiff",
+    "png->webp",
+    "pnm->png",
+    "ppm->jpg",
+    "ppm->png",
+    "ppt->pptx",
+    "rar->folder",
+    "rar->zip",
+    "rtf->docx",
+    "rtf->html",
+    "rtf->txt",
+    "srt->vtt",
+    "svg->jpg",
+    "svg->png",
+    "tar->folder",
+    "tar->zip",
+    "tar.gz->folder",
+    "tar.gz->zip",
+    "tiff->jpg",
+    "tiff->png",
+    "toml->json",
+    "ts->mp4",
+    "tsv->csv",
+    "tsv->json",
+    "tsv->xlsx",
+    "txt->csv",
+    "txt->docx",
+    "txt->html",
+    "txt->md",
+    "txt->rtf",
+    "txt->srt",
+    "txt->xlsx",
+    "vtt->srt",
+    "wav->flac",
+    "wav->m4a",
+    "wav->mp3",
+    "wav->ogg",
+    "webm->gif",
+    "webm->mp4",
+    "webp->jpg",
+    "webp->png",
+    "wma->mp3",
+    "wma->wav",
+    "xls->csv",
+    "xls->xlsx",
+    "xlsx->csv",
+    "xlsx->html",
+    "xlsx->json",
+    "xlsx->tsv",
+    "xml->json",
+    "yaml->json",
+    "zip->folder",
+    "zip->tar"
+  ],
+  "publicComplexCases": [
+    {
+      "fixture": "ffmpeg-amr-nb-speech",
+      "route": "amr->mp3",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "ffmpeg-amr-nb-speech",
+      "route": "amr->wav",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "idpf-accessible-epub3",
+      "route": "epub->html",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "idpf-accessible-epub3",
+      "route": "epub->md",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "idpf-accessible-epub3",
+      "route": "epub->txt",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "libreoffice-odp-shapes",
+      "route": "odp->pptx",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "libreoffice-ods-many-charts",
+      "route": "ods->csv",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "libreoffice-ods-many-charts",
+      "route": "ods->xlsx",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "libreoffice-odt-comments",
+      "route": "odt->docx",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "libreoffice-odt-comments",
+      "route": "odt->html",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "libreoffice-odt-comments",
+      "route": "odt->txt",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "libreoffice-ppt-indentation-bullets",
+      "route": "ppt->pptx",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "libreoffice-ww8-bnc875715",
+      "route": "doc->docx",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "libreoffice-ww8-bnc875715",
+      "route": "doc->html",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "libreoffice-ww8-bnc875715",
+      "route": "doc->txt",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "libreoffice-xls-universal-content",
+      "route": "xls->csv",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "libreoffice-xls-universal-content",
+      "route": "xls->xlsx",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-apng-iss634",
+      "route": "png->bmp",
+      "expectedStatus": "SAFE_REJECTION"
+    },
+    {
+      "fixture": "pillow-apng-iss634",
+      "route": "png->gif",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-apng-iss634",
+      "route": "png->ico",
+      "expectedStatus": "SAFE_REJECTION"
+    },
+    {
+      "fixture": "pillow-apng-iss634",
+      "route": "png->jpg",
+      "expectedStatus": "SAFE_REJECTION"
+    },
+    {
+      "fixture": "pillow-apng-iss634",
+      "route": "png->ppm",
+      "expectedStatus": "SAFE_REJECTION"
+    },
+    {
+      "fixture": "pillow-apng-iss634",
+      "route": "png->tiff",
+      "expectedStatus": "SAFE_REJECTION"
+    },
+    {
+      "fixture": "pillow-apng-iss634",
+      "route": "png->webp",
+      "expectedStatus": "SAFE_REJECTION"
+    },
+    {
+      "fixture": "pillow-gif-disposal-transparency",
+      "route": "gif->png",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-jpeg-large-icc",
+      "route": "jpg->bmp",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-jpeg-large-icc",
+      "route": "jpg->ico",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-jpeg-large-icc",
+      "route": "jpg->png",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-jpeg-large-icc",
+      "route": "jpg->tiff",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-jpeg-large-icc",
+      "route": "jpg->webp",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-png-exif",
+      "route": "png->bmp",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-png-exif",
+      "route": "png->gif",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-png-exif",
+      "route": "png->ico",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-png-exif",
+      "route": "png->jpg",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-png-exif",
+      "route": "png->ppm",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-png-exif",
+      "route": "png->tiff",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-png-exif",
+      "route": "png->webp",
+      "expectedStatus": "PASS"
+    },
+    {
+      "fixture": "pillow-tiff-multipage-compression",
+      "route": "tiff->jpg",
+      "expectedStatus": "SAFE_REJECTION"
+    },
+    {
+      "fixture": "pillow-tiff-multipage-compression",
+      "route": "tiff->png",
+      "expectedStatus": "PASS"
+    }
+  ],
+  "robustnessCases": {
+    "required": [
+      "7Z 到 ZIP 内容回读",
+      "7Z 到文件夹真实 libarchive 解压",
+      "AMR 到 MP3 真实解码",
+      "AMR 到 WAV 真实解码",
+      "APNG 到 GIF 保留全部帧",
+      "ASS 到 SRT 换行降级",
+      "CSV 保留中文/emoji到 JSON",
+      "CSV 到 XLSX 表格行数",
+      "DOCX 到 HTML 保留页眉页脚/表格/图片",
+      "GIF 到 PNG 帧目录",
+      "GZ 单文件解压",
+      "HTML 到 TXT 去标签",
+      "JSON 到 CSV 字段展开",
+      "JSON 到 YAML Unicode",
+      "LRC 到 SRT 歌词时间轴",
+      "M4A 到 MP3 保留封面/中文标题",
+      "MKV 到 MP4 保留字幕/章节/元数据",
+      "MKV 到 WEBM 保留多音轨/多字幕/元数据",
+      "MP4 到 GIF 动图输出",
+      "MP4 到 MP3 音频提取",
+      "MP4 到 WEBM 视频流",
+      "Markdown 到 DOCX 段落",
+      "Markdown 到 HTML 表格/中文",
+      "Markdown 到 PDF 非空",
+      "NDJSON 到 CSV 多行",
+      "ODS 到 XLSX 保留多表/公式/样式/图表",
+      "PNG 到 ICO 非空",
+      "PNG 到 JPEG 低质量参数",
+      "PNG 到 JPEG 高质量参数",
+      "PNG 到 JPG 尺寸/模式",
+      "PNG 到 WEBP 尺寸/格式",
+      "RAR 分卷完整解压",
+      "RAR 到 ZIP 内容回读",
+      "RAR 到文件夹多级/Unicode 路径",
+      "RTF 到 TXT 文本抽取",
+      "SRT 到 VTT 时间格式",
+      "TAR.GZ 到 ZIP 重打包",
+      "TOML 到 JSON 嵌套结构",
+      "TXT 到 RTF 基础文本",
+      "VTT 到 SRT 时间格式",
+      "WAV 到 MP3 音频流",
+      "XLS 到 XLSX 保留多表/公式/样式",
+      "XLSX 到 CSV 内容回读",
+      "XML 到 JSON 标签结构",
+      "YAML 到 JSON 嵌套结构",
+      "ZIP 到文件夹安全解压/属性保留",
+      "加密 ZIP 密码解压内容回读",
+      "加密 ZIP 无密码明确拒绝",
+      "多帧 TIFF 到 APNG 保留全部帧",
+      "多帧 TIFF 到 JPEG 拒绝静默丢帧",
+      "恶意 ZIP 路径穿越拒绝",
+      "文件夹到 TAR.GZ 目录结构",
+      "文件夹到 ZIP 目录结构"
+    ],
+    "darwinRequired": [
+      "MOV 到 MP4 VideoToolbox 硬件加速"
+    ]
+  }
+}

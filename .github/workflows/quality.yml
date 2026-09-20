@@ -25,7 +25,12 @@ jobs:
       - name: Run Python regression suite
         run: python -m pytest -q
       - name: Run real-file conversion matrix
-        run: python scripts/test_conversion_matrix_real.py
+        run: |
+          python scripts/test_conversion_robustness.py
+          python scripts/test_conversion_matrix_real.py
+          python scripts/fetch_complex_conversion_corpus.py
+          python scripts/test_conversion_complex_corpus.py --local-manifest /tmp/streamdock-no-local-corpus.json
+          python scripts/verify_conversion_release.py
       - name: Check browser scripts
         run: find static/js -name '*.js' -print0 | xargs -0 -n1 node --check
       - name: Install Chromium for frontend workflow regression

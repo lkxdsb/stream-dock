@@ -397,6 +397,7 @@ python scripts/test_conversion_fuzz.py --iterations 100
 python scripts/test_conversion_matrix_real.py
 python scripts/fetch_complex_conversion_corpus.py
 python scripts/test_conversion_complex_corpus.py
+python scripts/verify_conversion_release.py
 python scripts/test_frontend_m5_browser.py
 python scripts/test_frontend_m6_browser.py
 ```

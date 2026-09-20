@@ -33,6 +33,7 @@ from converters.pipeline import convert_file  # noqa: E402
 from runtime_checks import augmented_path, resolve_tool_path, validate_media_output  # noqa: E402
 
 os.environ['PATH'] = augmented_path()
+RELEASE_CONTRACT = ROOT / 'scripts' / 'conversion_release_contract.json'
 
 
 @dataclass
@@ -601,11 +602,14 @@ def main() -> int:
     parser.add_argument('--keep', action='store_true', help='保留工作目录，便于排查')
     parser.add_argument('--report', type=Path, default=ROOT / 'report_figures' / 'conversion_robustness_latest.json', help='JSON 报告输出路径')
     args = parser.parse_args()
+    artifacts_retained = bool(args.keep or args.workdir)
 
     temp_ctx = None
     if args.workdir:
         workdir = args.workdir.expanduser().resolve()
         workdir.mkdir(parents=True, exist_ok=True)
+    elif args.keep:
+        workdir = Path(tempfile.mkdtemp(prefix='streamdock-conversion-robustness-kept-'))
     else:
         temp_ctx = tempfile.TemporaryDirectory(prefix='streamdock-conversion-robustness-')
         workdir = Path(temp_ctx.name)
@@ -614,6 +618,13 @@ def main() -> int:
     try:
         paths = generate_fixtures(workdir)
         cases = build_cases(paths)
+        contract = json.loads(RELEASE_CONTRACT.read_text(encoding='utf-8'))
+        required_names = set(contract['robustnessCases']['required'])
+        if sys.platform == 'darwin':
+            required_names.update(contract['robustnessCases'].get('darwinRequired') or [])
+        actual_names = {case.name for case in cases}
+        missing_cases = sorted(required_names - actual_names)
+        unexpected_cases = sorted(actual_names - required_names - set(contract['robustnessCases'].get('darwinRequired') or []))
         results = [run_case(case, output_dir) for case in cases]
         by_name = {item.name: item for item in results}
         low = by_name.get('PNG 到 JPEG 低质量参数')
@@ -626,13 +637,24 @@ def main() -> int:
                 low.status = 'FAIL'; low.error = f'图片质量参数未影响输出大小：{low_size} >= {high_size}'
         passed = sum(1 for item in results if item.status == 'PASS')
         failed = [item for item in results if item.status != 'PASS']
+        serialized_results = []
+        for item in results:
+            serialized = dict(item.__dict__)
+            if not artifacts_retained:
+                serialized['output_path'] = None
+            serialized_results.append(serialized)
         report = {
             'generatedAt': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'workdir': str(workdir),
+            'workdir': str(workdir) if artifacts_retained else None,
+            'artifactsRetained': artifacts_retained,
             'total': len(results),
             'passed': passed,
             'failed': len(failed),
-            'results': [item.__dict__ for item in results],
+            'coverage': {
+                'required': len(required_names), 'actual': len(actual_names),
+                'missing': missing_cases, 'unexpected': unexpected_cases,
+            },
+            'results': serialized_results,
         }
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -648,9 +670,12 @@ def main() -> int:
         if failed:
             print('\n失败用例请查看 JSON 报告中的 output_path/error。')
             return 1
+        if missing_cases or unexpected_cases:
+            print(f'\n固定用例合同不匹配：missing={missing_cases}, unexpected={unexpected_cases}')
+            return 1
         return 0
     finally:
-        if temp_ctx and not args.keep:
+        if temp_ctx:
             temp_ctx.cleanup()
 
 

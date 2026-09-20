@@ -12,7 +12,6 @@ import csv
 import hashlib
 import html
 import json
-import math
 import os
 import re
 import shutil
@@ -21,6 +20,7 @@ import sys
 import tempfile
 import time
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +28,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from converters.adapters.document_basic import _rtf_to_text  # noqa: E402
 from converters.models import ConversionLevel  # noqa: E402
 from converters.pipeline import convert_file  # noqa: E402
 from converters.registry import list_capabilities  # noqa: E402
@@ -40,6 +39,7 @@ DEFAULT_LOCAL_MANIFEST = ROOT / ".streamdock-complex-corpus" / "local_sources.js
 IMAGE_TARGETS = {"png", "jpg", "jpeg", "webp", "bmp", "tiff", "gif", "ico", "ppm", "pgm", "pbm", "pnm"}
 MEDIA_TARGETS = {"mp3", "wav", "m4a", "aac", "flac", "ogg", "opus", "mp4", "mov", "mkv", "webm", "avi", "flv", "m4v", "3gp", "ts"}
 TEXT_TARGETS = {"txt", "md", "markdown", "html", "rtf"}
+MIN_SEMANTIC_TOKEN_RECALL = 0.70
 
 
 def sha256(path: Path) -> str:
@@ -56,6 +56,52 @@ def strip_markup(value: str) -> str:
     return html.unescape(re.sub(r"\s+", " ", value)).strip()
 
 
+def extract_odt_visible_text(raw: bytes) -> str:
+    """Extract document-body text while excluding annotation metadata/content.
+
+    Comments are useful structural test data, but their author, timestamp and
+    comment body are not part of the visible document text and cannot be
+    expected in lossy targets such as TXT or HTML.
+    """
+    root = ET.fromstring(raw)
+    office_ns = "urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+    body = root.find(f".//{{{office_ns}}}text")
+    if body is None:
+        return ""
+
+    def collect(node: ET.Element) -> list[str]:
+        if node.tag == f"{{{office_ns}}}annotation":
+            return []
+        values = [node.text or ""]
+        for child in node:
+            values.extend(collect(child))
+            values.append(child.tail or "")
+        return values
+
+    return re.sub(r"\s+", " ", "".join(collect(body))).strip()
+
+
+def extract_rtf_independently(path: Path, scratch: Path) -> str:
+    """Reopen RTF with LibreOffice instead of the production RTF parser."""
+    case_dir = scratch / f"rtf-{sha256(path)[:12]}"
+    case_dir.mkdir(parents=True, exist_ok=True)
+    source = case_dir / "source.rtf"
+    if not source.exists():
+        shutil.copy2(path, source)
+    profile = case_dir / "lo-profile"; profile.mkdir(exist_ok=True)
+    output = case_dir / "source.txt"
+    if not output.exists():
+        process = subprocess.run(
+            ["soffice", "--headless", f"-env:UserInstallation={profile.resolve().as_uri()}",
+             "--convert-to", "txt:Text", "--outdir", str(case_dir), str(source)],
+            capture_output=True, text=True, timeout=120,
+            env={**os.environ, "PATH": augmented_path()},
+        )
+        if process.returncode != 0 or not output.exists():
+            raise AssertionError(process.stderr.strip() or "LibreOffice RTF readback failed")
+    return output.read_text(encoding="utf-8", errors="strict")
+
+
 def extract_text(path: Path, fmt: str, scratch: Path) -> str:
     fmt = fmt.lower()
     if fmt in {"txt", "md", "markdown", "csv", "tsv", "json", "html", "rtf"}:
@@ -63,7 +109,7 @@ def extract_text(path: Path, fmt: str, scratch: Path) -> str:
         if fmt == "html":
             return strip_markup(raw)
         if fmt == "rtf":
-            return _rtf_to_text(raw)
+            return extract_rtf_independently(path, scratch)
         return raw
     if fmt == "docx":
         from docx import Document
@@ -89,7 +135,10 @@ def extract_text(path: Path, fmt: str, scratch: Path) -> str:
             return "\n".join(chunks)
     if fmt in {"odt", "ods", "odp"}:
         with zipfile.ZipFile(path) as archive:
-            return strip_markup(archive.read("content.xml").decode("utf-8", errors="ignore"))
+            raw = archive.read("content.xml")
+            if fmt == "odt":
+                return extract_odt_visible_text(raw)
+            return strip_markup(raw.decode("utf-8", errors="ignore"))
     if fmt in {"doc", "xls", "ppt"}:
         modern = {"doc": "docx", "xls": "xlsx", "ppt": "pptx"}[fmt]
         converted = scratch / f"source-{sha256(path)[:12]}.{modern}"
@@ -118,10 +167,17 @@ def validate_text_quality(source_text: str, output_text: str) -> dict[str, Any]:
     source_tokens = meaningful_tokens(source_text)
     output_tokens = meaningful_tokens(output_text)
     overlap = source_tokens & output_tokens
-    required = min(5, max(1, math.ceil(len(source_tokens) * 0.4)))
-    if source_tokens and len(overlap) < required:
-        raise AssertionError(f"semantic token overlap too small: {len(overlap)}/{len(source_tokens)}")
-    return {"sourceTokens": len(source_tokens), "outputTokens": len(output_tokens), "sharedTokens": len(overlap)}
+    recall = len(overlap) / len(source_tokens) if source_tokens else 1.0
+    if source_tokens and recall < MIN_SEMANTIC_TOKEN_RECALL:
+        raise AssertionError(
+            f"semantic token recall too small: {len(overlap)}/{len(source_tokens)} "
+            f"({recall:.1%} < {MIN_SEMANTIC_TOKEN_RECALL:.0%})"
+        )
+    return {
+        "sourceTokens": len(source_tokens), "outputTokens": len(output_tokens),
+        "sharedTokens": len(overlap), "semanticTokenRecall": round(recall, 4),
+        "minimumSemanticTokenRecall": MIN_SEMANTIC_TOKEN_RECALL,
+    }
 
 
 def validate_image(source: Path, output: Path, target: str) -> dict[str, Any]:
@@ -232,11 +288,19 @@ def main() -> int:
     parser.add_argument("--corpus-root", type=Path, default=ROOT / ".streamdock-complex-corpus")
     parser.add_argument("--local-manifest", type=Path, default=DEFAULT_LOCAL_MANIFEST)
     parser.add_argument("--report", type=Path, default=ROOT / "report_figures" / "conversion_complex_corpus_latest.json")
+    parser.add_argument("--workdir", type=Path)
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
+    artifacts_retained = bool(args.keep or args.workdir)
     fixtures = load_fixtures(args.corpus_root, args.local_manifest)
-    context = tempfile.TemporaryDirectory(prefix="streamdock-complex-corpus-")
-    workdir = Path(context.name); scratch = workdir / "scratch"; scratch.mkdir(); outputs = workdir / "outputs"; outputs.mkdir()
+    context = None
+    if args.workdir:
+        workdir = args.workdir.expanduser().resolve(); workdir.mkdir(parents=True, exist_ok=True)
+    elif args.keep:
+        workdir = Path(tempfile.mkdtemp(prefix="streamdock-complex-corpus-kept-"))
+    else:
+        context = tempfile.TemporaryDirectory(prefix="streamdock-complex-corpus-"); workdir = Path(context.name)
+    scratch = workdir / "scratch"; scratch.mkdir(exist_ok=True); outputs = workdir / "outputs"; outputs.mkdir(exist_ok=True)
     rows: list[dict[str, Any]] = []
     try:
         for fixture in fixtures:
@@ -268,22 +332,36 @@ def main() -> int:
                             validation = validate_media(source_path, output, target)
                         else:
                             validation = validate_structured(output, target, source_text, scratch)
-                        row.update(status="PASS", outputPath=str(output), validation=validation)
+                        if output.is_file():
+                            artifact = {"type": "file", "sha256": sha256(output), "bytes": output.stat().st_size}
+                        else:
+                            members = [{"path": str(item.relative_to(output)), "sha256": sha256(item), "bytes": item.stat().st_size} for item in sorted(output.rglob("*")) if item.is_file()]
+                            artifact = {"type": "directory", "members": members, "files": len(members), "bytes": sum(item["bytes"] for item in members)}
+                        row.update(status="PASS", validation=validation, artifact=artifact)
+                        if artifacts_retained:
+                            row["outputPath"] = str(output)
                 except Exception as exc:
                     row["error"] = str(exc)
                 row["elapsedSeconds"] = round(time.perf_counter() - started, 3); rows.append(row)
         counts = {status: sum(row["status"] == status for row in rows) for status in sorted({row["status"] for row in rows})}
-        report = {"generatedAt": time.strftime("%Y-%m-%d %H:%M:%S"), "workdir": str(workdir), "counts": counts, "results": rows}
+        report = {
+            "generatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "workdir": str(workdir) if artifacts_retained else None,
+            "artifactsRetained": artifacts_retained,
+            "counts": counts,
+            "results": rows,
+        }
         args.report.parent.mkdir(parents=True, exist_ok=True); args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print("COMPLEX_CORPUS=" + ", ".join(f"{key}={value}" for key, value in counts.items()))
         for row in rows:
             if row["status"] not in {"PASS", "SAFE_REJECTION", "NO_EXECUTABLE_ROUTE"}:
                 print(f"{row['status']} {row['fixture']} {row.get('source')}->{row.get('target', '-')}: {row.get('error', '')}")
-        if args.keep:
-            print(f"WORKDIR={workdir}"); context.cleanup = lambda: None  # type: ignore[method-assign]
+        if args.keep or args.workdir:
+            print(f"WORKDIR={workdir}")
         return 0 if not any(row["status"] in {"FAIL", "MISSING", "HASH_MISMATCH"} for row in rows) else 1
     finally:
-        context.cleanup()
+        if context:
+            context.cleanup()
 
 
 if __name__ == "__main__":
