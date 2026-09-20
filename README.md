@@ -281,6 +281,28 @@ curl 'http://127.0.0.1:8002/api/health/ready?outputPath=~/Downloads/StreamDock'
 
 页面会分别显示 Python、FFmpeg/FFprobe、Playwright、图片/表格转换、ASR、OCR、PDF 引擎和输出目录状态。核心依赖正常后即可使用；可选能力缺失不会阻止其他工作台启动。
 
+### 服务器模式（M9）
+
+默认 `desktop` 模式仅供本机使用。如需通过反向代理或局域网提供服务，必须显式启用服务器模式，并同时配置访问令牌、Host/Origin 白名单和专用输出根目录：
+
+```bash
+export STREAMDOCK_MODE=server
+export STREAMDOCK_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export STREAMDOCK_TRUSTED_HOSTS=streamdock.example.com
+export STREAMDOCK_ALLOWED_ORIGINS=https://streamdock.example.com
+export STREAMDOCK_SERVER_OUTPUT_ROOT=/srv/streamdock/output
+python -m uvicorn app:app --host 0.0.0.0 --port 8002
+```
+
+启动后先访问 `/auth` 建立 HttpOnly 会话；自动化客户端可使用 `Authorization: Bearer <token>`。服务器模式下：
+
+- 缺少任一必需配置时启动失败，仅 liveness 语义可报告未配置状态；
+- 拒绝未信任的 `Host` 和 `Origin`，令牌不进入 URL；
+- 禁用 Finder/系统选择器/本机打开文件 API；
+- 所有任务输出必须位于 `STREAMDOCK_SERVER_OUTPUT_ROOT` 内，用户通过 task-scoped 下载接口取得产物。
+
+`STREAMDOCK_ALLOW_LAN_API=1` 会被视为服务器模式，不再允许无认证的 LAN 暴露。当前是单信任用户部署边界，不是多租户账号系统。生产环境请在 TLS 反向代理后运行，并设置 `STREAMDOCK_SECURE_COOKIE=1`。
+
 ### 可选依赖
 
 | 能力 | 依赖 |
@@ -406,6 +428,7 @@ python scripts/verify_conversion_release.py
 python scripts/test_frontend_m5_browser.py
 python scripts/test_frontend_m6_browser.py
 python scripts/test_frontend_m8_browser.py
+python scripts/test_frontend_m9_browser.py
 ```
 
 具体内容级断言和降级策略见 [`docs/CONVERSION_QUALITY_VALIDATION.md`](docs/CONVERSION_QUALITY_VALIDATION.md)。

@@ -28,8 +28,11 @@
   const resetButton = document.getElementById('convertResetSettingsButton');
   const status = document.getElementById('convertSettingsStatus');
   const workbenchOutputPath = document.getElementById('convertOutputPath');
+  const serverOutputRoot = workbenchOutputPath?.dataset.serverOutputRoot || '';
+  if (serverOutputRoot) defaults.outputPath = serverOutputRoot;
 
   function readStored() {
+    if (serverOutputRoot) return { ...defaults, outputPath: serverOutputRoot };
     try {
       const raw = window.localStorage?.getItem(STORAGE_KEY);
       const platformRaw = window.localStorage?.getItem(PLATFORM_STORAGE_KEY);
@@ -76,7 +79,7 @@
   }
 
   function save(settings) {
-    const next = { ...defaults, ...settings };
+    const next = { ...defaults, ...settings, ...(serverOutputRoot ? { outputPath: serverOutputRoot } : {}) };
     window.localStorage?.setItem(STORAGE_KEY, JSON.stringify(next));
     window.localStorage?.setItem(PLATFORM_STORAGE_KEY, JSON.stringify({ outputPath: next.outputPath }));
     writeControls(next);

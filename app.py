@@ -14,14 +14,14 @@ from dataclasses import asdict
 from threading import Lock
 from threading import Thread
 from time import monotonic, sleep
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, urlparse
 from uuid import uuid4
 
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -57,6 +57,7 @@ from subtitles.service import export_subtitles, normalize_format as normalize_su
 from web_archive.models import ExtractRequest
 from web_archive.pipeline import run_web_archive
 from web_archive.queue import WebArchiveQueue
+from deployment_security import DESKTOP_ONLY_API_PATHS, SESSION_COOKIE, bearer_token, deployment_security, enforce_server_output_root
 
 ensure_system_proxy_environment()
 
@@ -90,7 +91,17 @@ MAX_API_REQUEST_BYTES = int(os.getenv('STREAMDOCK_MAX_API_REQUEST_BYTES', str(10
 CONVERT_PREVIEW_ROOT = Path(tempfile.gettempdir()) / 'streamdock-convert-previews'
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-app = FastAPI(title='Douyin Local Fetch UI')
+
+
+@asynccontextmanager
+async def application_lifespan(_app: FastAPI):
+    config = deployment_security()
+    if config.server and config.errors:
+        raise RuntimeError('服务器模式配置无效：' + '；'.join(config.errors))
+    yield
+
+
+app = FastAPI(title='Douyin Local Fetch UI', lifespan=application_lifespan)
 app.mount('/static', StaticFiles(directory=str(STATIC_DIR)), name='static')
 
 
@@ -161,25 +172,55 @@ _pdf_processes: dict[str, subprocess.Popen[str]] = {}
 _pdf_process_lock = Lock()
 
 
+def _secure_response(response: Response) -> Response:
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('Referrer-Policy', 'same-origin')
+    response.headers.setdefault('X-Frame-Options', 'DENY')
+    response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+    return response
+
+
 @app.middleware('http')
 async def local_api_only(request: Request, call_next):
-    """Keep filesystem-writing APIs local even if uvicorn is accidentally bound to 0.0.0.0."""
-    if request.url.path.startswith('/api/') and os.getenv('STREAMDOCK_ALLOW_LAN_API', '0') != '1':
+    """Enforce desktop-local or authenticated single-session server mode."""
+    config = deployment_security()
+    path = request.url.path
+    is_api = path.startswith('/api/')
+    public_liveness = path in {'/api/health', '/api/health/live'}
+
+    if config.server and public_liveness:
+        return _secure_response(await call_next(request))
+    if config.server:
+        if config.errors:
+            return _secure_response(JSONResponse({'success': False, 'error': '；'.join(config.errors)}, status_code=503))
+        if not config.host_allowed(request.headers.get('host', '')):
+            return _secure_response(JSONResponse({'success': False, 'error': 'Host 不在服务器信任列表中'}, status_code=400))
+        if not config.origin_allowed(request.headers.get('origin')):
+            return _secure_response(JSONResponse({'success': False, 'error': 'Origin 不在服务器信任列表中'}, status_code=403))
+        if not public_liveness and path not in {'/auth', '/auth/logout'}:
+            supplied = bearer_token(request.headers.get('authorization')) or request.cookies.get(SESSION_COOKIE)
+            if not config.token_matches(supplied):
+                if is_api:
+                    return _secure_response(JSONResponse({'success': False, 'error': '需要有效的 StreamDock 服务器会话'}, status_code=401))
+                return _secure_response(RedirectResponse('/auth', status_code=303))
+        if path in DESKTOP_ONLY_API_PATHS:
+            return _secure_response(JSONResponse({'success': False, 'error': '服务器模式已禁用本机系统文件操作'}, status_code=403))
+    elif is_api:
         client_host = request.client.host if request.client else ''
         if client_host not in {'127.0.0.1', '::1', 'localhost', 'testclient'}:
-            return JSONResponse(
+            return _secure_response(JSONResponse(
                 {'success': False, 'error': '为保护本地文件，API 默认仅允许本机访问'},
                 status_code=403,
-            )
+            ))
     content_length = request.headers.get('content-length')
-    if request.url.path.startswith('/api/') and content_length:
+    if is_api and content_length:
         try:
             declared_bytes = int(content_length)
         except ValueError:
-            return JSONResponse({'success': False, 'error': 'Content-Length 非法'}, status_code=400)
+            return _secure_response(JSONResponse({'success': False, 'error': 'Content-Length 非法'}, status_code=400))
         if declared_bytes > MAX_API_REQUEST_BYTES:
-            return JSONResponse({'success': False, 'error': f'请求体超过上限 {MAX_API_REQUEST_BYTES} 字节'}, status_code=413)
-    return await call_next(request)
+            return _secure_response(JSONResponse({'success': False, 'error': f'请求体超过上限 {MAX_API_REQUEST_BYTES} 字节'}, status_code=413))
+    return _secure_response(await call_next(request))
 
 
 class FetchRequest(BaseModel):
@@ -1157,11 +1198,59 @@ pdf_queue = PdfQueue(task_store, run_pdf_task)
 web_archive_queue = WebArchiveQueue(task_store, run_web_archive)
 
 
+@app.get('/auth', response_class=HTMLResponse)
+def server_login_page():
+    config = deployment_security()
+    if not config.server:
+        return RedirectResponse('/', status_code=303)
+    return HTMLResponse('''<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StreamDock 服务器登录</title><style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:12vh auto;padding:0 1.5rem;color:#172033}form{display:grid;gap:1rem}input,button{font:inherit;padding:.8rem}button{cursor:pointer}</style></head>
+<body><h1>StreamDock</h1><p>请输入服务器访问令牌。令牌仅用于建立 HttpOnly 会话，不会写入 URL。</p>
+<form method="post" action="/auth"><label for="apiToken">访问令牌</label><input id="apiToken" name="apiToken" type="password" autocomplete="current-password" required><button type="submit">登录</button></form></body></html>''')
+
+
+@app.post('/auth')
+def server_login(request: Request, apiToken: str = Form(...)):
+    config = deployment_security()
+    if not config.server:
+        return RedirectResponse('/', status_code=303)
+    if config.errors:
+        return HTMLResponse('服务器配置无效', status_code=503)
+    if not config.token_matches(apiToken):
+        return HTMLResponse('访问令牌无效', status_code=401)
+    response = RedirectResponse('/', status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE,
+        config.token or '',
+        httponly=True,
+        secure=request.url.scheme == 'https' or os.getenv('STREAMDOCK_SECURE_COOKIE', '0') == '1',
+        samesite='strict',
+        max_age=8 * 60 * 60,
+        path='/',
+    )
+    return response
+
+
+@app.post('/auth/logout')
+def server_logout():
+    response = RedirectResponse('/auth', status_code=303)
+    response.delete_cookie(SESSION_COOKIE, path='/', samesite='strict')
+    return response
+
+
 @app.get('/api/health')
 @app.get('/api/health/live')
 def health():
     """Cheap liveness probe: no subprocesses, directory creation or file I/O."""
-    return JSONResponse({'success': True, 'status': 'live', 'service': 'streamdock'})
+    config = deployment_security()
+    return JSONResponse({
+        'success': True,
+        'status': 'live',
+        'service': 'streamdock',
+        'mode': config.mode,
+        'configured': not config.errors,
+    })
 
 
 @app.get('/api/health/ready')
@@ -1267,6 +1356,7 @@ def updates_page(request: Request):
 
 @app.get('/convert', response_class=HTMLResponse)
 def convert_page(request: Request):
+    security = deployment_security()
     return templates.TemplateResponse(
         request=request,
         name='convert.html',
@@ -1274,6 +1364,8 @@ def convert_page(request: Request):
             'request': request,
             'title': 'StreamDock · 文件转换',
             'active_nav': 'convert',
+            'deployment_mode': security.mode,
+            'default_output_path': str(security.output_root) if security.server and security.output_root else '~/Downloads/StreamDock',
         },
     )
 
@@ -1808,7 +1900,10 @@ async def convert_batch_run(
     target = normalize_format(outputType)
     media_options = _normalized_media_options(audioBitrateKbps, audioSampleRate, videoMaxWidth, videoFrameRate, videoBitrateKbps, videoCrf, hardwareAcceleration)
     archive_options = {'password': archivePassword} if archivePassword else {}
-    output_dir = Path(outputPath).expanduser()
+    try:
+        output_dir = enforce_server_output_root(Path(outputPath))
+    except RuntimeError as exc:
+        return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
     batch_id = uuid4().hex
     tasks = []
     comparisons: dict[str, dict] = {}
@@ -2492,7 +2587,10 @@ async def pdf_parse(
         parse_mode = PdfParseMode(mode)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail='不支持的 PDF 解析模式') from exc
-    output_root = Path(outputPath).expanduser().resolve()
+    try:
+        output_root = enforce_server_output_root(Path(outputPath))
+    except RuntimeError as exc:
+        return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
     prepare_output_directory(output_root)
     safe_name = re.sub(r'[^\w\-.\u4e00-\u9fff]+', '_', Path(file.filename or 'document.pdf').stem).strip('._') or 'document'
     task_token = uuid4().hex[:10]

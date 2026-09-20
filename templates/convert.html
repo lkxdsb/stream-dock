@@ -88,8 +88,8 @@
               <label class="convert-field convert-output-field">
                 <span>保存到</span>
                 <div class="convert-path-row">
-                  <input id="convertOutputPath" type="text" value="~/Downloads/StreamDock" readonly />
-                  <button class="convert-secondary" id="convertSelectDirButton" type="button">选择目录</button>
+                  <input id="convertOutputPath" type="text" value="{{ default_output_path }}" data-server-output-root="{% if deployment_mode == 'server' %}{{ default_output_path }}{% endif %}" readonly />
+                  <button class="convert-secondary" id="convertSelectDirButton" type="button"{% if deployment_mode == 'server' %} hidden{% endif %}>选择目录</button>
                 </div>
               </label>
               <label class="convert-field" id="convertArchivePasswordField" hidden>
@@ -321,8 +321,8 @@
               <label class="convert-field convert-output-field">
                 <span>默认保存目录</span>
                 <div class="convert-path-row convert-setting-path-row">
-                  <input id="convertDefaultOutputPath" type="text" value="~/Downloads/StreamDock" readonly />
-                  <button class="convert-secondary" id="convertSelectDefaultDirButton" type="button">选择目录</button>
+                  <input id="convertDefaultOutputPath" type="text" value="{{ default_output_path }}" readonly />
+                  <button class="convert-secondary" id="convertSelectDefaultDirButton" type="button"{% if deployment_mode == 'server' %} hidden{% endif %}>选择目录</button>
                 </div>
               </label>
 

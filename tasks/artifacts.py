@@ -152,6 +152,9 @@ def remove_task_workspace(task_id: str) -> None:
 
 def publish_artifact(source: Path, output_dir: Path, filename: str, *, collision_strategy: str = 'append') -> Path:
     """Publish a task artifact while atomically reserving non-overwrite names."""
+    from deployment_security import enforce_server_output_root
+
+    output_dir = enforce_server_output_root(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     base = output_dir / filename
     candidate = base

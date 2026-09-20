@@ -44,7 +44,9 @@ def sanitize_filename(name: str, max_length: int = 120) -> str:
 
 
 def ensure_output_dir(raw_path: str) -> Path:
-    path = Path(raw_path).expanduser().resolve()
+    from deployment_security import enforce_server_output_root
+
+    path = enforce_server_output_root(Path(raw_path))
     prepare_output_directory(path)
     return path
 

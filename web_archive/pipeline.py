@@ -59,7 +59,9 @@ def run_web_archive(payload: dict[str, Any]) -> dict[str, Any]:
     logs: list[str] = []
 
     try:
-        prepare_output_directory(Path(output_path).expanduser())
+        from deployment_security import enforce_server_output_root
+
+        prepare_output_directory(enforce_server_output_root(Path(output_path)))
     except Exception as exc:
         return _error_result(url, str(exc), logs)
 

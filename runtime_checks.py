@@ -352,6 +352,16 @@ def validate_general_output(path: Path, *, target: str) -> dict[str, Any]:
 
 def environment_health(output_path: str | None = None) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
+    from deployment_security import deployment_security
+
+    security = deployment_security()
+    checks.append({
+        'key': 'deployment_security',
+        'name': '部署信任边界',
+        'status': 'ok' if not security.errors else 'error',
+        'detail': f'{security.mode} 模式已配置' if not security.errors else '；'.join(security.errors),
+        'required': True,
+    })
     python_ok = sys.version_info >= (3, 11)
     checks.append({
         'key': 'python',
@@ -479,8 +489,12 @@ def environment_health(output_path: str | None = None) -> dict[str, Any]:
         'required': False,
     })
 
-    output = Path(output_path or '~/Downloads/StreamDock').expanduser()
+    default_output = security.output_root if security.server and security.output_root else Path('~/Downloads/StreamDock').expanduser()
+    output = Path(output_path).expanduser() if output_path else default_output
     try:
+        if security.server:
+            from deployment_security import enforce_server_output_root
+            output = enforce_server_output_root(output)
         output_info = prepare_output_directory(output)
         checks.append({
             'key': 'output', 'name': '输出目录', 'status': 'ok',
