@@ -30,10 +30,10 @@
   async function refresh() {
     buttons.forEach((button) => { button.disabled = true; button.textContent = '检查中...'; });
     try {
-      const response = await fetch(`/api/health?outputPath=${encodeURIComponent(currentOutputPath())}`);
+      const response = await fetch(`/api/health/ready?outputPath=${encodeURIComponent(currentOutputPath())}`);
       const data = await response.json();
-      if (!response.ok || !data.success) throw new Error(data.error || '环境检查失败');
       render(data.checks);
+      if (!response.ok && !data.checks) throw new Error(data.error || '环境检查失败');
     } catch (error) {
       render([{ name: '环境检查', status: 'error', detail: error.message || '本地服务暂时不可用' }]);
     } finally {

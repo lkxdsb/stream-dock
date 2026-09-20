@@ -13,7 +13,7 @@ class RuntimeChecksTests(unittest.TestCase):
             result = environment_health(tmp)
 
         keys = {item['key'] for item in result['checks']}
-        self.assertTrue({'python', 'ffmpeg', 'ffprobe', 'playwright', 'subtitle_asr', 'subtitle_ocr', 'pdf_engine', 'output'}.issubset(keys))
+        self.assertTrue({'python', 'ffmpeg', 'ffprobe', 'playwright', 'subtitle_asr', 'subtitle_ocr', 'pdf_engine', 'conversion_release', 'output'}.issubset(keys))
         self.assertEqual(result['summary']['total'], len(result['checks']))
         self.assertGreaterEqual(result['summary']['requiredTotal'], 4)
 

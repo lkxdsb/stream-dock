@@ -276,6 +276,7 @@ macOS 用户如果使用名为 `jj` 的 Conda 环境，也可以双击 `start_st
 
 ```bash
 curl http://127.0.0.1:8002/api/health
+curl 'http://127.0.0.1:8002/api/health/ready?outputPath=~/Downloads/StreamDock'
 ```
 
 页面会分别显示 Python、FFmpeg/FFprobe、Playwright、图片/表格转换、ASR、OCR、PDF 引擎和输出目录状态。核心依赖正常后即可使用；可选能力缺失不会阻止其他工作台启动。
@@ -334,7 +335,11 @@ Windows 用户可以通过 WSL 使用该脚本，或自行安装 MinerU 后通�
 | `/updates` | 产品更新记录 |
 | `/about` | 项目说明 |
 
-环境健康接口：<http://127.0.0.1:8002/api/health>
+存活接口（无文件或外部进程副作用）：<http://127.0.0.1:8002/api/health>
+
+完整就绪检查：<http://127.0.0.1:8002/api/health/ready>
+
+转换发布门禁状态：<http://127.0.0.1:8002/api/convert/release-status>
 
 ## 常用配置
 
@@ -400,6 +405,7 @@ python scripts/test_conversion_complex_corpus.py
 python scripts/verify_conversion_release.py
 python scripts/test_frontend_m5_browser.py
 python scripts/test_frontend_m6_browser.py
+python scripts/test_frontend_m8_browser.py
 ```
 
 具体内容级断言和降级策略见 [`docs/CONVERSION_QUALITY_VALIDATION.md`](docs/CONVERSION_QUALITY_VALIDATION.md)。

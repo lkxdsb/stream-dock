@@ -12,6 +12,7 @@ python scripts/test_conversion_matrix_real.py
 python scripts/fetch_complex_conversion_corpus.py
 python scripts/test_conversion_complex_corpus.py
 python scripts/verify_conversion_release.py
+python scripts/test_frontend_m8_browser.py
 ```
 
 - `test_conversion_robustness.py` covers high-risk semantic fixtures: Chinese, emoji, RTL, Unicode RTF, Office workbook structure, DOCX headers/footers/comments/table/image/TOC, APNG/GIF/TIFF frames, image quality, AMR, cover art, chapters, metadata, two audio tracks, two subtitle tracks, hardware encoding, encrypted ZIP, 7Z, RAR, split RAR, archive attributes, and malicious archives.
@@ -33,6 +34,8 @@ Generated reports are written to `report_figures/`:
 - `conversion_release_latest.json`
 
 Use `--workdir /absolute/path` for a deterministic retained workspace. `--keep` now creates a persistent directory with `mkdtemp` and prints its path; reports never claim a temporary directory that has already been deleted.
+
+The capabilities API now exposes each route's dependencies, input constraints, output shape, preserved dimensions, allowed losses, validator and release-gate membership. `/api/health` is a side-effect-free liveness probe; `/api/health/ready` performs the explicit engine/output-directory checks. CI uploads the JSON evidence bundle for every run for 30 days.
 
 The local-only `.streamdock-complex-corpus/local_sources.json` may reference user-provided files by absolute path. Those originals are never copied into the repository, and the local manifest is ignored by git. The committed public-corpus manifest records URL, license, expected SHA-256, and the complex features used by the test.
 

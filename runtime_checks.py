@@ -469,6 +469,16 @@ def environment_health(output_path: str | None = None) -> dict[str, Any]:
     except Exception as exc:
         checks.append({'key': 'pdf_engine', 'name': 'PDF 深度解析', 'status': 'error', 'detail': str(exc), 'required': False})
 
+    from converters.contracts import release_status
+    gate = release_status()
+    checks.append({
+        'key': 'conversion_release',
+        'name': '真实文件发布门禁',
+        'status': 'ok' if gate['status'] == 'pass' else 'warning' if gate['status'] == 'stale' else 'missing' if gate['status'] == 'unknown' else 'error',
+        'detail': f"{gate['detail']} · {gate['expectedRoutes']} 条路径",
+        'required': False,
+    })
+
     output = Path(output_path or '~/Downloads/StreamDock').expanduser()
     try:
         output_info = prepare_output_directory(output)

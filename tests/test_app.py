@@ -179,6 +179,12 @@ class HomePageTests(unittest.IsolatedAsyncioTestCase):
         keys = {item['key'] for item in data['capabilities']}
         self.assertIn('csv:xlsx', keys)
         self.assertIn('pdf:docx', keys)
+        route = next(item for item in data['capabilities'] if item['key'] == 'csv:xlsx')
+        self.assertEqual(route['verification'], 'release-gated')
+        self.assertTrue(route['contract']['releaseGate'])
+        self.assertEqual(route['contract']['outputShape'], 'single-file')
+        self.assertIn('openpyxl', route['contract']['dependencies'])
+        self.assertEqual(data['release']['expectedRoutes'], 152)
 
     async def test_convert_probe_and_run_csv_to_json(self):
         transport = httpx.ASGITransport(app=app)
@@ -201,6 +207,17 @@ class HomePageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(probe.status_code, 200)
         self.assertEqual(probe.json()['source'], 'csv')
         self.assertTrue(any(item['target'] == 'json' for item in probe.json()['options']))
+
+    async def test_convert_release_status_is_a_sanitized_contract_summary(self):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            response = await client.get('/api/convert/release-status')
+
+        self.assertEqual(response.status_code, 200)
+        release = response.json()['release']
+        self.assertEqual(release['expectedRoutes'], 152)
+        self.assertIn(release['status'], {'pass', 'fail', 'stale', 'unknown', 'invalid'})
+        self.assertTrue(all('path' not in item for item in release.get('evidence', {}).values()))
 
     async def test_use_page_renders_real_tooling_fields_and_logs(self):
         transport = httpx.ASGITransport(app=app)
@@ -1664,14 +1681,27 @@ class PlatformReliabilityApiTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
-                response = await client.get('/api/health', params={'outputPath': tmp})
+                response = await client.get('/api/health/ready', params={'outputPath': tmp})
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertTrue(data['success'])
         keys = {item['key'] for item in data['checks']}
-        self.assertTrue({'python', 'ffmpeg', 'ffprobe', 'playwright', 'subtitle_asr', 'subtitle_ocr', 'pdf_engine', 'output'}.issubset(keys))
+        self.assertTrue({'python', 'ffmpeg', 'ffprobe', 'playwright', 'subtitle_asr', 'subtitle_ocr', 'pdf_engine', 'conversion_release', 'output'}.issubset(keys))
         self.assertIn('summary', data)
+
+    async def test_liveness_probe_does_not_create_requested_output_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / 'must-not-be-created'
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                response = await client.get('/api/health', params={'outputPath': str(missing)})
+                explicit = await client.get('/api/health/live')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['status'], 'live')
+        self.assertEqual(explicit.json()['status'], 'live')
+        self.assertFalse(missing.exists())
 
     async def test_failed_media_task_can_be_resubmitted_for_fresh_probe(self):
         from tasks.models import TaskStatus

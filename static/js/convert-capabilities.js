@@ -101,6 +101,12 @@
     },
   };
 
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[character]));
+  }
+
   function capabilityType(item) {
     const category = item.category || '';
     if (['数据表格', '轻文档', 'Office 基础', '电子书'].includes(category)) return 'document';
@@ -118,6 +124,7 @@
   }
 
   function verificationLabel(item) {
+    if (item.verification === 'release-gated') return '真实文件门禁';
     if (item.verification === 'verified') return '样例已验证';
     if (item.verification === 'engine') return '引擎可用';
     if (item.verification === 'best-effort') return '可能有损';
@@ -335,10 +342,16 @@
       if (orbitTitle) orbitTitle.textContent = `${selectedCapability.source.toUpperCase()} → ${selectedCapability.target.toUpperCase()}`;
       if (orbitText) orbitText.textContent = `${selectedCapability.category} · ${levelLabel(selectedCapability.level)} · ${selectedCapability.description || '已登记转换路径。'}`;
       if (orbitRoutes) {
+        const contract = selectedCapability.contract || {};
+        const dependencies = (contract.dependencies || []).join(' + ') || 'local';
+        const preserves = (contract.preserves || []).join('、') || '基础内容';
+        const losses = (contract.allowedLosses || []).join('、') || '无已知降级';
         const related = filtered.filter((item) => item.key !== selectedCapability.key && (item.source === selectedCapability.source || item.target === selectedCapability.source || item.source === selectedCapability.target || item.target === selectedCapability.target)).slice(0, 4);
         orbitRoutes.innerHTML = `
-          <span class="convert-orbit-route" data-level="${selectedCapability.level}">${selectedCapability.engine || 'local'}</span>
-          <span class="convert-orbit-route" data-level="${selectedCapability.level}">${selectedCapability.notes || '可在当前策略下处理'}</span>
+          <span class="convert-orbit-route" data-level="${selectedCapability.level}">依赖：${escapeHtml(dependencies)}</span>
+          <span class="convert-orbit-route" data-level="${selectedCapability.level}">输出：${escapeHtml(contract.outputShape || 'single-file')}</span>
+          <span class="convert-orbit-route" data-level="${selectedCapability.level}">保留：${escapeHtml(preserves)}</span>
+          <span class="convert-orbit-route" data-level="${selectedCapability.level}">允许损失：${escapeHtml(losses)}</span>
           ${related.map((item) => `<button class="convert-orbit-route" type="button" data-route-key="${item.key}" data-level="${item.level}">${item.source.toUpperCase()} → ${item.target.toUpperCase()}</button>`).join('')}
         `;
         bindRouteButtons();
@@ -1240,6 +1253,7 @@
     .then((res) => res.json())
     .then((data) => {
       capabilities = data.capabilities || [];
+      window.StreamDockConversionRelease = data.release || null;
       window.StreamDockConvertCapabilities = capabilities;
       window.StreamDockConvertCapabilityType = capabilityType;
       window.StreamDockConvertFilterOptions = (items) => (items || []).filter(matchesActiveFilters);

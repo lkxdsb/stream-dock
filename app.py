@@ -32,6 +32,7 @@ from converters.comparison import build_conversion_comparison
 from converters.models import ConversionLevel
 from converters.executor import convert_file_with_timeout
 from converters.registry import find_capability, infer_input_format, list_capabilities, normalize_format, targets_for_source
+from converters.contracts import release_status
 from converters.sniff import validate_declared_format
 from error_catalog import classify_error
 from fetchers.adapters.bilibili import USER_AGENT as BILIBILI_USER_AGENT, reset_manual_cookie_overrides, set_manual_cookie_overrides
@@ -1157,8 +1158,16 @@ web_archive_queue = WebArchiveQueue(task_store, run_web_archive)
 
 
 @app.get('/api/health')
-def health(outputPath: str | None = None):
-    return JSONResponse({'success': True, **environment_health(outputPath)})
+@app.get('/api/health/live')
+def health():
+    """Cheap liveness probe: no subprocesses, directory creation or file I/O."""
+    return JSONResponse({'success': True, 'status': 'live', 'service': 'streamdock'})
+
+
+@app.get('/api/health/ready')
+def readiness(outputPath: str | None = None):
+    payload = environment_health(outputPath)
+    return JSONResponse({'success': payload['healthy'], **payload}, status_code=200 if payload['healthy'] else 503)
 
 
 @app.get('/api/platform-status')
@@ -1452,7 +1461,12 @@ def select_output_dir():
 @app.get('/api/convert/capabilities')
 def convert_capabilities():
     capabilities = [cap.to_dict() for cap in list_capabilities()]
-    return JSONResponse({'success': True, 'capabilities': capabilities})
+    return JSONResponse({'success': True, 'release': release_status(), 'capabilities': capabilities})
+
+
+@app.get('/api/convert/release-status')
+def convert_release_status():
+    return JSONResponse({'success': True, 'release': release_status()})
 
 
 @app.post('/api/convert/probe')

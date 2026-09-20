@@ -6,12 +6,6 @@ from pathlib import Path
 from typing import Any
 
 
-VERIFIED_CONVERSION_ROUTES = {
-    'csv:json', 'epub:html', 'lrc:srt', 'md:docx', 'md:html', 'md:pdf',
-    'png:ico', 'rtf:txt', 'txt:docx', 'gz:folder',
-}
-
-
 class ConversionLevel(str, Enum):
     STABLE = 'stable'
     BASIC = 'basic'
@@ -35,6 +29,9 @@ class ConversionCapability:
         return f'{self.source.lower()}:{self.target.lower()}'
 
     def to_dict(self) -> dict[str, object]:
+        from .contracts import capability_contract
+
+        contract = capability_contract(self)
         return {
             'source': self.source,
             'target': self.target,
@@ -47,11 +44,12 @@ class ConversionCapability:
             'vendors': list(self.vendors),
             'key': self.key,
             'verification': (
-                'verified' if self.key in VERIFIED_CONVERSION_ROUTES
+                'release-gated' if contract['releaseGate']
                 else 'engine' if self.level == ConversionLevel.STABLE
                 else 'best-effort' if self.level == ConversionLevel.BASIC
                 else 'vendor'
             ),
+            'contract': contract,
         }
 
 
