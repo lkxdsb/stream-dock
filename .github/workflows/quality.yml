@@ -40,6 +40,7 @@ jobs:
           python scripts/test_frontend_m5_browser.py
           python scripts/test_frontend_m6_browser.py
           python scripts/test_frontend_m8_browser.py
+          python scripts/test_frontend_m9_browser.py
       - name: Upload conversion quality evidence
         if: always()
         uses: actions/upload-artifact@v4
