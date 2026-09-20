@@ -2055,6 +2055,23 @@ def open_output_file(path: str = Form(...)):
     return JSONResponse({'success': True, 'path': str(target)})
 
 
+@app.post('/api/reveal-output-file')
+def reveal_output_file(path: str = Form(...)):
+    target = Path(path).expanduser().resolve()
+    if not target.exists() or not target.is_file():
+        return JSONResponse({'success': False, 'error': '输出文件不存在'}, status_code=404)
+    try:
+        if sys.platform == 'darwin':
+            subprocess.Popen(['open', '-R', str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif sys.platform.startswith('linux'):
+            subprocess.Popen(['xdg-open', str(target.parent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            return JSONResponse({'success': False, 'error': '当前系统不支持定位输出文件'}, status_code=400)
+    except OSError as exc:
+        return JSONResponse({'success': False, 'error': f'定位输出文件失败：{exc}'}, status_code=500)
+    return JSONResponse({'success': True, 'path': str(target)})
+
+
 @app.post('/api/probe')
 def probe(payload: ProbeRequest):
     try:

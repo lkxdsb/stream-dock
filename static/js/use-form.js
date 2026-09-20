@@ -30,6 +30,7 @@
   const streamDetails = document.getElementById('mediaProbeDetails');
   let confirmedProbeKey = '';
   let lastProbeContentType = '';
+  let workflowSequence = 0;
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const mediaCoverSrc = (value) => {
     const raw = String(value || '').trim();
@@ -498,6 +499,7 @@
 
   form?.addEventListener('submit', async (event) => {
     event.preventDefault();
+    const sequence = ++workflowSequence;
     const links = extractLinks(linkInput?.value || '');
     const payload = {
       outputPath: String(outputPath?.value || '').trim(),
@@ -534,6 +536,7 @@
         if (confirmedProbeKey !== probeKey) {
           if (links.length === 1) {
             const probeData = await quality.probeQualityOptions(links[0], { silent: true });
+            if (sequence !== workflowSequence || !probeData) return;
             payload.videoQuality = String(quality?.selectedQualityLabel?.() || '').trim();
             renderProbePreview(probeData);
             confirmedProbeKey = probeKey;
@@ -544,6 +547,7 @@
               : ['视频资源识别完成', `平台：${probeData?.platform || 'unknown'}`, '已整理为：最高画质 / 兼容优先 / 小体积', payload.saveAssets ? '确认后会同时保存封面和字幕。' : '当前未开启封面和字幕保存。']);
           } else {
             const batchProbe = await probeBatchLinks(links);
+            if (sequence !== workflowSequence) return;
             renderBatchProbePreview(batchProbe, payload);
             const failed = batchProbe.filter((item) => !item.success);
             if (failed.length) {
@@ -572,6 +576,7 @@
         '阶段 3/3：提交本地任务队列',
       ]);
       const data = await submitQueue(payload, links);
+      if (sequence !== workflowSequence) return;
       const count = (data.tasks || []).length;
       result?.trackTasks?.((data.tasks || []).map((task) => task.id));
       result?.setStatus('running', `${count} 个任务已进入队列，可在“下载中”查看进度`);
@@ -585,12 +590,14 @@
       tabs?.setActiveTab?.('downloading');
       ui?.showToast('解析任务已加入队列');
     } catch (error) {
+      if (sequence !== workflowSequence) return;
       const message = friendlyRequestError(error);
       result?.setStatus('error', message);
       result?.showResult({ error: message });
       logs?.renderLogs(['任务提交失败', message]);
       ui?.showToast(message);
     } finally {
+      if (sequence !== workflowSequence) return;
       submitButton.disabled = false;
       submitButton.textContent = confirmedProbeKey
         ? (extractLinks(linkInput?.value || '').length > 1 ? '确认并开始批量下载' : (lastProbeContentType === 'images' ? '确认并下载图片集' : '确认并开始下载'))
@@ -600,7 +607,15 @@
   });
 
   linkInput?.addEventListener('input', () => {
+    workflowSequence += 1;
     resetProbeState({ clearInput: false });
+  });
+
+  [outputType, saveAssets, subtitleStrategy, bilibiliCookie].forEach((control) => {
+    control?.addEventListener('change', () => {
+      workflowSequence += 1;
+      resetProbeState({ clearInput: false });
+    });
   });
 
   function cancelProbeAndReset() {

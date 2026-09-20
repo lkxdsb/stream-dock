@@ -11,6 +11,8 @@
   let lastProbePlatform = '';
   let lastProbeResult = null;
   let lastProbeCookieKey = '';
+  let probeSequence = 0;
+  let activeProbeController = null;
 
   function isVideoOutputType(value) {
     return !audioOutputTypes.has(String(value || '').trim().toLowerCase());
@@ -99,6 +101,9 @@
     const normalizedLink = String(link || '').trim();
     const currentCookieKey = String(bilibiliCookie?.value || '').trim();
     if (!normalizedLink || !isVideoOutputType(outputType.value)) {
+      probeSequence += 1;
+      activeProbeController?.abort();
+      activeProbeController = null;
       lastProbeLink = '';
       lastProbePlatform = '';
       lastProbeResult = null;
@@ -121,7 +126,10 @@
       logs?.renderLogs(['正在识别可用清晰度...']);
     }
 
+    const sequence = ++probeSequence;
+    activeProbeController?.abort();
     const controller = new AbortController();
+    activeProbeController = controller;
     const timeoutId = window.setTimeout(() => controller.abort(), 120000);
     let response;
     try {
@@ -135,12 +143,14 @@
         }),
       });
     } catch (error) {
+      if (error?.name === 'AbortError' && sequence !== probeSequence) return null;
       if (error?.name === 'AbortError') throw new Error('清晰度识别超时，请稍后重试');
       throw error;
     } finally {
       window.clearTimeout(timeoutId);
     }
     const data = await response.json();
+    if (sequence !== probeSequence || normalizedLink !== String(linkInput?.value || '').trim() || currentCookieKey !== String(bilibiliCookie?.value || '').trim()) return null;
 
     if (!response.ok || !data.success) {
       resetQualityOptions('清晰度识别失败');

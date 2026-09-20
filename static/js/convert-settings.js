@@ -55,7 +55,7 @@
     };
   }
 
-  function writeControls(settings) {
+  function writeControls(settings, syncWorkbench = false) {
     if (defaultOutputPath) defaultOutputPath.value = settings.outputPath || defaults.outputPath;
     if (namingStrategy) namingStrategy.value = settings.namingStrategy || defaults.namingStrategy;
     if (afterDoneAction) afterDoneAction.value = settings.afterDoneAction || defaults.afterDoneAction;
@@ -68,7 +68,7 @@
     if (videoBitrate) videoBitrate.value = settings.videoBitrateKbps || 0;
     if (videoCrf) videoCrf.value = settings.videoCrf ?? defaults.videoCrf;
     if (hardwareAcceleration) hardwareAcceleration.value = settings.hardwareAcceleration || defaults.hardwareAcceleration;
-    if (workbenchOutputPath) workbenchOutputPath.value = settings.outputPath || defaults.outputPath;
+    if (syncWorkbench && workbenchOutputPath) workbenchOutputPath.value = settings.outputPath || defaults.outputPath;
   }
 
   function setStatus(message) {
@@ -90,12 +90,13 @@
 
   function reset() {
     window.localStorage?.removeItem(STORAGE_KEY);
+    window.localStorage?.removeItem(PLATFORM_STORAGE_KEY);
     writeControls(defaults);
     window.dispatchEvent(new CustomEvent('streamdock:convert-settings-change', { detail: { ...defaults } }));
     setStatus('已恢复默认设置。');
   }
 
-  writeControls(readStored());
+  writeControls(readStored(), true);
 
   selectDefaultDirButton?.addEventListener('click', async () => {
     setStatus('正在打开系统目录选择窗口...');

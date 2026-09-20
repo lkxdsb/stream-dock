@@ -1536,6 +1536,23 @@ class OutputFileActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response.json()['success'])
         mocked_popen.assert_called_once()
 
+    async def test_reveal_output_file_uses_finder_reveal_on_macos(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / 'result.txt'
+            output.write_text('done', encoding='utf-8')
+            transport = httpx.ASGITransport(app=app)
+            with patch('app.sys.platform', 'darwin'), patch('app.subprocess.Popen') as mocked_popen:
+                async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                    response = await client.post('/api/reveal-output-file', data={'path': str(output)})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['success'])
+        mocked_popen.assert_called_once_with(
+            ['open', '-R', str(output.resolve())],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
 
 class PlatformReliabilityApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_media_task_list_exposes_queue_pause_state(self):

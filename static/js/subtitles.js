@@ -22,6 +22,8 @@
   let importSequence = 0;
   let exportRunning = false;
   let mediaObjectUrl = '';
+  let documentVersion = 0;
+  let documentDirty = false;
 
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -49,6 +51,7 @@
   }
 
   function setDocumentState(label, dirty = false) {
+    documentDirty = dirty;
     documentStatus.textContent = label;
     stateNode.textContent = dirty ? '有未导出修改' : label;
     readyDot.classList.toggle('ready', cues.length > 0);
@@ -86,17 +89,21 @@
       event.stopPropagation();
       syncFromDom();
       cues = cues.filter((item) => item.id !== row.dataset.id);
+      documentVersion += 1;
       render();
       setDocumentState('已修改', true);
     });
     row.querySelectorAll('input,textarea').forEach((control) => control.addEventListener('input', () => {
       syncFromDom();
+      documentVersion += 1;
       updateDocumentMeta();
       setDocumentState('编辑中', true);
     }));
     row.addEventListener('click', (event) => {
       if (event.target.matches('input,textarea,button')) return;
-      player.currentTime = Number(cue.start) || 0;
+      syncFromDom();
+      const currentCue = cues.find((item) => item.id === row.dataset.id);
+      player.currentTime = Number(currentCue?.start) || 0;
       if (stage.classList.contains('has-media')) player.play().catch(() => {});
     });
   }
@@ -117,6 +124,7 @@
   function applyDocument(document, message) {
     filename = document.filename;
     cues = document.cues;
+    documentVersion += 1;
     nameNode.textContent = filename;
     formatLabel.textContent = `${String(document.format || filename.split('.').pop() || 'subtitle').toUpperCase()} 字幕文件`;
     render();
@@ -124,14 +132,14 @@
     toast(message);
   }
 
-  async function importFile(file, sequence) {
+  async function importFile(file, sequence, startingVersion) {
     const body = new FormData();
     body.append('file', file);
-    setDocumentState('正在导入');
+    setDocumentState('正在导入', documentDirty);
     const response = await fetch('/api/subtitles/import', { method: 'POST', body });
     const data = await response.json();
     if (!response.ok || !data.success) throw new Error(data.error || '字幕导入失败');
-    if (sequence !== importSequence) return;
+    if (sequence !== importSequence || startingVersion !== documentVersion) return;
     applyDocument(data.document, `已导入 ${data.document.cueCount} 条字幕`);
   }
 
@@ -139,10 +147,15 @@
     if (!file) return;
     if (!/\.(srt|vtt|txt)$/i.test(file.name)) { toast('请选择 SRT、VTT 或 TXT 字幕文件'); return; }
     if (file.size > 5 * 1024 * 1024) { toast('字幕文件不能超过 5MB'); return; }
+    if (documentDirty && !window.confirm('当前字幕有未导出修改，确定要载入新文件吗？')) {
+      fileInput.value = '';
+      return;
+    }
     const sequence = ++importSequence;
-    importFile(file, sequence).catch((error) => {
+    const startingVersion = documentVersion;
+    importFile(file, sequence, startingVersion).catch((error) => {
       if (sequence === importSequence) {
-        setDocumentState('导入失败');
+        setDocumentState('导入失败', documentDirty);
         toast(error.message);
       }
     });
@@ -154,7 +167,8 @@
     const path = query.get('path');
     if (!taskId || !path) return;
     const sequence = ++importSequence;
-    setDocumentState('正在读取任务字幕');
+    const startingVersion = documentVersion;
+    setDocumentState('正在读取任务字幕', documentDirty);
     const asset = await fetch(`/api/media/tasks/${encodeURIComponent(taskId)}/asset?path=${encodeURIComponent(path)}`);
     if (!asset.ok) throw new Error('无法读取任务中的字幕文件');
     const text = await asset.text();
@@ -164,11 +178,13 @@
     });
     const data = await parsed.json();
     if (!parsed.ok || !data.success) throw new Error(data.error || '字幕解析失败');
-    if (sequence !== importSequence) return;
+    if (sequence !== importSequence || startingVersion !== documentVersion) return;
     applyDocument(data.document, `已载入 ${data.document.cueCount} 条任务字幕`);
   }
 
   function clearWorkspace() {
+    importSequence += 1;
+    documentVersion += 1;
     cues = [];
     filename = 'subtitle.srt';
     nameNode.textContent = '未导入字幕';
@@ -195,6 +211,7 @@
     syncFromDom();
     const start = Number(player.currentTime || cues.at(-1)?.end || 0);
     cues.push({ id: uid(), start, end: start + 2.8, text: '新字幕' });
+    documentVersion += 1;
     render();
     setDocumentState('编辑中', true);
     cuesRoot.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -204,11 +221,15 @@
   document.getElementById('subtitleSort')?.addEventListener('click', () => {
     syncFromDom();
     cues.sort((left, right) => left.start - right.start || left.end - right.end);
+    documentVersion += 1;
     render();
     setDocumentState('已按时间排序', true);
   });
 
-  document.getElementById('subtitleClear')?.addEventListener('click', clearWorkspace);
+  document.getElementById('subtitleClear')?.addEventListener('click', () => {
+    if (documentDirty && !window.confirm('当前字幕有未导出修改，确定要清空工作区吗？')) return;
+    clearWorkspace();
+  });
 
   document.getElementById('subtitleExport')?.addEventListener('click', async () => {
     if (exportRunning) return;
@@ -217,10 +238,12 @@
     button.disabled = true;
     try {
       syncFromDom();
+      const exportedVersion = documentVersion;
+      const exportedCues = cues.map((cue) => ({ ...cue }));
       validateClientCues();
       const format = document.getElementById('subtitleExportFormat').value;
       const response = await fetch('/api/subtitles/export', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename, format, cues }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename, format, cues: exportedCues }),
       });
       if (!response.ok) { const data = await response.json(); throw new Error(data.error || '导出失败'); }
       const blob = await response.blob();
@@ -229,8 +252,13 @@
       link.download = `${filename.replace(/\.[^.]+$/, '')}.${format}`;
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-      setDocumentState('已导出');
-      toast('字幕已导出');
+      if (documentVersion === exportedVersion) {
+        setDocumentState('已导出');
+        toast('字幕已导出');
+      } else {
+        setDocumentState('导出完成，仍有未导出修改', true);
+        toast('已导出提交时的版本，后续修改尚未导出');
+      }
     } catch (error) {
       toast(error.message || '导出失败');
     } finally {
@@ -274,7 +302,10 @@
     }
   });
 
-  window.addEventListener('beforeunload', () => { if (mediaObjectUrl) URL.revokeObjectURL(mediaObjectUrl); });
+  window.addEventListener('beforeunload', (event) => {
+    if (mediaObjectUrl) URL.revokeObjectURL(mediaObjectUrl);
+    if (documentDirty) { event.preventDefault(); event.returnValue = ''; }
+  });
   render();
-  importTaskAsset().catch((error) => { setDocumentState('任务字幕载入失败'); toast(error.message); });
+  importTaskAsset().catch((error) => { setDocumentState('任务字幕载入失败', documentDirty); toast(error.message); });
 })();

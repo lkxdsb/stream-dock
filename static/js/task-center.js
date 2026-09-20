@@ -24,6 +24,7 @@
   let latestMediaTasks = [];
   let latestConvertTasks = [];
   let mediaQueuePaused = false;
+  let refreshPromise = null;
 
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -736,7 +737,7 @@
     return data.tasks || [];
   }
 
-  async function refresh() {
+  async function performRefresh() {
     try {
       let detailTask = null;
       if (convertList) {
@@ -791,10 +792,24 @@
     }
   }
 
+  async function refresh() {
+    if (refreshPromise) return refreshPromise;
+    refreshPromise = performRefresh();
+    try { return await refreshPromise; }
+    finally { refreshPromise = null; }
+  }
+
+  function scheduleRefresh() {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(async () => {
+      await refresh();
+      scheduleRefresh();
+    }, POLL_MS);
+  }
+
   function start() {
     refresh();
-    window.clearInterval(timer);
-    timer = window.setInterval(refresh, POLL_MS);
+    scheduleRefresh();
   }
 
   async function openConvertTasks(taskId) {

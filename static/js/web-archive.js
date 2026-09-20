@@ -101,6 +101,7 @@
   var taskEmpty = document.getElementById('webArchiveTaskEmpty');
 
   var pollTimer = null;
+  var pollInFlight = false;
   var currentTaskId = null;
 
   function showToast(msg) {
@@ -193,30 +194,37 @@
     if (!currentTaskId) return;
     fetch('/api/tasks/' + currentTaskId, { method: 'DELETE' })
       .then(function (r) { return r.json(); })
-      .then(function () {
-        stopPolling();
-        extractBtn.disabled = false;
-        cancelBtn.hidden = true;
-        setStatus('任务已取消');
-        showToast('任务已取消');
+      .then(function (data) {
+        if (!data.success) throw new Error(data.error || '取消失败');
+        setStatus('取消请求已提交，正在等待任务停止...');
+        cancelBtn.disabled = true;
+        showToast('取消请求已接收');
+        startPolling(currentTaskId);
       })
-      .catch(function () { showToast('取消失败'); });
+      .catch(function (error) { showToast(error.message || '取消失败'); });
   });
 
   function startPolling(taskId) {
     stopPolling();
-    pollTimer = setInterval(function () { pollTask(taskId); }, 2000);
-    pollTask(taskId);
+    currentTaskId = taskId;
+    pollTimer = setTimeout(function () { pollTask(taskId); }, pollInFlight ? 100 : 0);
   }
 
   function stopPolling() {
     if (pollTimer) {
-      clearInterval(pollTimer);
+      clearTimeout(pollTimer);
       pollTimer = null;
     }
   }
 
   function pollTask(taskId) {
+    if (pollInFlight) {
+      if (currentTaskId === taskId) {
+        pollTimer = setTimeout(function () { pollTask(taskId); }, 100);
+      }
+      return;
+    }
+    pollInFlight = true;
     fetch('/api/tasks/' + taskId)
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -226,20 +234,28 @@
         if (task.status === 'completed') {
           stopPolling();
           extractBtn.disabled = false;
+          cancelBtn.disabled = false;
           cancelBtn.hidden = true;
           setStatus('提取完成');
           showResult(task);
         } else if (task.status === 'failed' || task.status === 'cancelled') {
           stopPolling();
           extractBtn.disabled = false;
+          cancelBtn.disabled = false;
           cancelBtn.hidden = true;
-          setStatus(task.error || '任务失败');
-          showToast(task.error || '任务失败');
+          setStatus(task.status === 'cancelled' ? '任务已取消' : (task.error || '任务失败'));
+          showToast(task.status === 'cancelled' ? '任务已取消' : (task.error || '任务失败'));
         } else if (task.status === 'running') {
           setStatus(task.stage || '正在处理...');
         }
       })
-      .catch(function () {});
+      .catch(function () {})
+      .finally(function () {
+        pollInFlight = false;
+        if (pollTimer && currentTaskId === taskId) {
+          pollTimer = setTimeout(function () { pollTask(taskId); }, 2000);
+        }
+      });
   }
 
   function updateTaskUI(task) {
@@ -348,7 +364,31 @@
             '<span class="task-stage">' + escapeHtml(task.stage || '') + '</span>' +
             '<span class="task-status ' + task.status + '">' + statusLabel(task.status) + '</span>';
           taskList.appendChild(item);
+          item.addEventListener('click', function () {
+            currentTaskId = task.id;
+            updateTaskUI(task);
+            if (task.status === 'completed') {
+              setStatus('提取完成');
+              showResult(task);
+            } else if (task.status === 'pending' || task.status === 'running') {
+              extractBtn.disabled = true;
+              cancelBtn.disabled = false;
+              cancelBtn.hidden = false;
+              setStatus(task.stage || '正在处理...');
+              startPolling(task.id);
+            }
+          });
         });
+        var activeTask = data.tasks.find(function (task) {
+          return task.status === 'pending' || task.status === 'running';
+        });
+        if (activeTask) {
+          extractBtn.disabled = true;
+          cancelBtn.disabled = false;
+          cancelBtn.hidden = false;
+          setStatus(activeTask.stage || '正在恢复任务状态...');
+          startPolling(activeTask.id);
+        }
       })
       .catch(function () {});
   }

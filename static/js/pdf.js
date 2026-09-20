@@ -26,6 +26,7 @@
   let pdfTasks = [];
   let selectedFile = null;
   let activeTaskId = '';
+  let fileSequence = 0;
 
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const modeLabel = (value) => {
@@ -103,6 +104,7 @@
   };
   const setFile = (file) => {
     if (!file || !file.name.toLowerCase().endsWith('.pdf')) { status.textContent = '请选择 PDF 文件。'; return; }
+    fileSequence += 1;
     selectedFile = file; title.textContent = file.name; meta.textContent = `${(file.size / 1024 / 1024).toFixed(2)} MB · 等待文档特征分析`;
     analyze.disabled = false; parse.disabled = true; analysisBox.hidden = true; preview.hidden = true; status.textContent = '文件已就绪，请先分析文档。';
     if (stepHint) stepHint.innerHTML = '<i>2</i><span>文件已就绪，先分析文档特征，再开始解析。</span>';
@@ -218,16 +220,18 @@
 
   analyze.addEventListener('click', async () => {
     if (!selectedFile) return; analyze.disabled = true; status.textContent = '正在分析 PDF 特征...';
-    const form = new FormData(); form.append('file', selectedFile);
+    const analyzedFile = selectedFile; const sequence = fileSequence;
+    const form = new FormData(); form.append('file', analyzedFile);
     try {
       const response = await fetch('/api/pdf/analyze', { method: 'POST', body: form }); const body = await response.json();
+      if (sequence !== fileSequence || selectedFile !== analyzedFile) return;
       if (!response.ok || !body.success) throw new Error(body.detail || body.error || '分析失败');
       const item = body.analysis; mode.value = item.recommended_mode;
       analysisBox.innerHTML = `<strong>建议：${escapeHtml(modeLabel(item.recommended_mode))}</strong><br>${escapeHtml(item.reason)}<br>页数：${escapeHtml(item.page_count ?? '未知')} · 原生文本：${item.has_native_text === null ? '未知' : item.has_native_text ? '是' : '否'}`;
       analysisBox.hidden = false; parse.disabled = !body.engine.available; status.textContent = body.engine.available ? '分析完成，可开始本地解析。' : 'PDF 策略已识别，正在等待本地引擎安装。';
       if (stepHint) stepHint.innerHTML = body.engine.available ? '<i>3</i><span>分析完成，可以开始本地解析。</span>' : '<i>!</i><span>策略已识别，但本地 PDF 引擎暂不可用。</span>';
       parse.title = body.engine.available ? '开始本地 PDF 解析' : '本地 PDF 引擎暂不可用';
-    } catch (error) { status.textContent = error.message; } finally { analyze.disabled = false; }
+    } catch (error) { if (sequence === fileSequence) status.textContent = error.message; } finally { if (sequence === fileSequence) analyze.disabled = false; }
   });
 
   parse.addEventListener('click', async () => {

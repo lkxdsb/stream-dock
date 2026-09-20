@@ -15,6 +15,8 @@
   let currentSource = '';
   let currentOptions = [];
   let batchMode = false;
+  let probeSequence = 0;
+  let probeController = null;
 
   function setLog(lines) { window.StreamDockConvertLogs?.set(lines); }
   function setResultWaiting() { window.StreamDockConvertResult?.waiting(); }
@@ -44,8 +46,10 @@
   }
 
   function renderOutputOptions() {
+    const previousTarget = outputType.value;
     const options = visibleOptions();
     outputType.innerHTML = options.map((item) => `<option value="${item.target}" data-level="${item.level}" data-vendors="${(item.vendors || []).join('|')}">${optionLabel(item)}</option>`).join('') || '<option value="">当前筛选下暂无可用转换</option>';
+    if (previousTarget && options.some((item) => item.target === previousTarget)) outputType.value = previousTarget;
     updateHint();
   }
 
@@ -113,12 +117,12 @@
     return `${fallback}（HTTP ${response.status}）`;
   }
 
-  async function fallbackProbeFiles(files) {
+  async function fallbackProbeFiles(files, signal) {
     const probed = [];
     for (const file of files) {
       const form = new FormData();
       form.append('file', file);
-      const response = await fetch('/api/convert/probe', { method: 'POST', body: form });
+      const response = await fetch('/api/convert/probe', { method: 'POST', body: form, signal });
       const data = await readJsonResponse(response);
       if (!response.ok || !data.success) {
         throw new Error(errorMessageFrom(data, response, `${file.name} 识别失败`));
@@ -141,6 +145,10 @@
   }
 
   async function probeFiles(filesLike) {
+    const sequence = ++probeSequence;
+    probeController?.abort();
+    probeController = new AbortController();
+    const signal = probeController.signal;
     selectedFiles = Array.from(filesLike || []).filter(Boolean);
     batchMode = selectedFiles.length > 1;
     if (!selectedFiles.length) return;
@@ -174,7 +182,7 @@
     if (batchMode) {
       const form = new FormData();
       selectedFiles.forEach((file) => form.append('files', file));
-      const response = await fetch('/api/convert/batch-probe', { method: 'POST', body: form });
+      const response = await fetch('/api/convert/batch-probe', { method: 'POST', body: form, signal });
       data = await readJsonResponse(response);
       if (!response.ok || !data.success) {
         if (response.status === 404 || response.status === 405 || response.status === 422) {
@@ -182,7 +190,7 @@
             `批量识别接口返回 HTTP ${response.status}，改用逐文件识别兜底...`,
             data?.detail ? `detail: ${typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)}` : '',
           ].filter(Boolean));
-          data = await fallbackProbeFiles(selectedFiles);
+          data = await fallbackProbeFiles(selectedFiles, signal);
         } else {
           throw new Error(errorMessageFrom(data, response, '格式识别失败'));
         }
@@ -190,13 +198,14 @@
     } else {
       const form = new FormData();
       form.append('file', selectedFiles[0]);
-      const response = await fetch('/api/convert/probe', { method: 'POST', body: form });
+      const response = await fetch('/api/convert/probe', { method: 'POST', body: form, signal });
       data = await readJsonResponse(response);
       if (!response.ok || !data.success) {
         throw new Error(errorMessageFrom(data, response, '格式识别失败'));
       }
     }
 
+    if (sequence !== probeSequence || signal.aborted) return;
     currentSource = data.source || '';
     currentOptions = data.options || [];
     inputType.value = currentSource.toUpperCase();
@@ -236,7 +245,7 @@
 
   pickButton?.addEventListener('click', () => fileInput?.click());
   fileInput?.addEventListener('change', () => {
-    if (fileInput.files?.length) probeFiles(fileInput.files).catch(handleProbeError);
+    if (fileInput.files?.length) probeFiles(fileInput.files).catch((error) => { if (error?.name !== 'AbortError') handleProbeError(error); });
   });
   outputType?.addEventListener('change', updateHint);
   window.addEventListener('streamdock:convert-settings-change', () => {
@@ -249,7 +258,7 @@
     event.preventDefault();
     dropZone.classList.remove('dragging');
     const files = event.dataTransfer?.files;
-    if (files?.length) probeFiles(files).catch(handleProbeError);
+    if (files?.length) probeFiles(files).catch((error) => { if (error?.name !== 'AbortError') handleProbeError(error); });
   });
 
   selectDirButton?.addEventListener('click', async () => {
@@ -306,7 +315,11 @@
       const response = await fetch(batchMode ? '/api/convert/batch-run' : '/api/convert/run', { method: 'POST', body: form });
       const data = await response.json();
       setLog(data.logs || []);
-      if (data.success) {
+      if (batchMode && Array.isArray(data.results)) {
+        setBatch(data);
+        window.StreamDockConvertResult?.showTaskJump?.(data.tasks?.[0]?.id || '');
+        if (!data.success) window.StreamDockUI?.showToast?.(`批量转换部分完成：成功 ${data.successCount || 0}，失败 ${data.failedCount || 0}`);
+      } else if (data.success) {
         if (batchMode) {
           setBatch(data);
           window.StreamDockConvertResult?.showTaskJump?.(data.tasks?.[0]?.id || '');
@@ -317,7 +330,10 @@
         if (['open', 'highlight', 'open-folder'].includes(convertSettings.afterDoneAction)) {
           const openForm = new FormData();
           openForm.append('path', data.outputPath || outputPath.value || '~/Downloads/StreamDock');
-          fetch('/api/open-output-path', { method: 'POST', body: openForm }).catch(() => {});
+          const endpoint = convertSettings.afterDoneAction === 'highlight'
+            ? '/api/reveal-output-file'
+            : '/api/open-output-path';
+          fetch(endpoint, { method: 'POST', body: openForm }).catch(() => {});
         }
       } else {
         setError(data.error || '转换失败', data.vendorRecommendations);

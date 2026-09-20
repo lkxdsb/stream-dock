@@ -28,3 +28,7 @@ jobs:
         run: python scripts/test_conversion_matrix_real.py
       - name: Check browser scripts
         run: find static/js -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Install Chromium for frontend workflow regression
+        run: python -m playwright install --with-deps chromium
+      - name: Run real-browser frontend workflow regression
+        run: python scripts/test_frontend_m5_browser.py
