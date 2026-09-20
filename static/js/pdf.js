@@ -121,10 +121,11 @@
     }
     throw new Error('任务已取消');
   };
-  const setTab = (name) => {
+  const setTab = (name, updateHistory = true) => {
     tabButtons.forEach((button) => button.classList.toggle('active', button.dataset.pdfTab === name));
     panels.forEach((panel) => { const active = panel.dataset.pdfPanel === name; panel.hidden = !active; panel.classList.toggle('active', active); });
     if (name !== 'workbench') refreshPdfTasks();
+    if (updateHistory && window.location.hash !== `#${name}`) window.history.pushState({ panel: name }, '', `#${name}`);
   };
   const statusName = (value) => ({ pending: '等待中', running: '处理中', completed: '已完成', failed: '失败', cancelled: '已取消' }[value] || value);
   const renderTaskList = () => {
@@ -272,7 +273,11 @@
   healthRefresh?.addEventListener('click', refreshPdfHealth);
   tabButtons.forEach((button) => button.addEventListener('click', () => setTab(button.dataset.pdfTab)));
   const initialHash = window.location.hash.replace('#', '');
-  if (['workbench', 'tasks', 'results'].includes(initialHash)) setTab(initialHash);
+  setTab(['workbench', 'tasks', 'results'].includes(initialHash) ? initialHash : 'workbench', false);
+  window.addEventListener('popstate', () => {
+    const target = window.location.hash.replace('#', '');
+    setTab(['workbench', 'tasks', 'results'].includes(target) ? target : 'workbench', false);
+  });
   taskSearch?.addEventListener('input', renderTaskList); taskFilter?.addEventListener('change', renderTaskList); resultTask?.addEventListener('change', () => renderStructuredResult(resultTask.value));
   document.getElementById('pdfClearFinished')?.addEventListener('click', async () => { await fetch('/api/task-actions/clear-finished?kind=pdf', { method: 'DELETE' }); await refreshPdfTasks(); });
   document.getElementById('pdfArchiveResult')?.addEventListener('click', async () => { if (!resultTask.value) return; const response = await fetch(`/api/pdf/tasks/${resultTask.value}/archive`, { method: 'POST' }); const body = await response.json(); if (body.path) { const form = new FormData(); form.append('path', body.path); await fetch('/api/open-output-path', { method: 'POST', body: form }); } });

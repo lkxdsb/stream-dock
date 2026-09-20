@@ -25,7 +25,7 @@
     window.localStorage.setItem(key, JSON.stringify(value));
   }
 
-  function setActiveTab(name) {
+  function setActiveTab(name, updateHistory = true) {
     tabButtons.forEach((button) => button.classList.toggle('active', button.dataset.useTab === name));
     panels.forEach((panel) => {
       const isActive = panel.dataset.usePanel === name;
@@ -33,6 +33,7 @@
       panel.hidden = !isActive;
     });
     window.localStorage.setItem('streamdock.activeTab.v1', name);
+    if (updateHistory && window.location.hash !== `#${name}`) window.history.pushState({ panel: name }, '', `#${name}`);
   }
 
   function applySettings(settings) {
@@ -84,7 +85,11 @@
   const platformSettings = readJson(platformSettingsKey, {});
   applySettings({ ...readJson(settingsKey, {}), ...(platformSettings.outputPath ? { outputPath: platformSettings.outputPath } : {}) });
   const initialHash = window.location.hash.replace('#', '');
-  setActiveTab(['parse', 'downloading', 'completed', 'settings'].includes(initialHash) ? initialHash : (window.localStorage.getItem('streamdock.activeTab.v1') || 'parse'));
+  setActiveTab(['parse', 'downloading', 'completed', 'settings'].includes(initialHash) ? initialHash : (window.localStorage.getItem('streamdock.activeTab.v1') || 'parse'), false);
+  window.addEventListener('popstate', () => {
+    const target = window.location.hash.replace('#', '');
+    setActiveTab(['parse', 'downloading', 'completed', 'settings'].includes(target) ? target : 'parse', false);
+  });
 
   window.StreamDockTasks = { setActiveTab };
   window.StreamDockUseTabs = { setActiveTab };

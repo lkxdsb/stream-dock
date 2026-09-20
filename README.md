@@ -62,7 +62,9 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
 - 当前能力矩阵登记了 **179 条去重转换路径、76 种格式**；其中 163 条为本地能力，16 条为专业工具建议。
 - 成熟路径使用 Pillow、openpyxl、python-docx、FFmpeg 等本地引擎。
 - Office 与开放文档格式可调用 LibreOffice；复杂排版、公式、批注和动画可能有损。
-- 支持格式探测、目标格式校验、同格式批量任务、超时控制、临时文件清理和结果打开。
+- 支持格式探测、目标格式校验、同格式批量任务、可编辑的待处理清单、批次历史恢复、超时控制和结果打开。
+- 工作台可直接选择文件夹打包为 ZIP / TAR.GZ；在支持 File System Access API 的浏览器中会保留空目录。
+- 已完成的视频任务可单独生成或重做字幕，编辑器会关联原视频与选中字幕轨，修订版可保存回原任务。
 - 每个转换任务使用独立的输入/输出工作区；下载接口按任务 ID 读取带 SHA-256 清单的不可变产物，用户目录中的同名发布文件不会反向污染历史任务。
 - 对暂不适合本地处理的复杂格式给出专业工具建议，而不是伪造转换结果。
 
@@ -395,6 +397,8 @@ python scripts/test_conversion_fuzz.py --iterations 100
 python scripts/test_conversion_matrix_real.py
 python scripts/fetch_complex_conversion_corpus.py
 python scripts/test_conversion_complex_corpus.py
+python scripts/test_frontend_m5_browser.py
+python scripts/test_frontend_m6_browser.py
 ```
 
 具体内容级断言和降级策略见 [`docs/CONVERSION_QUALITY_VALIDATION.md`](docs/CONVERSION_QUALITY_VALIDATION.md)。

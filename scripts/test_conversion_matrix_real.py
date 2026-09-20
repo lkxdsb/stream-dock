@@ -103,12 +103,15 @@ def build_all_fixtures(workdir: Path) -> dict[str, Path]:
                 command([soffice, '--headless', '--convert-to', fmt, '--outdir', str(office_dir), str(docx)])
                 fixtures[fmt] = office_dir / f'office.{fmt}'
             from pptx import Presentation
-            presentation = Presentation(); slide = presentation.slides.add_slide(presentation.slide_layouts[5]); slide.shapes.title.text = 'StreamDock 演示文稿 😀'
-            box = slide.shapes.add_textbox(100, 150, 500, 100); box.text_frame.text = '中文内容 RTL مرحبا'
+            presentation = Presentation(); slide = presentation.slides.add_slide(presentation.slide_layouts[1]); slide.shapes.title.text = 'StreamDock 演示文稿 😀'
+            slide.placeholders[1].text = '中文内容 RTL مرحبا'
             pptx = root / 'slides.pptx'; presentation.save(pptx); fixtures['pptx'] = pptx
-            for fmt in ('ppt', 'odp'):
-                command([soffice, '--headless', '--convert-to', fmt, '--outdir', str(office_dir), str(pptx)])
-                fixtures[fmt] = office_dir / f'slides.{fmt}'
+            for fmt, export_filter in (('ppt', 'ppt:MS PowerPoint 97'), ('odp', 'odp:impress8')):
+                command([soffice, '--headless', '--convert-to', export_filter, '--outdir', str(office_dir), str(pptx)])
+                converted = office_dir / f'slides.{fmt}'
+                if not converted.is_file():
+                    raise RuntimeError(f'LibreOffice did not create the real {fmt.upper()} fixture')
+                fixtures[fmt] = converted
     except Exception:
         pass
 

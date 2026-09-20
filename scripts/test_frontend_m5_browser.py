@@ -120,6 +120,7 @@ def main() -> int:
                 )
                 file_input = page.locator('#convertFileInput')
                 file_input.set_input_files(str(csv_file))
+                page.locator('[data-clear-files]').click()
                 file_input.set_input_files(str(xlsx_file))
                 page.wait_for_timeout(700)
                 assert page.locator('#convertInputType').input_value() == 'XLSX'

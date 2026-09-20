@@ -17,6 +17,11 @@
   const mediaName = document.getElementById('subtitleMediaName');
   const currentTimeNode = document.getElementById('subtitleCurrentTime');
   const mediaDurationNode = document.getElementById('subtitleMediaDuration');
+  const taskSaveButton = document.getElementById('subtitleTaskSave');
+  const taskQuery = new URLSearchParams(window.location.search);
+  const sourceTaskId = taskQuery.get('taskId') || '';
+  const sourceSubtitlePath = taskQuery.get('path') || '';
+  const sourceMediaPath = taskQuery.get('media') || '';
   let filename = 'subtitle.srt';
   let cues = [];
   let importSequence = 0;
@@ -161,10 +166,16 @@
     });
   }
 
+  ['subtitleImportButton', 'subtitleInspectorImportButton', 'subtitleEmptyImportButton'].forEach((id) => {
+    document.getElementById(id)?.addEventListener('click', () => fileInput?.click());
+  });
+  ['subtitleVideoButton', 'subtitleStageVideoButton'].forEach((id) => {
+    document.getElementById(id)?.addEventListener('click', () => videoInput?.click());
+  });
+
   async function importTaskAsset() {
-    const query = new URLSearchParams(window.location.search);
-    const taskId = query.get('taskId');
-    const path = query.get('path');
+    const taskId = sourceTaskId;
+    const path = sourceSubtitlePath;
     if (!taskId || !path) return;
     const sequence = ++importSequence;
     const startingVersion = documentVersion;
@@ -180,6 +191,13 @@
     if (!parsed.ok || !data.success) throw new Error(data.error || '字幕解析失败');
     if (sequence !== importSequence || startingVersion !== documentVersion) return;
     applyDocument(data.document, `已载入 ${data.document.cueCount} 条任务字幕`);
+    if (sourceMediaPath) {
+      player.src = `/api/media/tasks/${encodeURIComponent(taskId)}/asset?path=${encodeURIComponent(sourceMediaPath)}`;
+      stage.classList.add('has-media');
+      mediaName.textContent = sourceMediaPath.split(/[\\/]/).pop() || '任务媒体';
+      player.load();
+    }
+    if (taskSaveButton) taskSaveButton.hidden = false;
   }
 
   function clearWorkspace() {
@@ -226,10 +244,12 @@
     setDocumentState('已按时间排序', true);
   });
 
-  document.getElementById('subtitleClear')?.addEventListener('click', () => {
+  function requestClearWorkspace() {
     if (documentDirty && !window.confirm('当前字幕有未导出修改，确定要清空工作区吗？')) return;
     clearWorkspace();
-  });
+  }
+  document.getElementById('subtitleClear')?.addEventListener('click', requestClearWorkspace);
+  document.getElementById('subtitleClearMobile')?.addEventListener('click', requestClearWorkspace);
 
   document.getElementById('subtitleExport')?.addEventListener('click', async () => {
     if (exportRunning) return;
@@ -264,6 +284,28 @@
     } finally {
       exportRunning = false;
       button.disabled = false;
+    }
+  });
+
+  taskSaveButton?.addEventListener('click', async () => {
+    if (!sourceTaskId) return;
+    taskSaveButton.disabled = true;
+    try {
+      syncFromDom();
+      validateClientCues();
+      const format = document.getElementById('subtitleExportFormat').value;
+      const response = await fetch(`/api/media/tasks/${encodeURIComponent(sourceTaskId)}/subtitles/save`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, format, sourcePath: sourceSubtitlePath, cues }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '保存任务字幕版本失败');
+      setDocumentState(`已保存为任务字幕版本 ${data.version}`);
+      toast('修订版已登记到来源任务，原字幕仍保留');
+    } catch (error) {
+      toast(error.message || '保存任务字幕版本失败');
+    } finally {
+      taskSaveButton.disabled = false;
     }
   });
 

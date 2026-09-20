@@ -5,6 +5,7 @@ import os
 import io
 import json
 import shutil
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -624,6 +625,10 @@ class BatchConversionApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data['success'], data.get('logs'))
         self.assertEqual(data['successCount'], 2)
         self.assertEqual(len(data['tasks']), 2)
+        self.assertTrue(data['batchId'])
+        self.assertEqual({task['payload']['batchId'] for task in data['tasks']}, {data['batchId']})
+        self.assertEqual([task['payload']['batchIndex'] for task in data['tasks']], [0, 1])
+        self.assertEqual([task['payload']['batchSize'] for task in data['tasks']], [2, 2])
         self.assertTrue(all(task['kind'] == 'convert' for task in data['tasks']))
         self.assertTrue(all(task['status'] == 'completed' for task in data['tasks']))
         self.assertTrue(all(row.get('taskId') for row in data['results']))
@@ -652,6 +657,35 @@ class BatchConversionApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(set(outputs)), 2)
         self.assertEqual([rows[0]['name'] for rows in decoded], ['甲', '乙'])
         self.assertEqual([rows[0]['note'] for rows in decoded], ['第一份😀', '第二份中文'])
+
+    async def test_folder_picker_payload_preserves_nested_files_and_empty_directory(self):
+        task_store.clear(TaskKind.CONVERT)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            with tempfile.TemporaryDirectory() as tmp:
+                response = await client.post(
+                    '/api/convert/folder-run',
+                    files=[
+                        ('files', ('readme.txt', '文件夹中文 😀'.encode(), 'text/plain')),
+                        ('files', ('rows.csv', 'name,value\n张三,98\n'.encode(), 'text/csv')),
+                    ],
+                    data={
+                        'relativePaths': json.dumps(['docs/readme.txt', 'data/rows.csv']),
+                        'directoryPaths': json.dumps(['docs', 'data', 'empty/deep']),
+                        'folderName': '复杂目录', 'outputType': 'zip', 'outputPath': tmp,
+                    },
+                )
+                data = response.json()
+                output = Path(data['outputPath'])
+                with zipfile.ZipFile(output) as archive:
+                    names = archive.namelist()
+                    text = archive.read('docs/readme.txt').decode('utf-8')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(data['success'], data.get('error'))
+        self.assertIn('empty/deep/', names)
+        self.assertEqual(text, '文件夹中文 😀')
+        self.assertEqual(data['task']['payload']['fileCount'], 2)
 
     async def test_convert_download_rejects_output_path_not_owned_by_task(self):
         task_store.clear(TaskKind.CONVERT)
@@ -1414,6 +1448,13 @@ class ProbeCookieIsolationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class MediaTaskAssetTests(unittest.IsolatedAsyncioTestCase):
+    def create_real_video(self, path: Path):
+        subprocess.run([
+            'ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=96x64:d=0.4',
+            '-f', 'lavfi', '-i', 'sine=frequency=880:duration=0.4',
+            '-shortest', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', str(path),
+        ], check=True, capture_output=True)
+
     async def test_media_task_asset_serves_recorded_cover_file(self):
         from tasks.models import TaskStatus
 
@@ -1428,6 +1469,61 @@ class MediaTaskAssetTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content, b'RIFFdemoWEBP')
+
+    async def test_completed_video_can_submit_subtitle_only_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / 'lesson.mp4'
+            self.create_real_video(video)
+            task = task_store.create(TaskKind.MEDIA, 'lesson', {'link': 'https://example.com/video'})
+            task_store.update(task.id, status=TaskStatus.COMPLETED, result={
+                'outputPath': str(video), 'validation': {'valid': True, 'kind': 'video'},
+                'subtitleJob': {'status': 'not_requested'}, 'assets': {'subtitles': []},
+            })
+            transport = httpx.ASGITransport(app=app)
+            with patch('app.subtitle_queue.submit', return_value=True) as submit:
+                async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                    response = await client.post(
+                        f'/api/media/tasks/{task.id}/subtitles/regenerate',
+                        json={'strategy': 'native-asr', 'language': 'zh'},
+                    )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json()['success'])
+        self.assertEqual(task_store.get(task.id).result['subtitleJob']['status'], 'pending')
+        self.assertEqual(submit.call_args.args[1]['inputPath'], str(video.resolve()))
+
+    async def test_edited_subtitle_is_saved_as_new_task_asset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / 'lesson.mp4'
+            source = Path(tmp) / 'lesson.en.srt'
+            self.create_real_video(video)
+            source.write_text('1\n00:00:00,000 --> 00:00:01,000\noriginal\n', encoding='utf-8')
+            task = task_store.create(TaskKind.MEDIA, 'lesson', {'link': 'https://example.com/video'})
+            task_store.update(task.id, status=TaskStatus.COMPLETED, result={
+                'outputPath': str(video), 'validation': {'valid': True, 'kind': 'video'},
+                'assets': {'subtitles': [str(source)], 'subtitleDetails': []},
+            })
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+                media_response = await client.get(f'/api/media/tasks/{task.id}/asset', params={'path': str(video)})
+                response = await client.post(
+                    f'/api/media/tasks/{task.id}/subtitles/save',
+                    json={'filename': source.name, 'format': 'srt', 'sourcePath': str(source), 'cues': [
+                        {'start': 0, 'end': 2.5, 'text': '修订字幕 😀'},
+                    ]},
+                )
+
+            data = response.json()
+            saved = Path(data['path'])
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(media_response.status_code, 200)
+            self.assertEqual(media_response.content[:4], video.read_bytes()[:4])
+            self.assertTrue(saved.is_file())
+            self.assertIn('修订字幕 😀', saved.read_text(encoding='utf-8'))
+            updated = task_store.get(task.id).result
+            self.assertIn(str(source), updated['assets']['subtitles'])
+            self.assertIn(str(saved), updated['assets']['subtitles'])
+            self.assertEqual(updated['assets']['subtitleDetails'][-1]['source'], 'manual-edit')
 
 
 class MediaCoverProxyTests(unittest.IsolatedAsyncioTestCase):

@@ -64,12 +64,16 @@
           <section class="convert-card convert-workbench" aria-label="本地文件转换工作台">
             <div class="convert-drop" id="convertDropZone">
               <input class="convert-file-input" id="convertFileInput" type="file" multiple />
+              <input class="convert-file-input" id="convertFolderInput" type="file" webkitdirectory directory multiple />
               <div>
                 <strong id="convertFileTitle">选择或拖入文件</strong>
-                <span id="convertFileMeta">可一次选择多个同类型文件，使用同一转换路径批量处理</span>
+                <span id="convertFileMeta">可分多次追加同类型文件，并在提交前逐项移除</span>
                 <div class="convert-file-list" id="convertFileList" aria-live="polite"></div>
               </div>
-              <button class="convert-secondary" id="convertPickButton" type="button">选择文件</button>
+              <div class="convert-pick-actions">
+                <button class="convert-secondary" id="convertPickButton" type="button">选择文件</button>
+                <button class="convert-secondary" id="convertPickFolderButton" type="button">选择文件夹</button>
+              </div>
             </div>
 
             <div class="convert-fields">
@@ -87,6 +91,10 @@
                   <input id="convertOutputPath" type="text" value="~/Downloads/StreamDock" readonly />
                   <button class="convert-secondary" id="convertSelectDirButton" type="button">选择目录</button>
                 </div>
+              </label>
+              <label class="convert-field" id="convertArchivePasswordField" hidden>
+                <span>压缩包密码（仅本次任务）</span>
+                <input id="convertArchivePassword" type="password" autocomplete="off" placeholder="加密 ZIP 按需填写" />
               </label>
             </div>
 
@@ -358,7 +366,6 @@
               <label class="convert-field"><span>视频码率 kbps（0=使用 CRF）</span><input id="convertVideoBitrate" type="number" min="0" max="100000" value="0" /></label>
               <label class="convert-field"><span>视频 CRF</span><input id="convertVideoCrf" type="number" min="0" max="51" value="22" /></label>
               <label class="convert-field"><span>硬件加速</span><select id="convertHardwareAcceleration"><option value="software">软件编码（兼容）</option><option value="videotoolbox">VideoToolbox（macOS）</option></select></label>
-              <label class="convert-field"><span>加密 ZIP 密码（仅本次，不保存）</span><input id="convertArchivePassword" type="password" autocomplete="off" value="" /></label>
             </div>
 
             <div class="convert-settings-actions">
@@ -379,13 +386,13 @@
 {% endblock %}
 
 {% block page_scripts %}
-<script src="{{ url_for('static', path='/js/convert-tabs.js') }}?v=20260715-hash2"></script>
+<script src="{{ url_for('static', path='/js/convert-tabs.js') }}?v=20260920-m6"></script>
 <script src="{{ url_for('static', path='/js/convert-logs.js') }}"></script>
 <script src="{{ url_for('static', path='/js/convert-result.js') }}?v=20260715-taskjump1"></script>
 <script src="{{ url_for('static', path='/data/world-land-50m.js') }}?v=20260718-naturalearth2"></script>
-<script src="{{ url_for('static', path='/js/convert-capabilities.js') }}?v=20260718-rotation360b"></script>
+<script src="{{ url_for('static', path='/js/convert-capabilities.js') }}?v=20260920-m6"></script>
 <script src="{{ url_for('static', path='/js/convert-settings.js') }}?v=20260919-m5"></script>
-<script src="{{ url_for('static', path='/js/task-center.js') }}?v=20260919-m5"></script>
+<script src="{{ url_for('static', path='/js/task-center.js') }}?v=20260920-m6"></script>
 <script src="{{ url_for('static', path='/js/health.js') }}?v=20260711-health1"></script>
-<script src="{{ url_for('static', path='/js/convert-form.js') }}?v=20260919-m5"></script>
+<script src="{{ url_for('static', path='/js/convert-form.js') }}?v=20260920-m6"></script>
 {% endblock %}

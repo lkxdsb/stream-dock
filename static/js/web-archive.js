@@ -5,7 +5,7 @@
   var panels = Array.prototype.slice.call(document.querySelectorAll('[data-archive-panel]'));
   var activePanelKey = 'streamdock.webArchive.activePanel.v1';
 
-  function activatePanel(name) {
+  function activatePanel(name, updateHistory) {
     var target = name === 'tasks' ? 'tasks' : 'workbench';
     navItems.forEach(function (item) {
       item.classList.toggle('active', item.getAttribute('data-archive-nav') === target);
@@ -16,6 +16,7 @@
       panel.hidden = !active;
     });
     try { window.localStorage.setItem(activePanelKey, target); } catch (_) {}
+    if (updateHistory !== false && window.location.hash !== '#' + target) window.history.pushState({ panel: target }, '', '#' + target);
   }
 
   navItems.forEach(function (item) {
@@ -34,7 +35,10 @@
       if (saved === 'tasks') initialPanel = saved;
     } catch (_) {}
   }
-  activatePanel(initialPanel);
+  activatePanel(initialPanel, false);
+  window.addEventListener('popstate', function () {
+    activatePanel(window.location.hash.replace('#', '') || 'workbench', false);
+  });
 
   var urlInput = document.getElementById('webArchiveUrl');
   var cookieInput = document.getElementById('webArchiveCookie');

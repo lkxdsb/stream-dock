@@ -59,7 +59,7 @@
   transition: border-color .18s ease, background .18s ease, color .18s ease, transform .18s ease;
 }
 
-label.subtitle-action { display: inline-flex; align-items: center; gap: 7px; }
+.subtitle-action { display: inline-flex; align-items: center; gap: 7px; }
 .subtitle-action:hover, .subtitle-timeline-tools button:hover { border-color: rgba(47, 44, 40, .24); background: #fff; transform: translateY(-1px); }
 .subtitle-action.primary { border-color: #242321; background: #242321; color: #fff; }
 .subtitle-action.primary:hover { background: #0f0f0e; }
@@ -150,7 +150,7 @@ label.subtitle-action { display: inline-flex; align-items: center; gap: 7px; }
 .subtitle-stage-mark { width: 42px; height: 42px; display: grid; place-items: center; margin-bottom: 17px; border: 1px solid rgba(255,255,255,.14); border-radius: 50%; color: #f1eee8; font-size: 12px; }
 .subtitle-stage-empty strong { font-size: 14px; }
 .subtitle-stage-empty small { margin-top: 7px; color: #817e78; font-size: 10px; }
-.subtitle-stage-empty label { margin-top: 20px; border-bottom: 1px solid #bbb5ac; padding-bottom: 3px; color: #d6d1ca; font-size: 10px; font-weight: 720; cursor: pointer; }
+.subtitle-stage-empty button { margin-top: 20px; border: 0; border-bottom: 1px solid #bbb5ac; padding: 0 0 3px; background: transparent; color: #d6d1ca; font-size: 10px; font-weight: 720; cursor: pointer; }
 
 .subtitle-stage-caption {
   position: absolute;
@@ -203,7 +203,6 @@ label.subtitle-action { display: inline-flex; align-items: center; gap: 7px; }
 .subtitle-inspector-note strong { color: #4d5768; font-size: 10px; }
 .subtitle-inspector-note p { margin: 5px 0 0; color: #858c96; font-size: 9px; line-height: 1.55; }
 .subtitle-inspector-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 18px; }
-.subtitle-inspector-actions label,
 .subtitle-inspector-actions button { min-height: 34px; display: grid; place-items: center; border: 1px solid rgba(45,42,38,.1); border-radius: 8px; background: transparent; color: #706a63; font-size: 9px; font-weight: 700; cursor: pointer; }
 .subtitle-inspector-actions button { color: #a06059; }
 
@@ -276,7 +275,8 @@ label.subtitle-action { display: inline-flex; align-items: center; gap: 7px; }
 .subtitle-empty-graphic span { position: absolute; z-index: 2; left: 33px; top: 11px; color: #fff; font-size: 9px; font-weight: 850; }
 .subtitle-empty > strong { color: #46413c; font-size: 13px; }
 .subtitle-empty > p { margin: 7px 0 15px; color: #989189; font-size: 10px; }
-.subtitle-empty > label { border-bottom: 1px solid #615b55; padding-bottom: 2px; color: #57524d; font-size: 10px; font-weight: 750; cursor: pointer; }
+.subtitle-empty > button { border: 0; border-bottom: 1px solid #615b55; padding: 0 0 2px; background: transparent; color: #57524d; font-size: 10px; font-weight: 750; cursor: pointer; }
+.subtitle-mobile-clear { display: none; }
 .subtitle-empty > small { margin-top: 12px; color: #b0aaa3; font-size: 8px; }
 
 .subtitle-cues { max-height: 520px; overflow-y: auto; }
@@ -321,6 +321,7 @@ label.subtitle-action { display: inline-flex; align-items: center; gap: 7px; }
   .subtitle-export-group { margin-left: auto; }
   .subtitle-workspace { grid-template-columns: 1fr; }
   .subtitle-inspector { display: none; }
+  .subtitle-mobile-clear { display: inline-flex; }
   .subtitle-stage { aspect-ratio: 16 / 9; min-height: 0; }
 }
 

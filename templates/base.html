@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="{{ url_for('static', path='/css/header.css') }}?v=20260715-menu1" />
   <link rel="stylesheet" href="{{ url_for('static', path='/css/components.css') }}?v=20260715-unified2" />
   {% block page_styles %}{% endblock %}
-  <link rel="stylesheet" href="{{ url_for('static', path='/css/responsive.css') }}?v=20260715-menu1" />
+  <link rel="stylesheet" href="{{ url_for('static', path='/css/responsive.css') }}?v=20260920-m6" />
 </head>
 <body{% block body_class_attr %}{% endblock %}>
   <div class="page-shell{% block shell_class_attr %}{% endblock %}">
@@ -43,8 +43,8 @@
             class="top-btn download"
             id="topDownloadBtn"
             type="button"
-            data-primary-action="{% if active_nav == 'convert' %}/convert#workbench{% elif active_nav == 'pdf' %}/pdf#workbench{% elif active_nav == 'subtitles' %}/subtitles#workbench{% elif active_nav == 'use' %}/use#parse{% else %}/use{% endif %}"
-          >{% if active_nav == 'convert' %}开始转换{% elif active_nav == 'pdf' %}解析 PDF{% elif active_nav == 'subtitles' %}编辑字幕{% elif active_nav == 'use' %}开始解析{% else %}开始使用{% endif %}</button>
+            data-primary-action="{% if active_nav == 'convert' %}/convert#workbench{% elif active_nav == 'pdf' %}/pdf#workbench{% elif active_nav == 'subtitles' %}/subtitles#workbench{% elif active_nav == 'web-archive' %}/web-archive#workbench{% elif active_nav == 'use' %}/use#parse{% else %}/use{% endif %}"
+          >{% if active_nav == 'convert' %}开始转换{% elif active_nav == 'pdf' %}解析 PDF{% elif active_nav == 'subtitles' %}编辑字幕{% elif active_nav == 'web-archive' %}开始存档{% elif active_nav == 'use' %}开始解析{% else %}开始使用{% endif %}</button>
         </div>
       </div>
     </header>
@@ -67,7 +67,7 @@
     </nav>
   </div>
 
-  <div class="toast" id="toast"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <div class="task-detail-layer" id="taskDetailLayer" hidden>
     <button class="task-detail-backdrop" type="button" data-task-detail-close aria-label="关闭任务详情"></button>

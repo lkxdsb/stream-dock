@@ -15,7 +15,7 @@ from threading import Lock
 from threading import Thread
 from time import monotonic, sleep
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import quote, urlparse
 from uuid import uuid4
 
@@ -79,7 +79,7 @@ IMAGE_COUNT_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"image count:\s*(\d+)$"
 PROGRESS_PATTERN = re.compile(_MEDIA_RESULT_PREFIX + r"progress:\s*([^|]*)\|(.+)$")
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 MAX_CONVERT_FILE_BYTES = int(os.getenv('STREAMDOCK_MAX_CONVERT_FILE_BYTES', str(500 * 1024 * 1024)))
-MAX_CONVERT_BATCH_FILES = int(os.getenv('STREAMDOCK_MAX_CONVERT_BATCH_FILES', '20'))
+MAX_CONVERT_BATCH_FILES = int(os.getenv('STREAMDOCK_MAX_CONVERT_BATCH_FILES', '50'))
 MAX_CONVERT_BATCH_TOTAL_BYTES = int(os.getenv('STREAMDOCK_MAX_CONVERT_BATCH_TOTAL_BYTES', str(1024 * 1024 * 1024)))
 CONVERT_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_CONVERT_TIMEOUT_SECONDS', '120'))
 MEDIA_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_MEDIA_TIMEOUT_SECONDS', str(20 * 60)))
@@ -219,6 +219,15 @@ class SubtitleExportRequest(BaseModel):
     filename: str = 'subtitle'
     format: str = 'srt'
     cues: list[SubtitleCueRequest] = Field(min_length=1, max_length=5000)
+
+
+class SubtitleRegenerateRequest(BaseModel):
+    strategy: str = Field(default='native-asr-ocr', pattern=r'^(native-asr|native-asr-ocr|ocr)$')
+    language: str | None = Field(default=None, max_length=20)
+
+
+class TaskSubtitleSaveRequest(SubtitleExportRequest):
+    sourcePath: str | None = None
 
 
 class ProbeRequest(BaseModel):
@@ -971,14 +980,18 @@ def run_subtitle_recognition(payload: dict[str, object]) -> dict[str, object]:
         if asr_available():
             try:
                 asr_path = available_output_path(output_dir, f'{base_name}_subtitle_asr', 'srt')
-                generated = generate_asr_subtitle_file(video_path, asr_path)
+                generated = generate_asr_subtitle_file(
+                    video_path,
+                    asr_path,
+                    language=str(payload.get('language') or '').strip() or None,
+                )
                 if generated:
                     subtitles.append(str(generated))
                     details.append({
                         'path': str(generated),
                         'source': 'speech-asr',
                         'quality': 'medium',
-                        'language': os.getenv('STREAMDOCK_SUBTITLE_ASR_LANG', 'zh'),
+                        'language': str(payload.get('language') or '').strip() or os.getenv('STREAMDOCK_SUBTITLE_ASR_LANG', 'zh'),
                         'label': '语音识别字幕',
                     })
             except Exception as exc:
@@ -1334,6 +1347,70 @@ def subtitle_export(payload: SubtitleExportRequest):
     return Response(content.encode('utf-8'), media_type=f'{media_type}; charset=utf-8', headers=headers)
 
 
+@app.post('/api/media/tasks/{task_id}/subtitles/regenerate')
+def regenerate_media_subtitles(task_id: str, payload: SubtitleRegenerateRequest):
+    task = task_store.get(task_id)
+    if task is None or task.kind != TaskKind.MEDIA or task.status != TaskStatus.COMPLETED:
+        return JSONResponse({'success': False, 'error': '已完成的视频任务不存在'}, status_code=404)
+    result = dict(task.result or {})
+    output = Path(str(result.get('outputPath') or '')).expanduser().resolve()
+    validation = result.get('validation') if isinstance(result.get('validation'), dict) else {}
+    if not output.is_file() or str((validation or {}).get('kind') or '') != 'video':
+        return JSONResponse({'success': False, 'error': '只有已完成的视频文件可以生成字幕'}, status_code=400)
+    current_job = result.get('subtitleJob') if isinstance(result.get('subtitleJob'), dict) else {}
+    if str((current_job or {}).get('status') or '') in {'pending', 'running'}:
+        return JSONResponse({'success': False, 'error': '字幕任务正在执行，请勿重复提交'}, status_code=409)
+    job = {
+        'status': 'pending',
+        'message': '视频已可用，字幕等待后台识别',
+        'strategy': payload.strategy,
+        'language': payload.language,
+    }
+    task_store.patch_result(task_id, {'subtitleJob': job}, logs=[*task.logs, '已单独提交字幕生成任务'])
+    accepted = subtitle_queue.submit(task_id, {
+        'inputPath': str(output),
+        'strategy': payload.strategy,
+        'language': payload.language,
+        'title': result.get('title'),
+        'platform': result.get('platform'),
+        'sourceUrl': task.payload.get('link'),
+        'validation': validation,
+    })
+    if not accepted:
+        task_store.patch_result(task_id, {'subtitleJob': {**job, 'status': 'failed', 'message': '字幕任务提交失败'}})
+        return JSONResponse({'success': False, 'error': '字幕任务提交失败'}, status_code=409)
+    return JSONResponse({'success': True, 'taskId': task_id, 'subtitleJob': job}, status_code=202)
+
+
+@app.post('/api/media/tasks/{task_id}/subtitles/save')
+def save_media_subtitle_version(task_id: str, payload: TaskSubtitleSaveRequest):
+    task = task_store.get(task_id)
+    if task is None or task.kind != TaskKind.MEDIA or task.status != TaskStatus.COMPLETED:
+        return JSONResponse({'success': False, 'error': '已完成的视频任务不存在'}, status_code=404)
+    result = dict(task.result or {})
+    output = Path(str(result.get('outputPath') or '')).expanduser().resolve()
+    if not output.is_file():
+        return JSONResponse({'success': False, 'error': '来源视频文件不存在'}, status_code=404)
+    try:
+        target_format = normalize_subtitle_format(f'subtitle.{payload.format}', payload.format)
+        content = export_subtitles([cue.model_dump() for cue in payload.cues], target_format)
+    except (OverflowError, TypeError, ValueError) as exc:
+        return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
+    target = available_output_path(output.parent, f'{output.stem}_subtitle_edited', target_format)
+    target.write_text(content, encoding='utf-8')
+    assets = dict(result.get('assets') or {})
+    subtitles = list(dict.fromkeys([*(str(item) for item in assets.get('subtitles') or [] if item), str(target)]))
+    details = [*(item for item in assets.get('subtitleDetails') or [] if isinstance(item, dict)), {
+        'path': str(target), 'source': 'manual-edit', 'quality': 'reviewed',
+        'label': f'人工修订版（来源：{Path(payload.sourcePath).name if payload.sourcePath else "字幕工作台"}）',
+    }]
+    task_store.patch_result(task_id, {
+        'assets': {**assets, 'subtitles': subtitles, 'subtitleDetails': details},
+        'subtitleCount': len(subtitles),
+    }, logs=[*task.logs, f'字幕修订版已保存：{target.name}'])
+    return JSONResponse({'success': True, 'path': str(target), 'version': len(subtitles)})
+
+
 def select_output_directory_with_system_dialog() -> tuple[bool, str | None, str | None]:
     if sys.platform != 'darwin':
         return False, None, '当前仅支持在 macOS 本地弹出目录选择窗口'
@@ -1568,6 +1645,113 @@ async def convert_run(
     return JSONResponse(body)
 
 
+@app.post('/api/convert/folder-run')
+async def convert_folder_run(
+    files: list[UploadFile] = File(...),
+    relativePaths: str = Form(...),
+    directoryPaths: str = Form('[]'),
+    folderName: str = Form('folder'),
+    outputType: str = Form(...),
+    outputPath: str = Form(...),
+    namingStrategy: str = Form('append'),
+):
+    """Pack a browser-selected directory while preserving its relative tree."""
+    capability = find_capability('folder', outputType)
+    if capability is None:
+        for upload in files:
+            await upload.close()
+        return JSONResponse({'success': False, 'error': f'暂不支持 FOLDER → {normalize_format(outputType).upper()} 转换路径'}, status_code=400)
+    try:
+        relative_paths = json.loads(relativePaths)
+        directory_paths = json.loads(directoryPaths)
+    except json.JSONDecodeError:
+        relative_paths, directory_paths = [], []
+    if not isinstance(relative_paths, list) or not isinstance(directory_paths, list) or len(relative_paths) != len(files):
+        for upload in files:
+            await upload.close()
+        return JSONResponse({'success': False, 'error': '文件夹成员路径与上传文件不匹配'}, status_code=400)
+    if len(files) > 2000:
+        for upload in files:
+            await upload.close()
+        raise HTTPException(status_code=413, detail='单个文件夹最多包含 2000 个文件')
+
+    def safe_relative(raw: object) -> Path:
+        value = str(raw or '').replace('\\', '/').strip('/')
+        candidate = PurePosixPath(value)
+        if not value or candidate.is_absolute() or any(part in {'', '.', '..'} for part in candidate.parts):
+            raise ValueError(f'文件夹包含非法成员路径：{raw}')
+        return Path(*candidate.parts)
+
+    safe_folder_name = re.sub(r'[^\w\-.一-鿿]+', '_', Path(folderName).name).strip('._') or 'folder'
+    task = task_store.create(
+        TaskKind.CONVERT,
+        f'{safe_folder_name} → {normalize_format(outputType).upper()}',
+        {'filename': safe_folder_name, 'source': 'folder', 'target': normalize_format(outputType), 'outputPath': outputPath,
+         'namingStrategy': namingStrategy, 'fileCount': len(files), 'directoryCount': len(directory_paths)},
+    )
+    task_store.update(task.id, status=TaskStatus.RUNNING, logs=['正在重建文件夹目录树'], stage='打包中', progress=10)
+    manifest: dict | None = None
+    with tempfile.TemporaryDirectory(prefix='streamdock_folder_convert_') as tmp_dir:
+        source_root = Path(tmp_dir) / safe_folder_name
+        source_root.mkdir(parents=True, exist_ok=True)
+        try:
+            for raw_directory in directory_paths if isinstance(directory_paths, list) else []:
+                (source_root / safe_relative(raw_directory)).mkdir(parents=True, exist_ok=True)
+            total_bytes = 0
+            for upload, raw_relative in zip(files, relative_paths):
+                target_path = source_root / safe_relative(raw_relative)
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    written = await save_upload_with_limits(
+                        upload, target_path, current_total_bytes=total_bytes,
+                        max_total_bytes=MAX_CONVERT_BATCH_TOTAL_BYTES,
+                    )
+                finally:
+                    await upload.close()
+                total_bytes += written
+        except (HTTPException, ValueError) as exc:
+            for upload in files:
+                await upload.close()
+            task_store.update(task.id, status=TaskStatus.FAILED, error=str(getattr(exc, 'detail', exc)), stage='失败')
+            if isinstance(exc, HTTPException):
+                raise
+            return JSONResponse({'success': False, 'error': str(exc), 'task': task_store.get(task.id).to_dict()}, status_code=400)
+
+        result = await asyncio.to_thread(
+            convert_file_with_timeout,
+            source_root,
+            safe_folder_name,
+            'folder',
+            outputType,
+            task_output_dir(task.id),
+            timeout_seconds=CONVERT_TIMEOUT_SECONDS,
+            naming_strategy=namingStrategy,
+        )
+        if result.success and result.output_path:
+            try:
+                manifest = seal_artifact(task.id, result.output_path)
+                result.output_path = publish_artifact(
+                    result.output_path, Path(outputPath).expanduser(), result.output_path.name,
+                    collision_strategy=namingStrategy,
+                )
+            except Exception as exc:
+                result.success = False
+                result.error = f'发布打包结果失败：{exc}'
+                result.output_path = None
+    body = result.to_dict()
+    if result.success and result.output_path and manifest is not None:
+        body['artifact'] = artifact_summary(manifest)
+    body['capability'] = capability.to_dict()
+    task_store.update(
+        task.id,
+        status=TaskStatus.COMPLETED if result.success else TaskStatus.FAILED,
+        logs=list(result.logs), result=body, error=result.error,
+        stage='已完成' if result.success else '失败', progress=100 if result.success else None,
+    )
+    body['task'] = task_store.get(task.id).to_dict()
+    return JSONResponse(body)
+
+
 @app.post('/api/convert/batch-run')
 async def convert_batch_run(
     files: list[UploadFile] = File(...),
@@ -1611,6 +1795,7 @@ async def convert_batch_run(
     media_options = _normalized_media_options(audioBitrateKbps, audioSampleRate, videoMaxWidth, videoFrameRate, videoBitrateKbps, videoCrf, hardwareAcceleration)
     archive_options = {'password': archivePassword} if archivePassword else {}
     output_dir = Path(outputPath).expanduser()
+    batch_id = uuid4().hex
     tasks = []
     comparisons: dict[str, dict] = {}
     with tempfile.TemporaryDirectory(prefix='streamdock_batch_convert_') as tmp_dir:
@@ -1647,7 +1832,7 @@ async def convert_batch_run(
         except RuntimeError as exc:
             return JSONResponse({'success': False, 'error': str(exc), 'tasks': []}, status_code=400)
 
-        for item in batch_inputs:
+        for batch_index, item in enumerate(batch_inputs):
             valid, detected = validate_declared_format(item.input_path, item.source)
             if not valid:
                 return JSONResponse(
@@ -1659,11 +1844,11 @@ async def convert_batch_run(
                     status_code=400,
                 )
 
-        for item in batch_inputs:
+        for batch_index, item in enumerate(batch_inputs):
             task = task_store.create(
                 TaskKind.CONVERT,
                 f'{item.filename} → {target.upper()}',
-                {'filename': item.filename, 'source': item.source, 'target': target, 'outputPath': str(output_dir), 'namingStrategy': namingStrategy, 'imageQuality': max(1, min(100, imageQuality)), 'mediaOptions': media_options, 'archiveEncrypted': bool(archivePassword)},
+                {'filename': item.filename, 'source': item.source, 'target': target, 'outputPath': str(output_dir), 'namingStrategy': namingStrategy, 'imageQuality': max(1, min(100, imageQuality)), 'mediaOptions': media_options, 'archiveEncrypted': bool(archivePassword), 'batchId': batch_id, 'batchIndex': batch_index, 'batchSize': len(batch_inputs)},
             )
             _retain_convert_input(task.id, item.filename, item.input_path)
             task_store.update(task.id, status=TaskStatus.RUNNING, logs=['正在等待批量转换执行'], stage='等待批量转换', progress=5)
@@ -1722,6 +1907,7 @@ async def convert_batch_run(
     return JSONResponse(
         {
             **result,
+            'batchId': batch_id,
             'capability': validation.capability.to_dict() if validation.capability else None,
             'tasks': [task_store.get(task.id).to_dict() for task in tasks if task_store.get(task.id)],
         }
@@ -2168,6 +2354,9 @@ def get_media_task_asset(task_id: str, path: str):
     result = task.result or {}
     assets = result.get('assets') if isinstance(result.get('assets'), dict) else {}
     allowed = []
+    output_path = str(result.get('outputPath') or '').strip()
+    if output_path:
+        allowed.append(Path(output_path).expanduser().resolve())
     cover = str((assets or {}).get('cover') or '').strip()
     if cover:
         allowed.append(Path(cover).expanduser().resolve())
@@ -2186,7 +2375,7 @@ def get_media_task_asset(task_id: str, path: str):
         return JSONResponse({'success': False, 'error': '该资源不属于当前任务'}, status_code=403)
     if not requested.exists() or not requested.is_file():
         return JSONResponse({'success': False, 'error': '资源文件不存在'}, status_code=404)
-    allowed_suffixes = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.vtt', '.srt', '.ass', '.ssa', '.txt', '.json'}
+    allowed_suffixes = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.vtt', '.srt', '.ass', '.ssa', '.txt', '.json', '.mp4', '.mkv', '.mov', '.webm', '.mp3', '.m4a', '.wav', '.flac', '.ogg', '.opus'}
     if requested.suffix.lower() not in allowed_suffixes:
         return JSONResponse({'success': False, 'error': '不支持预览该资源类型'}, status_code=400)
     return FileResponse(requested)

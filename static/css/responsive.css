@@ -71,6 +71,12 @@
     background: rgba(247,242,235,.94);
     overflow-x: auto;
   }
+  .pdf-sidebar { display: block; }
+  .pdf-sidebar nav { display: flex; gap: 8px; width: max-content; }
+  .pdf-sidebar nav > p { display: none; }
+  .pdf-sidebar nav button { width: auto; min-height: 44px; padding: 10px 14px; border-radius: 12px; white-space: nowrap; }
+  .pdf-sidebar nav button span { display: block; }
+  .pdf-sidebar nav button small { display: none; }
   .use-sidebar-brand, .convert-sidebar-brand, .platform-sidebar-brand, .pdf-brand { display: none; }
   .use-sidebar-menu, .convert-nav, .platform-category-list {
     display: flex;
@@ -100,6 +106,27 @@
   .hero-title { font-size: clamp(48px, 9vw, 68px); }
   .flow-area { width: min(100%, 760px); margin: 0 auto; transform: none; }
   .platform { width: 100%; }
+}
+
+@media (max-width: 1000px) {
+  .web-archive-sidebar {
+    display: block;
+    position: sticky;
+    top: 74px;
+    z-index: 35;
+    width: 100%;
+    height: auto;
+    padding: 10px 16px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(66,59,52,.10);
+    background: rgba(247,242,235,.94);
+    overflow-x: auto;
+  }
+  .web-archive-sidebar-brand, .web-archive-nav-section > p { display: none; }
+  .web-archive-nav-section { display: flex; gap: 8px; width: max-content; }
+  .web-archive-nav-item { min-height: 44px; padding: 10px 14px; border-radius: 12px; }
+  .web-archive-nav-item .sidebar-item-subtitle { display: none; }
+  .web-archive-nav-item .sidebar-item-title { white-space: nowrap; }
 }
 
 @media (max-width: 680px) {

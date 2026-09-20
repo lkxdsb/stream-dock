@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import difflib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -52,7 +53,9 @@ def _text_summary(path: Path, format_name: str) -> dict[str, Any]:
         'characters': len(content),
         'lines': len(content.splitlines()),
         'sample': sample,
+        'sampleCharacters': len(sample),
         'truncated': len(content) > len(sample),
+        'contentSha256': hashlib.sha256(content.encode('utf-8')).hexdigest(),
     }
 
 
@@ -154,7 +157,13 @@ def build_conversion_comparison(source: str, target: str, input_path: Path, outp
             diff = list(difflib.unified_diff(before['sample'].splitlines(), after['sample'].splitlines(), fromfile='转换前', tofile='转换后', lineterm=''))[:120]
             added = sum(1 for line in diff if line.startswith('+') and not line.startswith('+++'))
             removed = sum(1 for line in diff if line.startswith('-') and not line.startswith('---'))
-            return {'available': True, 'kind': 'text', 'before': before, 'after': after, 'diff': diff, 'diffTruncated': len(diff) >= 120, 'addedLines': added, 'removedLines': removed}
+            return {
+                'available': True, 'kind': 'text', 'before': before, 'after': after,
+                'diff': diff, 'diffTruncated': len(diff) >= 120,
+                'previewTruncated': bool(before['truncated'] or after['truncated']),
+                'contentChanged': before['contentSha256'] != after['contentSha256'],
+                'addedLines': added, 'removedLines': removed,
+            }
         if source in IMAGE_FORMATS and target in IMAGE_FORMATS:
             return {'available': True, 'kind': 'image', 'before': _image_summary(input_path), 'after': _image_summary(output_path)}
         if source in MEDIA_FORMATS and target in MEDIA_FORMATS:

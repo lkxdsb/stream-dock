@@ -4,7 +4,7 @@
 
   const allowed = new Set(navItems.map((item) => item.dataset.convertNav));
 
-  function activate(name) {
+  function activate(name, updateHistory = true) {
     const target = allowed.has(name) ? name : 'workbench';
     navItems.forEach((item) => item.classList.toggle('active', item.dataset.convertNav === target));
     panels.forEach((panel) => {
@@ -13,6 +13,7 @@
       panel.hidden = !active;
     });
     window.localStorage.setItem('streamdock.convert.activePanel.v1', target);
+    if (updateHistory && window.location.hash !== `#${target}`) window.history.pushState({ panel: target }, '', `#${target}`);
   }
 
   navItems.forEach((item) => {
@@ -20,6 +21,7 @@
   });
 
   const initialHash = window.location.hash.replace('#', '');
-  activate(allowed.has(initialHash) ? initialHash : (window.localStorage.getItem('streamdock.convert.activePanel.v1') || 'workbench'));
+  activate(allowed.has(initialHash) ? initialHash : (window.localStorage.getItem('streamdock.convert.activePanel.v1') || 'workbench'), false);
+  window.addEventListener('popstate', () => activate(window.location.hash.replace('#', '') || 'workbench', false));
   window.StreamDockConvertTabs = { activate };
 })();

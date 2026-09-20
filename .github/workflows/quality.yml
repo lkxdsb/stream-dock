@@ -31,4 +31,6 @@ jobs:
       - name: Install Chromium for frontend workflow regression
         run: python -m playwright install --with-deps chromium
       - name: Run real-browser frontend workflow regression
-        run: python scripts/test_frontend_m5_browser.py
+        run: |
+          python scripts/test_frontend_m5_browser.py
+          python scripts/test_frontend_m6_browser.py

@@ -25,6 +25,7 @@
   let latestConvertTasks = [];
   let mediaQueuePaused = false;
   let refreshPromise = null;
+  let detailReturnFocus = null;
 
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -52,6 +53,10 @@
   function cssEscape(value) {
     if (window.CSS?.escape) return CSS.escape(String(value || ''));
     return String(value || '').replace(/["\\]/g, '\\$&');
+  }
+
+  function fileLabel(value) {
+    return String(value || '').split(/[\\/]/).pop() || '字幕文件';
   }
 
   function statusLabel(status) {
@@ -165,7 +170,13 @@
     if (comparison.kind === 'text') {
       const before = comparison.before || {};
       const after = comparison.after || {};
-      return `<section class="task-detail-section"><h3>转换前后对比 · 文本</h3><div class="task-detail-grid">${detailRow('转换前', `${before.lines || 0} 行 · ${before.characters || 0} 字符`)}${detailRow('转换后', `${after.lines || 0} 行 · ${after.characters || 0} 字符`)}${detailRow('行变化', `+${comparison.addedLines || 0} / -${comparison.removedLines || 0}`)}</div><pre class="task-detail-logs conversion-diff">${escapeHtml((comparison.diff || []).join('\n') || '文本内容未发生可见变化')}</pre></section>`;
+      const previewNote = comparison.previewTruncated
+        ? `差异预览仅展示前 ${Math.max(before.sampleCharacters || 0, after.sampleCharacters || 0).toLocaleString()} 字符${comparison.diffTruncated ? '，且差异行已截断' : ''}；全文变化由内容摘要判定。`
+        : (comparison.diffTruncated ? '差异行过多，当前仅展示前 120 行。' : '已比较全部可提取文本。');
+      const emptyDiff = comparison.contentChanged
+        ? '全文内容已变化，差异位于当前预览范围之外。'
+        : '全部可提取文本内容一致。';
+      return `<section class="task-detail-section"><h3>转换前后对比 · 文本</h3><div class="task-detail-grid">${detailRow('转换前', `${before.lines || 0} 行 · ${before.characters || 0} 字符`)}${detailRow('转换后', `${after.lines || 0} 行 · ${after.characters || 0} 字符`)}${detailRow('全文内容摘要', comparison.contentChanged ? '已变化' : '一致')}${detailRow('行变化（预览内）', `+${comparison.addedLines || 0} / -${comparison.removedLines || 0}`)}</div><p class="task-detail-note">${escapeHtml(previewNote)}</p><pre class="task-detail-logs conversion-diff">${escapeHtml((comparison.diff || []).join('\n') || emptyDiff)}</pre></section>`;
     }
     const before = comparison.before || {};
     const after = comparison.after || {};
@@ -241,6 +252,21 @@
         : '当前没有转换任务。批量转换或单文件转换完成后会显示在这里。';
     }
     render(convertList, convertEmpty, filtered);
+    const batches = new Map();
+    filtered.forEach((task) => {
+      const batchId = String(task.payload?.batchId || '');
+      if (!batchId) return;
+      if (!batches.has(batchId)) batches.set(batchId, []);
+      batches.get(batchId).push(task);
+    });
+    Array.from(batches.entries()).reverse().forEach(([batchId, members]) => {
+      const successful = members.filter((task) => task.status === 'completed' && task.result?.artifact);
+      const summary = document.createElement('article');
+      summary.className = 'task-card task-batch-summary';
+      const params = successful.map((task) => `taskId=${encodeURIComponent(task.id)}`).join('&');
+      summary.innerHTML = `<div class="task-body"><div class="task-title">批次 ${escapeHtml(batchId.slice(0, 8))}</div><div class="task-meta">${members.length} 个成员 · ${successful.length} 个可下载 · ${members.length - successful.length} 个未完成</div></div><div class="task-actions">${successful.length ? `<a class="task-detail-action primary" href="/api/convert/tasks/download?${params}">重新打包本批次</a>` : '<span>暂无可打包结果</span>'}</div>`;
+      convertList.prepend(summary);
+    });
   }
 
   function sourceLabel(task) {
@@ -484,6 +510,8 @@
     detailLayer.hidden = true;
     document.body.style.overflow = '';
     currentDetailTaskId = '';
+    detailReturnFocus?.focus?.();
+    detailReturnFocus = null;
   }
 
   function showDetail(task) {
@@ -496,7 +524,9 @@
     const payload = task.payload || {};
     const result = task.result || {};
     const subtitleFiles = Array.isArray(result.assets?.subtitles) ? result.assets.subtitles : [];
+    const editableSubtitleFiles = subtitleFiles.filter((path) => /\.(srt|vtt|txt)$/i.test(String(path || '')));
     const outputPath = result.outputPath || '';
+    const mediaKind = result.mediaKind || result.validation?.kind || '';
     const stage = stageLabel(task);
     const latestLog = compactActivity(task) || stage;
     const errorInfo = errorPresentation(task.error, task.errorInfo);
@@ -553,8 +583,10 @@
       ${task.kind === 'media' && ['failed', 'cancelled', 'skipped'].includes(task.status) ? '<button class="task-detail-action primary" type="button" data-retry-task>重新识别并执行</button>' : ''}
       ${task.kind === 'convert' && task.status === 'failed' ? '<button class="task-detail-action primary" type="button" data-retry-convert>重新执行</button><button class="task-detail-action" type="button" data-reselect-file>重新选择文件</button>' : ''}
       ${task.kind === 'media' && ['pending', 'running'].includes(task.status) ? '<button class="task-detail-action" type="button" data-cancel-detail>取消任务</button>' : ''}
-      ${task.kind === 'media' && task.status === 'completed' && outputPath ? '<button class="task-detail-action" type="button" data-deep-quality>深度质量检测</button>' : ''}
-      ${task.kind === 'media' && subtitleFiles.length ? '<button class="task-detail-action primary" type="button" data-edit-subtitle>编辑字幕</button>' : ''}
+      ${task.kind === 'media' && task.status === 'completed' && outputPath && mediaKind === 'video' ? '<button class="task-detail-action" type="button" data-deep-quality>深度视频质量检测</button>' : ''}
+      ${task.kind === 'media' && task.status === 'completed' && outputPath && mediaKind === 'video' && !subtitleJobActive(task) ? '<select class="task-detail-action" data-subtitle-strategy aria-label="字幕生成策略"><option value="native-asr-ocr">ASR 优先，OCR 兜底</option><option value="native-asr">仅语音识别</option><option value="ocr">仅画面 OCR</option></select><select class="task-detail-action" data-subtitle-language aria-label="语音语言"><option value="zh">中文</option><option value="en">英文</option><option value="">自动识别</option></select><button class="task-detail-action" type="button" data-regenerate-subtitle>生成 / 重新生成字幕</button>' : ''}
+      ${editableSubtitleFiles.length ? `<select class="task-detail-action" data-subtitle-track aria-label="选择要编辑的字幕轨">${editableSubtitleFiles.map((path, index) => `<option value="${escapeHtml(path)}">${index + 1}. ${escapeHtml(fileLabel(path))}</option>`).join('')}</select><button class="task-detail-action primary" type="button" data-edit-subtitle>编辑所选字幕</button>` : ''}
+      ${subtitleFiles.length && !editableSubtitleFiles.length ? '<span class="task-detail-note">ASS/SSA 暂不直接编辑，请先转换为 SRT 以避免样式静默丢失。</span>' : ''}
       ${['completed', 'failed', 'skipped', 'cancelled'].includes(task.status) && !subtitleJobActive(task) ? '<button class="task-detail-action danger" type="button" data-delete-detail>删除记录</button>' : ''}
     `;
 
@@ -586,8 +618,20 @@
       window.StreamDockUI?.showToast?.('错误信息已复制');
     });
     bindAction(detailFooter.querySelector('[data-edit-subtitle]'), () => {
-      const query = new URLSearchParams({ taskId: task.id, path: subtitleFiles[0] });
+      const selectedPath = detailFooter.querySelector('[data-subtitle-track]')?.value || editableSubtitleFiles[0];
+      const query = new URLSearchParams({ taskId: task.id, path: selectedPath, media: outputPath });
       window.location.href = `/subtitles?${query.toString()}`;
+    });
+    bindAction(detailFooter.querySelector('[data-regenerate-subtitle]'), async () => {
+      const strategy = detailFooter.querySelector('[data-subtitle-strategy]')?.value || 'native-asr-ocr';
+      const language = detailFooter.querySelector('[data-subtitle-language]')?.value || null;
+      const response = await fetch(`/api/media/tasks/${encodeURIComponent(task.id)}/subtitles/regenerate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ strategy, language }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '字幕任务提交失败');
+      window.StreamDockUI?.showToast?.('字幕生成任务已提交，不会重新下载视频');
+      await refresh();
     });
     bindAction(detailFooter.querySelector('[data-retry-task]'), async () => {
       const response = await fetch(`/api/tasks/${encodeURIComponent(task.id)}/retry`, { method: 'POST' });
@@ -639,7 +683,10 @@
       detailContent.scrollTop = 0;
     }
     document.body.style.overflow = 'hidden';
-    if (shouldMoveFocus) detailLayer.querySelector('.task-detail-close')?.focus();
+    if (shouldMoveFocus) {
+      detailReturnFocus = document.activeElement;
+      detailLayer.querySelector('.task-detail-close')?.focus();
+    }
   }
 
   async function cancelTask(taskId) {
@@ -830,7 +877,16 @@
 
   detailLayer?.querySelectorAll('[data-task-detail-close]').forEach((button) => button.addEventListener('click', closeDetail));
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && detailLayer && !detailLayer.hidden) closeDetail();
+    if (!detailLayer || detailLayer.hidden) return;
+    if (event.key === 'Escape') { closeDetail(); return; }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(detailLayer.querySelectorAll('button:not([disabled]),a[href],select:not([disabled]),input:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'))
+      .filter((item) => item.getClientRects().length > 0);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   });
 
   async function taskAction(endpoint, method, successMessage) {

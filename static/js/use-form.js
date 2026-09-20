@@ -26,11 +26,13 @@
   const probeToggle = document.getElementById('mediaProbeToggle');
   const probeCancel = document.getElementById('mediaProbeCancel');
   const probeResetButton = document.getElementById('probeResetButton');
+  const probeRetryFailed = document.getElementById('mediaProbeRetryFailed');
   const streamTable = document.getElementById('mediaStreamTable');
   const streamDetails = document.getElementById('mediaProbeDetails');
   let confirmedProbeKey = '';
   let lastProbeContentType = '';
   let workflowSequence = 0;
+  let approvedBatchProbe = null;
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const mediaCoverSrc = (value) => {
     const raw = String(value || '').trim();
@@ -409,10 +411,12 @@
   function resetProbeState({ clearInput = false, resetWorkspace = false, toast = '' } = {}) {
     confirmedProbeKey = '';
     lastProbeContentType = '';
+    approvedBatchProbe = null;
     if (clearInput && linkInput) linkInput.value = '';
     if (probePreview) probePreview.hidden = true;
     if (probeCancel) probeCancel.hidden = true;
     if (probeResetButton) probeResetButton.hidden = true;
+    if (probeRetryFailed) probeRetryFailed.hidden = true;
     if (probeCover) {
       probeCover.onload = null;
       probeCover.onerror = null;
@@ -500,7 +504,8 @@
   form?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const sequence = ++workflowSequence;
-    const links = extractLinks(linkInput?.value || '');
+    const requestedLinks = extractLinks(linkInput?.value || '');
+    let links = requestedLinks;
     const payload = {
       outputPath: String(outputPath?.value || '').trim(),
       outputType: String(outputType?.value || '').trim(),
@@ -510,7 +515,7 @@
       subtitleStrategy: String(subtitleStrategy?.value || 'native-asr-ocr'),
     };
 
-    if (!links.length || !payload.outputPath || !payload.outputType) {
+    if (!requestedLinks.length || !payload.outputPath || !payload.outputType) {
       result?.setStatus('error', '请先完整填写链接、输出目录和输出类型。');
       logs?.renderLogs(['表单校验未通过。']);
       result?.showResult();
@@ -532,7 +537,8 @@
 
     try {
       if (quality?.isVideoOutputType(payload.outputType)) {
-        const probeKey = buildProbeKey(links, payload);
+        const probeKey = buildProbeKey(requestedLinks, payload);
+        if (approvedBatchProbe?.probeKey === probeKey) links = approvedBatchProbe.successfulLinks.slice();
         if (confirmedProbeKey !== probeKey) {
           if (links.length === 1) {
             const probeData = await quality.probeQualityOptions(links[0], { silent: true });
@@ -551,8 +557,20 @@
             renderBatchProbePreview(batchProbe, payload);
             const failed = batchProbe.filter((item) => !item.success);
             if (failed.length) {
-              result?.setStatus('error', `${failed.length} 条链接识别失败，请调整后重试`);
-              logs?.renderLogs(['批量识别未全部通过', ...failed.map((item, index) => `${index + 1}. ${item.error || '识别失败'}：${item.link}`)]);
+              const successfulLinks = batchProbe.filter((item) => item.success).map((item) => item.link);
+              if (successfulLinks.length) {
+                approvedBatchProbe = { probeKey, successfulLinks, failedLinks: failed.map((item) => item.link) };
+                if (probeRetryFailed) probeRetryFailed.hidden = false;
+                confirmedProbeKey = probeKey;
+                result?.setStatus('running', `${successfulLinks.length} 条可用，${failed.length} 条已自动排除；可继续提交成功项`);
+                logs?.renderLogs(['批量识别部分通过', `可继续处理：${successfulLinks.length} 条`, `自动排除：${failed.length} 条`, ...failed.map((item, index) => `${index + 1}. ${item.error || '识别失败'}：${item.link}`)]);
+                submitButton.disabled = false;
+                submitButton.textContent = `继续处理 ${successfulLinks.length} 条可用链接`;
+                submitButton.classList.remove('loading');
+                return;
+              }
+              result?.setStatus('error', `${failed.length} 条链接均识别失败，请调整后重试`);
+              logs?.renderLogs(['批量识别未通过', ...failed.map((item, index) => `${index + 1}. ${item.error || '识别失败'}：${item.link}`)]);
               submitButton.disabled = false;
               submitButton.textContent = '重新识别';
               submitButton.classList.remove('loading');
@@ -600,7 +618,7 @@
       if (sequence !== workflowSequence) return;
       submitButton.disabled = false;
       submitButton.textContent = confirmedProbeKey
-        ? (extractLinks(linkInput?.value || '').length > 1 ? '确认并开始批量下载' : (lastProbeContentType === 'images' ? '确认并下载图片集' : '确认并开始下载'))
+        ? (approvedBatchProbe ? `继续处理 ${approvedBatchProbe.successfulLinks.length} 条可用链接` : (extractLinks(linkInput?.value || '').length > 1 ? '确认并开始批量下载' : (lastProbeContentType === 'images' ? '确认并下载图片集' : '确认并开始下载')))
         : '开始解析';
       submitButton.classList.remove('loading');
     }
@@ -625,6 +643,14 @@
 
   probeCancel?.addEventListener('click', cancelProbeAndReset);
   probeResetButton?.addEventListener('click', cancelProbeAndReset);
+  probeRetryFailed?.addEventListener('click', () => {
+    const failedLinks = approvedBatchProbe?.failedLinks?.slice() || [];
+    if (!failedLinks.length) return;
+    resetProbeState({ clearInput: false });
+    if (linkInput) linkInput.value = failedLinks.join('\n');
+    result?.setStatus('running', `已保留 ${failedLinks.length} 条失败链接，可重新识别`);
+    linkInput?.focus();
+  });
 
   clearLogButton?.addEventListener('click', () => {
     logs?.renderLogs([]);

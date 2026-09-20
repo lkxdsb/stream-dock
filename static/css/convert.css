@@ -146,13 +146,20 @@
 .convert-file-input { position: absolute; inset: 0; opacity: 0; pointer-events: none; }
 .convert-drop strong { display: block; font-size: 18px; margin-bottom: 9px; }
 .convert-drop span, .convert-hint { color: #7a736b; font-size: 13px; line-height: 1.7; }
+.convert-pick-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .convert-file-list { margin-top: 12px; max-width: 100%; }
 .convert-file-list:empty { display: none; }
 .convert-file-list-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   color: #8a8278;
   font-size: 12px;
   margin-bottom: 7px;
 }
+.convert-file-list-title button,
+.convert-file-chip button { border: 0; background: transparent; color: #786f66; cursor: pointer; }
+.convert-file-list-title button { font-size: 12px; text-decoration: underline; }
 .convert-file-chips {
   display: flex;
   flex-wrap: wrap;
@@ -162,6 +169,9 @@
   padding-right: 6px;
 }
 .convert-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   max-width: 240px;
   padding: 6px 10px;
   border: 1px solid rgba(70,63,56,.12);
@@ -171,9 +181,12 @@
   font-size: 12px;
   line-height: 1.25;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
+.convert-file-chip > span { overflow: hidden; text-overflow: ellipsis; color: inherit; font-size: inherit; line-height: inherit; }
+.convert-file-chip button { flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%; }
+.convert-file-chip button:hover,
+.convert-file-chip button:focus-visible { background: #f5e5e2; color: #9a443d; outline: none; }
+.convert-file-list-title button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .convert-file-chip.muted {
   color: #7a736b;
   background: rgba(232,226,216,.62);

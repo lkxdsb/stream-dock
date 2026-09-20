@@ -1,6 +1,8 @@
 (function () {
   const fileInput = document.getElementById('convertFileInput');
+  const folderInput = document.getElementById('convertFolderInput');
   const pickButton = document.getElementById('convertPickButton');
+  const pickFolderButton = document.getElementById('convertPickFolderButton');
   const dropZone = document.getElementById('convertDropZone');
   const fileTitle = document.getElementById('convertFileTitle');
   const fileMeta = document.getElementById('convertFileMeta');
@@ -11,10 +13,15 @@
   const selectDirButton = document.getElementById('convertSelectDirButton');
   const startButton = document.getElementById('convertStartButton');
   const hint = document.getElementById('convertHint');
+  const archivePasswordField = document.getElementById('convertArchivePasswordField');
   let selectedFiles = [];
   let currentSource = '';
   let currentOptions = [];
   let batchMode = false;
+  let folderMode = false;
+  let folderName = '';
+  let folderEntries = [];
+  let folderDirectories = [];
   let probeSequence = 0;
   let probeController = null;
 
@@ -51,6 +58,7 @@
     outputType.innerHTML = options.map((item) => `<option value="${item.target}" data-level="${item.level}" data-vendors="${(item.vendors || []).join('|')}">${optionLabel(item)}</option>`).join('') || '<option value="">当前筛选下暂无可用转换</option>';
     if (previousTarget && options.some((item) => item.target === previousTarget)) outputType.value = previousTarget;
     updateHint();
+    if (archivePasswordField) archivePasswordField.hidden = !['zip', 'rar', '7z'].includes(currentSource);
   }
 
   function fileSizeLabel(files) {
@@ -74,15 +82,92 @@
       fileList.innerHTML = '';
       return;
     }
-    const maxVisible = 6;
-    const visibleFiles = files.slice(0, maxVisible);
     fileList.innerHTML = [
-      '<div class="convert-file-list-title">已选择文件</div>',
+      `<div class="convert-file-list-title"><span>已选择 ${files.length} 个文件</span><button type="button" data-clear-files>清空</button></div>`,
       '<div class="convert-file-chips">',
-      ...visibleFiles.map((file) => `<span class="convert-file-chip" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>`),
-      files.length > maxVisible ? `<span class="convert-file-chip muted">+${files.length - maxVisible} 个更多</span>` : '',
+      ...files.map((file, index) => {
+        const name = file.streamdockRelativePath || file.webkitRelativePath || file.name;
+        return `<span class="convert-file-chip" title="${escapeHtml(name)}"><span>${index + 1}. ${escapeHtml(name)}</span><button type="button" data-remove-file="${index}" aria-label="移除 ${escapeHtml(name)}">×</button></span>`;
+      }),
       '</div>',
     ].join('');
+  }
+
+  function fileIdentity(file) {
+    return [file.streamdockRelativePath || file.webkitRelativePath || file.name, file.size, file.lastModified].join(':');
+  }
+
+  function resetSelection() {
+    selectedFiles = [];
+    currentSource = '';
+    currentOptions = [];
+    batchMode = false;
+    folderMode = false;
+    folderName = '';
+    folderEntries = [];
+    folderDirectories = [];
+    probeController?.abort();
+    probeSequence += 1;
+    renderSelectedFiles([]);
+    fileTitle.textContent = '选择或拖入文件';
+    fileMeta.textContent = '可分多次追加同类型文件，并在提交前逐项移除';
+    inputType.value = '';
+    outputType.innerHTML = '<option value="">请先选择文件</option>';
+    if (archivePasswordField) archivePasswordField.hidden = true;
+    setResultWaiting();
+  }
+
+  function configureFolder(entries, directories, name) {
+    folderMode = true;
+    folderName = name || '文件夹';
+    folderEntries = entries;
+    folderDirectories = directories;
+    selectedFiles = entries.map((entry) => {
+      try { Object.defineProperty(entry.file, 'streamdockRelativePath', { value: entry.path, configurable: true }); } catch (_error) {}
+      return entry.file;
+    });
+    batchMode = false;
+    currentSource = 'folder';
+    currentOptions = [
+      { target: 'zip', level: 'stable', verification: 'verified', vendors: [] },
+      { target: 'tar.gz', level: 'stable', verification: 'verified', vendors: [] },
+    ];
+    inputType.value = 'FOLDER';
+    fileTitle.textContent = `已选择文件夹：${folderName}`;
+    fileMeta.textContent = `${selectedFiles.length} 个文件 · ${folderDirectories.length} 个目录（包含空目录）`;
+    renderSelectedFiles(selectedFiles);
+    renderOutputOptions();
+    setLog(['文件夹目录树已读取', `文件：${selectedFiles.length} 个`, `目录：${folderDirectories.length} 个`]);
+    setResultWaiting();
+  }
+
+  async function chooseFolder() {
+    if (!window.showDirectoryPicker) {
+      folderInput?.click();
+      return;
+    }
+    const root = await window.showDirectoryPicker({ mode: 'read' });
+    const entries = [];
+    const directories = [];
+    async function walk(handle, prefix) {
+      for await (const child of handle.values()) {
+        const path = prefix ? `${prefix}/${child.name}` : child.name;
+        if (child.kind === 'directory') {
+          directories.push(path);
+          await walk(child, path);
+        } else {
+          entries.push({ file: await child.getFile(), path });
+        }
+      }
+    }
+    await walk(root, '');
+    configureFolder(entries, directories, root.name);
+  }
+
+  function mergeFiles(current, incoming) {
+    const merged = new Map(current.map((file) => [fileIdentity(file), file]));
+    incoming.forEach((file) => merged.set(fileIdentity(file), file));
+    return Array.from(merged.values());
   }
 
   function inferClientFormat(filename) {
@@ -144,12 +229,17 @@
     };
   }
 
-  async function probeFiles(filesLike) {
+  async function probeFiles(filesLike, { append = false } = {}) {
+    folderMode = false;
+    folderName = '';
+    folderEntries = [];
+    folderDirectories = [];
     const sequence = ++probeSequence;
     probeController?.abort();
     probeController = new AbortController();
     const signal = probeController.signal;
-    selectedFiles = Array.from(filesLike || []).filter(Boolean);
+    const incoming = Array.from(filesLike || []).filter(Boolean);
+    selectedFiles = append ? mergeFiles(selectedFiles, incoming) : incoming;
     batchMode = selectedFiles.length > 1;
     if (!selectedFiles.length) return;
 
@@ -244,8 +334,25 @@
   }
 
   pickButton?.addEventListener('click', () => fileInput?.click());
+  pickFolderButton?.addEventListener('click', () => chooseFolder().catch((error) => {
+    if (error?.name !== 'AbortError') handleProbeError(error);
+  }));
   fileInput?.addEventListener('change', () => {
-    if (fileInput.files?.length) probeFiles(fileInput.files).catch((error) => { if (error?.name !== 'AbortError') handleProbeError(error); });
+    if (fileInput.files?.length) probeFiles(fileInput.files, { append: selectedFiles.length > 0 && !folderMode }).catch((error) => { if (error?.name !== 'AbortError') handleProbeError(error); });
+    fileInput.value = '';
+  });
+  folderInput?.addEventListener('change', () => {
+    const files = Array.from(folderInput.files || []);
+    if (!files.length) return;
+    const firstPath = files[0].webkitRelativePath || files[0].name;
+    const root = firstPath.split('/')[0] || '文件夹';
+    const entries = files.map((file) => {
+      const raw = file.webkitRelativePath || file.name;
+      const path = raw.startsWith(`${root}/`) ? raw.slice(root.length + 1) : raw;
+      return { file, path };
+    });
+    configureFolder(entries, [], root);
+    folderInput.value = '';
   });
   outputType?.addEventListener('change', updateHint);
   window.addEventListener('streamdock:convert-settings-change', () => {
@@ -258,7 +365,41 @@
     event.preventDefault();
     dropZone.classList.remove('dragging');
     const files = event.dataTransfer?.files;
-    if (files?.length) probeFiles(files).catch((error) => { if (error?.name !== 'AbortError') handleProbeError(error); });
+    if (files?.length) probeFiles(files, { append: selectedFiles.length > 0 }).catch((error) => { if (error?.name !== 'AbortError') handleProbeError(error); });
+  });
+
+  fileList?.addEventListener('click', (event) => {
+    const removeButton = event.target.closest('[data-remove-file]');
+    if (removeButton) {
+      const index = Number(removeButton.dataset.removeFile);
+      if (folderMode) {
+        const remainingEntries = folderEntries.filter((_entry, currentIndex) => currentIndex !== index);
+        if (remainingEntries.length) configureFolder(remainingEntries, folderDirectories, folderName);
+        else resetSelection();
+        return;
+      }
+      const remaining = selectedFiles.filter((_file, currentIndex) => currentIndex !== index);
+      if (remaining.length) probeFiles(remaining).catch(handleProbeError);
+      else {
+        probeController?.abort();
+        probeSequence += 1;
+        selectedFiles = [];
+        currentSource = '';
+        currentOptions = [];
+        batchMode = false;
+        fileTitle.textContent = '选择或拖入文件';
+        fileMeta.textContent = '可分多次追加同类型文件，并在提交前逐项移除';
+        inputType.value = '';
+        outputType.innerHTML = '<option value="">请先选择文件</option>';
+        if (archivePasswordField) archivePasswordField.hidden = true;
+        renderSelectedFiles([]);
+        setResultWaiting();
+      }
+      return;
+    }
+    if (event.target.closest('[data-clear-files]')) {
+      resetSelection();
+    }
   });
 
   selectDirButton?.addEventListener('click', async () => {
@@ -289,7 +430,12 @@
       return;
     }
     const form = new FormData();
-    if (batchMode) selectedFiles.forEach((file) => form.append('files', file));
+    if (folderMode) {
+      folderEntries.forEach((entry) => form.append('files', entry.file));
+      form.append('relativePaths', JSON.stringify(folderEntries.map((entry) => entry.path)));
+      form.append('directoryPaths', JSON.stringify(folderDirectories));
+      form.append('folderName', folderName);
+    } else if (batchMode) selectedFiles.forEach((file) => form.append('files', file));
     else form.append('file', selectedFiles[0]);
     form.append('inputType', currentSource);
     form.append('outputType', outputType.value);
@@ -312,7 +458,8 @@
     startButton.disabled = true;
     startButton.textContent = batchMode ? '批量转换中...' : '转换中...';
     try {
-      const response = await fetch(batchMode ? '/api/convert/batch-run' : '/api/convert/run', { method: 'POST', body: form });
+      const endpoint = folderMode ? '/api/convert/folder-run' : batchMode ? '/api/convert/batch-run' : '/api/convert/run';
+      const response = await fetch(endpoint, { method: 'POST', body: form });
       const data = await response.json();
       setLog(data.logs || []);
       if (batchMode && Array.isArray(data.results)) {

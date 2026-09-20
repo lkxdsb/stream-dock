@@ -192,6 +192,21 @@ class ConverterPipelineTests(unittest.TestCase):
         self.assertEqual(comparison['addedLines'], 0)
         self.assertEqual(comparison['removedLines'], 0)
 
+    def test_text_comparison_detects_change_beyond_preview_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before = root / 'before.txt'
+            after = root / 'after.txt'
+            shared = '前缀中文😀' * 3000
+            before.write_text(shared + '\n结尾-A', encoding='utf-8')
+            after.write_text(shared + '\n结尾-B', encoding='utf-8')
+            comparison = build_conversion_comparison('txt', 'txt', before, after)
+
+        self.assertTrue(comparison['previewTruncated'])
+        self.assertTrue(comparison['contentChanged'])
+        self.assertEqual(comparison['diff'], [])
+        self.assertNotEqual(comparison['before']['contentSha256'], comparison['after']['contentSha256'])
+
     def test_image_conversion_preserves_icc_and_reports_lossy_quality(self):
         from PIL import Image
 

@@ -95,8 +95,8 @@
     },
     archive: {
       title: 'Archive routes',
-      text: '压缩包转换、解压与文件夹打包，第一版不处理加密压缩包。',
-      description: '聚焦压缩包解压和重新打包；第一版不处理加密压缩包。',
+      text: '支持常见 ZIP 密码解压；RAR/7z 取决于本地引擎。工作台可直接选择文件夹并打包为 ZIP 或 TAR.GZ。',
+      description: '压缩包密码只用于当前任务且不会保存；文件夹打包保留子目录，支持 File System Access API 时也保留空目录。',
       color: '#8faf9a',
     },
   };
