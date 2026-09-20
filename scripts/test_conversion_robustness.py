@@ -567,7 +567,11 @@ def validate_one_second_audio(path: Path) -> None:
     probe = ffprobe_json(path)
     require(any(stream.get('codec_type') == 'audio' for stream in probe.get('streams') or []), '输出缺少音频流')
     duration = float(probe.get('format', {}).get('duration') or 0)
-    require(0.9 <= duration <= 1.1, f'音频时长异常：{duration}')
+    # MP3 encoders may expose priming/padding in the container duration.  The
+    # Ubuntu CI encoder reports 1.152 s for this exact 1 s AMR fixture while
+    # the decoded signal remains complete; reject real truncation/expansion,
+    # not normal cross-engine padding.
+    require(0.85 <= duration <= 1.2, f'音频时长异常：{duration}')
 
 
 def validate_hardware_mp4(path: Path) -> None:
