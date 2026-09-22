@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+from fetchers.auth_context import scoped_request
 from typing import Callable
 
 from runtime_checks import augmented_path, network_subprocess_environment, resolve_tool_path
@@ -200,7 +201,7 @@ def download_media(
     request_headers = dict(headers)
     if existing:
         request_headers['Range'] = f'bytes={existing}-'
-    response = requests.get(url, headers=request_headers, timeout=60, stream=True)
+    response = scoped_request('get', url, headers=request_headers, timeout=60, stream=True)
     try:
         if response.status_code == 416 and existing:
             content_range = str(response.headers.get('content-range') or '')

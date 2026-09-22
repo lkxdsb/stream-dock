@@ -6,6 +6,7 @@ from urllib.parse import urlparse, urlsplit, urlunsplit
 import requests
 
 from fetchers.browser_runtime import browser_context
+from fetchers.errors import MediaProbeError
 
 if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext
@@ -416,13 +417,19 @@ def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int
             videoSources: [...document.querySelectorAll('video')].map(v => v.currentSrc || v.src).filter(Boolean),
         })"""
     )
+    title = str(page_state.get('title') or page.title() or '')
+    final_url = str(page.url or '')
+    if any(marker in title.lower() for marker in ('captcha', 'security verification', '人机验证', '安全验证', '验证码')):
+        raise MediaProbeError('verification_required', 'browser_page', '平台页面要求交互验证，已停止自动解析')
+    if any(marker in urlparse(final_url).path.lower() for marker in ('/login', '/signin', '/passport')):
+        raise MediaProbeError('authentication_required', 'browser_page', '平台页面要求登录，请配置该平台授权')
 
     return choose_generic_capture(
         candidate_video_url=choose_best_browser_media_url(candidate_video_urls, kind="video"),
         candidate_audio_url=choose_best_browser_media_url(candidate_audio_urls, kind="audio"),
         dom_video_sources=page_state.get("videoSources") or [],
-        final_url=page.url,
-        title=page_state.get("title") or page.title(),
+        final_url=final_url,
+        title=title,
         author=page_state.get("author"),
         cover_url=page_state.get("cover"),
     )
@@ -436,9 +443,16 @@ def capture_media_with_browser(link: str, *, user_agent: str, wait_ms: int = 10_
 
 
 def should_fallback_to_browser(exc: Exception) -> bool:
-    """A clear upstream rejection is not evidence that JavaScript is required."""
-    return not (
-        isinstance(exc, requests.HTTPError)
-        and exc.response is not None
-        and exc.response.status_code in {401, 403, 412, 429}
-    )
+    """Only a page-structure miss is evidence that JavaScript may be required."""
+    if isinstance(exc, (MediaProbeError, requests.RequestException, ValueError)):
+        return False
+    if not isinstance(exc, RuntimeError):
+        return False
+    text = str(exc).lower()
+    return any(marker in text for marker in (
+        'failed to locate', 'failed to extract', 'missing embedded', 'no weibo video stream',
+        'no xiaohongshu video stream', 'no channels video stream',
+        'render data is empty',
+        '分享页结构化数据解析失败',
+        '分享页未返回可用视频地址', 'no media url captured',
+    ))

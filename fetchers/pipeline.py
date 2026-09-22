@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 import requests
+from fetchers.auth_context import scoped_request
 from PIL import Image
 
 from fetchers.adapters.base import BasePlatformAdapter
@@ -104,7 +105,7 @@ def download_sidecar_asset(
     fallback_extension: str,
 ) -> Path:
     headers = {'User-Agent': user_agent, 'Referer': referer}
-    response = requests.get(url, headers=headers, timeout=60, stream=True)
+    response = scoped_request('get', url, headers=headers, timeout=60, stream=True)
     try:
         response.raise_for_status()
         extension = infer_asset_extension(url, response.headers.get('content-type'), fallback_extension)
@@ -164,7 +165,7 @@ def download_subtitle_asset(
     referer: str,
 ) -> tuple[Path, str]:
     headers = {'User-Agent': user_agent, 'Referer': referer}
-    response = requests.get(track.url, headers=headers, timeout=60)
+    response = scoped_request('get', track.url, headers=headers, timeout=60)
     try:
         response.raise_for_status()
         content_type = response.headers.get('content-type')
@@ -260,7 +261,7 @@ def download_image_collection(
             last_error: Exception | None = None
             target: Path | None = None
             for candidate_url in candidate_urls:
-                response = requests.get(candidate_url, headers=headers, timeout=60, stream=True)
+                response = scoped_request('get', candidate_url, headers=headers, timeout=60, stream=True)
                 temp_target = image_dir / f".{index:02d}.download"
                 try:
                     response.raise_for_status()

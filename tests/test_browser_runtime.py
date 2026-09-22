@@ -5,6 +5,7 @@ import requests
 
 from fetchers.browser_runtime import BrowserUnavailableError, browser_capability, browser_context
 from fetchers.adapters.common import should_fallback_to_browser
+from fetchers.errors import MediaProbeError
 from error_catalog import classify_error
 
 
@@ -81,6 +82,8 @@ class BrowserRuntimeTests(unittest.TestCase):
             response.status_code = status
             self.assertFalse(should_fallback_to_browser(requests.HTTPError('upstream', response=response)))
         self.assertTrue(should_fallback_to_browser(RuntimeError('missing embedded data')))
+        self.assertFalse(should_fallback_to_browser(requests.Timeout('timed out')))
+        self.assertFalse(should_fallback_to_browser(RuntimeError('captcha required')))
         self.assertEqual(classify_error('412 Client Error: Precondition Failed')['code'], 'upstream_access_rejected')
 
     def test_failed_javascript_does_not_report_browser_ready(self):
@@ -90,6 +93,16 @@ class BrowserRuntimeTests(unittest.TestCase):
         with patch.dict('os.environ', {'STREAMDOCK_BROWSER_MODE': 'auto'}), patch('fetchers.browser_runtime.browser_context', return_value=nullcontext((context, 'chromium', '1.63'))):
             result = browser_capability(refresh=True)
         self.assertEqual(result['status'], 'error')
+
+    def test_browser_verification_page_stops_before_media_selection(self):
+        from fetchers.adapters.common import _capture_media_from_context
+        context = MagicMock()
+        page = context.new_page.return_value
+        page.url = 'https://weibo.com/captcha'
+        page.evaluate.return_value = {'title': '安全验证', 'videoSources': [], 'author': None, 'cover': None}
+        with self.assertRaises(MediaProbeError) as captured:
+            _capture_media_from_context(context, 'https://weibo.com/example/post', wait_ms=0)
+        self.assertEqual(captured.exception.code, 'verification_required')
 
     def test_health_cache_reuses_result_without_launching_again(self):
         context = MagicMock()

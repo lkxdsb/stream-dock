@@ -260,6 +260,7 @@
               <div class="settings-grid">
                 <div class="field use-field"><label for="mediaAuthPlatform">平台</label><select id="mediaAuthPlatform" class="select native-select"><option value="bilibili">B站</option><option value="douyin">抖音</option><option value="kuaishou">快手</option><option value="weibo">微博</option><option value="xiaohongshu">小红书</option><option value="channels">视频号</option></select></div>
                 <div class="field use-field"><label for="mediaAuthCookie">Cookie</label><input id="mediaAuthCookie" class="select native-input" type="password" autocomplete="off" placeholder="粘贴当前平台 Cookie；提交后立即清空" /></div>
+                <div class="field use-field"><label for="mediaAuthFile">或导入 Cookie 文件</label><input id="mediaAuthFile" type="file" accept=".txt,.json" /><small>仅支持单行 Cookie、Netscape Cookie 文件或不含 localStorage 的 Playwright Cookie 状态；不会上传整个浏览器档案。</small></div>
                 <label class="field use-field"><input id="mediaAuthSave" type="checkbox" /> 在服务器加密保存（需配置独立密钥）</label>
               </div>
               <div class="settings-actions"><button type="button" id="mediaAuthImport">导入/替换授权</button><button type="button" id="mediaAuthVerify">验证授权</button><button type="button" id="mediaAuthDelete">撤销授权</button></div>
@@ -270,6 +271,7 @@
               <textarea id="mediaDiagnosticLinks" class="select native-input" rows="3" placeholder="每行一条当前可访问的分享链接"></textarea>
               <label><input id="mediaDiagnosticFull" type="checkbox" /> 对选定流执行有界完整下载与解码</label>
               <button type="button" id="mediaDiagnosticRun">开始诊断</button>
+              <button type="button" id="mediaDiagnosticCancel" disabled>取消诊断</button>
               <pre id="mediaDiagnosticStatus" role="status"></pre>
             </section>
             <section class="system-health-card" aria-label="本地环境状态">

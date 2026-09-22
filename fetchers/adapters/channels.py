@@ -23,6 +23,7 @@ from fetchers.adapters.common import (
 )
 from fetchers.models import MediaFetchResult, MediaStream
 from fetchers.browser_runtime import BrowserUnavailableError
+from fetchers.errors import MediaProbeError
 
 USER_AGENT = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
@@ -79,8 +80,9 @@ class ChannelsAdapter(BasePlatformAdapter):
                 deep_result = self._fetch_share_media_via_optional_parse_service(normalized_link)
                 if deep_result is not None:
                     return deep_result
-            except Exception:
-                pass
+            except Exception as exc:
+                if not should_fallback_to_browser(exc):
+                    raise
 
         try:
             response = scoped_request('get',
@@ -144,7 +146,9 @@ class ChannelsAdapter(BasePlatformAdapter):
             try:
                 capture = capture_media_with_browser(normalized_link, user_agent=USER_AGENT)
             except RuntimeError as exc:
-                if isinstance(exc, BrowserUnavailableError):
+                if isinstance(exc, (BrowserUnavailableError, MediaProbeError)):
+                    if isinstance(exc, BrowserUnavailableError):
+                        exc.causes.insert(0, 'http_parser: 页面结构化数据未返回可用视频')
                     raise
                 if short_uri:
                     raise RuntimeError(

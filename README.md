@@ -43,14 +43,14 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
 - 支持视频、音频、图文作品、封面和原生字幕等资源；分离的音视频流通过 FFmpeg 合并。
 - 视频文件校验完成后即可结束媒体任务，ASR/OCR 字幕识别在独立后台队列继续执行。
 
-| 平台 | 当前状态 | 主要能力 |
+| 平台 | 设计/代码范围（非本部署验收结论） | 主要能力 |
 | --- | --- | --- |
-| 抖音 | 稳定 | 视频、图文作品、无水印图片集、浏览器登录态 |
-| Bilibili | 稳定 | DASH、progressive `durl`、多档画质、音视频合并、可选 Cookie |
-| 快手 | 稳定 | 视频候选源、HLS 下载与合并 |
-| 小红书 | 部分支持 | 视频、图文识别、浏览器回退 |
-| 微博 | 部分支持 | 视频变体识别、浏览器回退 |
-| 视频号 | 受限 | 分享链接、预览接口、浏览器回退 |
+| 抖音 | 已实现·部署待验证 | 视频、图文作品、无水印图片集、浏览器登录态 |
+| Bilibili | 已实现·部署待验证 | DASH、progressive `durl`、多档画质、音视频合并、可选 Cookie |
+| 快手 | 已实现·部署待验证 | 视频候选源、HLS 下载与合并 |
+| 小红书 | 受限·部署待验证 | 视频、图文识别、浏览器回退 |
+| 微博 | 受限·部署待验证 | 视频变体识别、浏览器回退 |
+| 视频号 | 受限·部署待验证 | 分享链接、预览接口、浏览器回退 |
 | YouTube | 实验性 | 公开视频格式枚举、音视频合并 |
 | TikTok | 实验性 | 公开分享页、候选源与浏览器回退 |
 | X / Twitter | 实验性 | 推文视频变体与码率选择 |
@@ -291,6 +291,7 @@ export STREAMDOCK_API_TOKEN="$(python -c 'import secrets; print(secrets.token_ur
 export STREAMDOCK_TRUSTED_HOSTS=streamdock.example.com
 export STREAMDOCK_ALLOWED_ORIGINS=https://streamdock.example.com
 export STREAMDOCK_SERVER_OUTPUT_ROOT=/srv/streamdock/output
+export STREAMDOCK_BUILD_VERSION="$(git rev-parse --short HEAD)"
 python -m uvicorn app:app --host 0.0.0.0 --port 8002
 ```
 
@@ -307,10 +308,13 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8002
 
 - `STREAMDOCK_BROWSER_MODE=auto`（默认）先使用 Playwright 自带 Chromium，**只有启动失败**才尝试系统 Chrome；也可设为 `chromium`、`chrome` 或 `disabled`。不在请求期间安装浏览器。`STREAMDOCK_BROWSER_LAUNCH_TIMEOUT_MS=10000` 与 `STREAMDOCK_BROWSER_CONCURRENCY=2` 控制启动及并发；缺少浏览器不影响纯 HTTP 解析或文件转换。
 - `/api/health/ready` 只读取浏览器检查缓存，未主动检查时显示 `unchecked`。在页面“重新检查”或调用 `POST /api/health/browser/refresh` 后，服务账号会实际启动浏览器并执行本地 JavaScript/DOM 检查，结果缓存 5 分钟。此检查**不证明**媒体平台可访问。
-- `GET /api/media/auth` 只返回六个平台的配置状态；`PUT/DELETE /api/media/auth/{platform}` 导入或撤销 Cookie；`POST /api/media/auth/{platform}/verify` 目前仅 B站能作登录态专用验证，其余平台返回 `unknown`，不能将导入成功标为有效。服务器导入凭据要求 HTTPS；应用会话令牌与媒体平台授权互不替代。默认仅当前服务进程内存保存授权，重启失效。
+- `GET /api/media/auth` 只返回六个平台的配置状态；`PUT/DELETE /api/media/auth/{platform}` 粘贴导入或撤销 Cookie，`POST /api/media/auth/{platform}/import` 可上传单行 Cookie Header、Netscape Cookie 文件或不含 localStorage 的 Playwright Cookie 状态。文件只接受所选平台域名的根路径 Cookie；不导入完整浏览器档案。`POST /api/media/auth/{platform}/verify` 每平台每分钟至多一次，目前仅 B站能作登录态专用验证，其余平台返回 `unknown`，不能将导入成功标为有效。服务器导入凭据要求 HTTPS；应用会话令牌与媒体平台授权互不替代。默认仅当前服务进程内存保存授权，重启失效。
+- 登录态验证结论默认仅在 60 分钟内作为“最近确认”，超时显示 `unknown`（可用 `STREAMDOCK_AUTH_VERIFICATION_TTL_MINUTES` 调整）；它不是账号持续有效的保证。
+- 桌面模式也不会默认读取日常浏览器档案。若明确要复用本机 B站/抖音的浏览器 Cookie，才设置 `STREAMDOCK_ALLOW_DESKTOP_BROWSER_COOKIES=1`；服务器模式始终忽略该开关，优先使用受控平台授权配置。
 - 若确需重启保留授权，请分别配置 `STREAMDOCK_MEDIA_AUTH_KEY`（Fernet 密钥，可由 `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` 生成）与 `STREAMDOCK_MEDIA_AUTH_STORE`（仅服务账号可读的密文文件），并在导入时选择保存。密钥不要与密文文件放在同一位置。当前授权存储是进程内状态加可选密文快照，**必须以单 worker 运行**；多 worker 共享/并发更新尚未实现。
-- `POST /api/media/diagnostics` 接受 1–10 条链接，`GET /api/media/diagnostics/{id}` 查询当前进程诊断结果；默认只解析并读取至多 1 KiB 媒体前缀。显式传 `fullDownload=true` 时每次至多 2 条，选定的视频/分离音轨下载到临时目录，按单文件默认 64 MiB（`STREAMDOCK_DIAGNOSTIC_MAX_BYTES`，硬上限 256 MiB）、180 秒预算执行 FFprobe、FFmpeg 全程解码与视频抽帧；图文则逐张下载并解码，结束后均清理临时文件。yt-dlp 虚拟地址不在完整下载诊断范围。任务记录仅在进程内、上限 40 条；重启会清空。
+- `POST /api/media/diagnostics` 接受 1–10 条链接，`GET /api/media/diagnostics/{id}` 查询诊断结果；诊断复用任务中心，任务记录只保存输入哈希、授权配置 ID/版本、阶段与结果，不保存原始链接或授权原文。默认只解析并读取至多 1 KiB 媒体前缀；解析子进程受 `STREAMDOCK_MEDIA_PROBE_TIMEOUT_MS=90000` 总预算约束。显式传 `fullDownload=true` 时每次至多 2 条，选定的视频/分离音轨下载到临时目录，按单文件默认 64 MiB（`STREAMDOCK_DIAGNOSTIC_MAX_BYTES`，硬上限 256 MiB）、180 秒预算执行 FFprobe、FFmpeg 全程解码与视频抽帧；图文逐张下载并解码，结束后均清理临时文件。诊断可通过 `DELETE /api/tasks/{id}` 取消；yt-dlp 虚拟地址不在完整下载诊断范围。重启时未完成诊断标记中断，已完成摘要仍可查询。建议部署时设置 `STREAMDOCK_BUILD_VERSION` 为实际提交号，便于结果对照。
 - 服务器上线后，先用原 60 条链接复测三轮，再准备当前可播放正向样本、按平台验证授权与下载质量。`resourceSampled` 只表示前缀可读；必须通过服务器实际交付文件的完整 FFprobe/FFmpeg 解码和内容抽帧，才能标记完整质量通过。浏览器组件恢复不能直接说明六个平台已恢复。
+- 平台直接声明的文件大小会标为 `platform-declared`，不会用于“最小体积”推荐；`range-verified` 才代表有界资源请求核实了总长度。平台页的“近期交付格式可解析”只对应已交付产物的结构检查，不等于全片解码或稳定性通过。
 
 ### 可选依赖
 
@@ -349,7 +353,7 @@ Windows 用户可以通过 WSL 使用该脚本，或自行安装 MinerU 后通�
 - 任务历史默认保存在用户目录下的 `.streamdock/tasks.sqlite3`；首次升级会备份并迁移旧的 `tasks.json`。
 - PDF 临时输入默认保存在 `.streamdock/pdf-inputs/`。
 - 媒体、转换和 PDF 结果保存在页面中选择的本机输出目录。
-- 浏览器登录态来自运行 StreamDock 的当前电脑，不会自动从其他设备同步。
+- 平台登录态仅来自主动导入的 Cookie；桌面模式显式开启 `STREAMDOCK_ALLOW_DESKTOP_BROWSER_COOKIES=1` 时才会读取本机浏览器 Cookie，不会从其他设备自动同步。
 - 不要把 Cookie、下载结果、模型文件或 `.streamdock` 数据提交到 Git。
 
 ## 页面入口

@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import time
 from pathlib import Path
+from threading import Event
 from urllib.parse import urljoin
 
 import requests
@@ -24,14 +26,53 @@ MAX_BYTES = min(256 * 1024 * 1024, max(1024 * 1024, int(os.getenv('STREAMDOCK_DI
 MAX_SECONDS = 180
 
 
-def _hls_source(url: str, headers: dict[str, str]) -> tuple[str, float]:
+def _check_cancel(cancel_event: Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise RuntimeError('媒体诊断已取消')
+
+
+def _run_command(command: list[str], deadline: float, *, cancel_event: Event | None = None,
+                 env: dict[str, str] | None = None) -> None:
+    _check_cancel(cancel_event)
+    with tempfile.TemporaryFile() as error_output:
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=error_output,
+                                   env=env, start_new_session=True)
+        try:
+            while process.poll() is None:
+                _check_cancel(cancel_event)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('媒体完整校验超过诊断时间上限')
+                time.sleep(.2)
+            if process.returncode != 0:
+                error_output.seek(0, os.SEEK_END)
+                error_output.seek(max(0, error_output.tell() - 1024))
+                raise RuntimeError('FFmpeg 诊断失败：' + error_output.read().decode(errors='replace')[-400:])
+        finally:
+            if process.poll() is None:
+                try:
+                    if hasattr(os, 'killpg'):
+                        os.killpg(process.pid, signal.SIGTERM)
+                    else:
+                        process.terminate()
+                except (OSError, ProcessLookupError):
+                    process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+
+
+def _hls_source(url: str, headers: dict[str, str], cancel_event: Event | None = None) -> tuple[str, float]:
     """Resolve at most one master layer and require a finite VOD media playlist."""
     for _ in range(2):
+        _check_cancel(cancel_event)
         with scoped_request('get', url, headers=headers, timeout=(5, 15), stream=True) as response:
             response.raise_for_status()
             chunks = []
             total = 0
             for chunk in response.iter_content(chunk_size=16 * 1024):
+                _check_cancel(cancel_event)
                 total += len(chunk)
                 if total > 512 * 1024:
                     raise RuntimeError('HLS 清单超过诊断上限')
@@ -58,15 +99,14 @@ def _hls_source(url: str, headers: dict[str, str]) -> tuple[str, float]:
     raise RuntimeError('HLS 主清单嵌套过深')
 
 
-def _download(stream: MediaStream, path: Path, headers: dict[str, str], deadline: float) -> float | None:
+def _download(stream: MediaStream, path: Path, headers: dict[str, str], deadline: float,
+              cancel_event: Event | None = None) -> float | None:
     if is_hls_url(stream.url) or stream.container == 'm3u8':
-        media_url, expected_duration = _hls_source(stream.url, headers)
-        remaining = max(1, int(deadline - time.monotonic()))
+        media_url, expected_duration = _hls_source(stream.url, headers, cancel_event)
         command = [resolve_tool_path('ffmpeg'), '-nostdin', '-v', 'error', '-y',
                    '-headers', f"User-Agent: {headers['User-Agent']}\r\nReferer: {headers['Referer']}\r\n",
                    '-i', media_url, '-c', 'copy', '-fs', str(MAX_BYTES), str(path)]
-        subprocess.run(command, check=True, timeout=remaining, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.PIPE, env=network_subprocess_environment())
+        _run_command(command, deadline, cancel_event=cancel_event, env=network_subprocess_environment())
         if not path.is_file() or path.stat().st_size >= MAX_BYTES:
             raise RuntimeError('HLS 完整资源超过诊断字节上限，不能标记为完整通过')
         return expected_duration
@@ -83,6 +123,7 @@ def _download(stream: MediaStream, path: Path, headers: dict[str, str], deadline
         size = 0
         with path.open('wb') as output:
             for chunk in response.iter_content(chunk_size=256 * 1024):
+                _check_cancel(cancel_event)
                 if time.monotonic() >= deadline:
                     raise TimeoutError('完整下载超过诊断时间上限')
                 if not chunk:
@@ -98,13 +139,13 @@ def _download(stream: MediaStream, path: Path, headers: dict[str, str], deadline
     return None
 
 
-def _decode(path: Path, deadline: float) -> None:
-    remaining = max(1, int(deadline - time.monotonic()))
+def _decode(path: Path, deadline: float, cancel_event: Event | None = None) -> None:
     command = [resolve_tool_path('ffmpeg'), '-nostdin', '-v', 'error', '-i', str(path), '-f', 'null', '-']
-    subprocess.run(command, check=True, timeout=remaining, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    _run_command(command, deadline, cancel_event=cancel_event)
 
 
-def validate_full_download(result: MediaFetchResult, *, user_agent: str, referer: str) -> dict[str, object]:
+def validate_full_download(result: MediaFetchResult, *, user_agent: str, referer: str,
+                           cancel_event: Event | None = None) -> dict[str, object]:
     if result.content_type == 'images':
         if not result.image_assets or len(result.image_assets) > 20:
             raise ValueError('图文诊断需要 1–20 张图片')
@@ -114,11 +155,13 @@ def validate_full_download(result: MediaFetchResult, *, user_agent: str, referer
         total = 0
         with tempfile.TemporaryDirectory(prefix='streamdock-image-diagnostic-') as directory:
             for index, asset in enumerate(result.image_assets, start=1):
+                _check_cancel(cancel_event)
                 path = Path(directory) / f'{index:02d}.image'
                 with scoped_request('get', asset.url, headers=headers, timeout=(5, 15), stream=True) as response:
                     response.raise_for_status()
                     with path.open('wb') as output:
                         for chunk in response.iter_content(chunk_size=256 * 1024):
+                            _check_cancel(cancel_event)
                             if time.monotonic() >= deadline:
                                 raise TimeoutError('图文下载超过诊断时间上限')
                             total += len(chunk)
@@ -139,24 +182,22 @@ def validate_full_download(result: MediaFetchResult, *, user_agent: str, referer
     with tempfile.TemporaryDirectory(prefix='streamdock-media-diagnostic-') as directory:
         root = Path(directory)
         video = root / 'video.mp4'
-        expected_video_duration = _download(result.preferred_video, video, headers, deadline)
+        expected_video_duration = _download(result.preferred_video, video, headers, deadline, cancel_event)
         video_info = validate_media_output(video, expected_kind='video')
         if expected_video_duration and abs(float(video_info['durationSeconds']) - expected_video_duration) > max(.5, expected_video_duration * .03):
             raise RuntimeError('HLS 下载时长与完整清单不符，不能标记为整片通过')
-        _decode(video, deadline)
+        _decode(video, deadline, cancel_event)
         audio_info = None
         if result.preferred_audio:
             audio = root / 'audio.m4a'
-            expected_audio_duration = _download(result.preferred_audio, audio, headers, deadline)
+            expected_audio_duration = _download(result.preferred_audio, audio, headers, deadline, cancel_event)
             audio_info = validate_media_output(audio, expected_kind='audio')
             if expected_audio_duration and abs(float(audio_info['durationSeconds']) - expected_audio_duration) > max(.5, expected_audio_duration * .03):
                 raise RuntimeError('HLS 音轨下载时长与完整清单不符')
-            _decode(audio, deadline)
+            _decode(audio, deadline, cancel_event)
         frame = root / 'frame.jpg'
-        subprocess.run([resolve_tool_path('ffmpeg'), '-nostdin', '-v', 'error', '-y', '-ss', '1', '-i', str(video),
-                        '-frames:v', '1', str(frame)], check=True,
-                       timeout=max(1, int(deadline - time.monotonic())),
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        _run_command([resolve_tool_path('ffmpeg'), '-nostdin', '-v', 'error', '-y', '-ss', '1', '-i', str(video),
+                      '-frames:v', '1', str(frame)], deadline, cancel_event=cancel_event)
         if not frame.exists() or frame.stat().st_size < 100:
             raise RuntimeError('视频抽帧结果为空')
         digest = hashlib.sha256()

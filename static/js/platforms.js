@@ -129,7 +129,7 @@
   function runtimeLabel(item) {
     const status = runtimeStatuses[platformKeys[item.name]];
     if (!status) return '待验证';
-    if (status.runtimeStatus === 'verified') return '最近下载已验证';
+    if (status.runtimeStatus === 'verified') return '最近交付·格式可解析';
     if (status.lastProbeStatus === 'success') return '最近解析成功·下载未验证';
     if (status.lastProbeStatus === 'failed') return '最近解析失败';
     return '待验证';
@@ -199,6 +199,7 @@
           ${platformKeys[item.name] ? `<li><span>浏览器能力</span><strong>${escapeHtml(runtimeStatuses[platformKeys[item.name]]?.browserStatus || '未检查')}</strong></li>` : ''}
           ${platformKeys[item.name] ? `<li><span>授权状态</span><strong>${escapeHtml(runtimeStatuses[platformKeys[item.name]]?.authStatus || '未配置')}</strong></li>` : ''}
           ${runtimeStatuses[platformKeys[item.name]]?.lastProbeAt ? `<li><span>最近解析</span><strong>${escapeHtml(new Date(runtimeStatuses[platformKeys[item.name]].lastProbeAt).toLocaleString('zh-CN'))} · ${escapeHtml(runtimeStatuses[platformKeys[item.name]].lastProbeStatus)}</strong></li>` : ''}
+          ${runtimeStatuses[platformKeys[item.name]]?.lastFullDownloadValidated != null ? `<li><span>选定流完整校验</span><strong>${runtimeStatuses[platformKeys[item.name]].lastFullDownloadValidated ? '通过' : '未通过'} · ${escapeHtml(new Date(runtimeStatuses[platformKeys[item.name]].lastFullDownloadAt).toLocaleString('zh-CN'))}</strong></li>` : ''}
           ${runtimeStatuses[platformKeys[item.name]]?.lastCheckedAt ? `<li><span>最近运行</span><strong>${escapeHtml(new Date(runtimeStatuses[platformKeys[item.name]].lastCheckedAt).toLocaleString('zh-CN'))}</strong></li>` : ''}
           <li><span>限制说明</span><strong>${escapeHtml(item.limit)}</strong></li>
         </ul>

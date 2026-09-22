@@ -50,4 +50,9 @@ def normalize_share_url(raw: str) -> str:
         if not re.fullmatch(r'1034:\d+', fid):
             raise ValueError('Unsupported Weibo video link variant: missing fid')
         return f'https://weibo.com/tv/show/{fid}'
+    if host == 'm.weibo.cn':
+        parsed = urlsplit(url)
+        detail = re.fullmatch(r'/detail/([A-Za-z0-9]+)', parsed.path.rstrip('/'))
+        if detail:
+            return f'https://m.weibo.cn/status/{detail.group(1)}' + (f'?{parsed.query}' if parsed.query else '')
     return url

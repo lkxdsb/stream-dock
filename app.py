@@ -12,9 +12,9 @@ import tempfile
 import zipfile
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
-from threading import Lock
+from threading import Event, Lock
 from threading import Thread
 from time import monotonic, sleep
 from contextlib import asynccontextmanager, contextmanager
@@ -37,11 +37,11 @@ from converters.executor import convert_file_with_timeout
 from converters.registry import find_capability, infer_input_format, list_capabilities, normalize_format, targets_for_source
 from converters.contracts import release_status
 from converters.sniff import validate_declared_format
-from error_catalog import classify_error
+from error_catalog import classify_error, classify_probe_exception
 from fetchers.adapters.bilibili import USER_AGENT as BILIBILI_USER_AGENT, reset_manual_cookie_overrides, set_manual_cookie_overrides
 from fetchers.models import ImageAsset, MediaFetchResult, MediaStream, SubtitleTrack
 from fetchers.errors import MediaProbeError
-from fetchers.auth_context import PLATFORM_DOMAINS, auth_store, use_auth, scoped_request
+from fetchers.auth_context import PLATFORM_DOMAINS, auth_store, parse_cookie_file, use_auth, scoped_request
 from fetchers.pipeline import available_output_path, generate_metadata_subtitle_file, probe_media
 from fetchers.subtitle_asr import asr_available, generate_asr_subtitle_file
 from fetchers.subtitle_ocr import generate_ocr_subtitle_file, ocr_available
@@ -299,6 +299,8 @@ class MediaDiagnosticsRequest(BaseModel):
 _diagnostic_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='streamdock-media-diagnostic')
 _diagnostic_lock = Lock()
 _diagnostic_runs: dict[str, dict[str, object]] = {}
+_diagnostic_cancels: dict[str, Event] = {}
+_diagnostic_futures: dict[str, object] = {}
 
 
 def media_auth_profile(link: str, profile_id: str | None = None, version: int | None = None):
@@ -459,18 +461,20 @@ def probe_stream_http_info(url: str, *, headers: dict[str, str] | None = None, t
 
 
 def enrich_serialized_streams(streams: list[dict[str, object]], preferred_url: str | None,
-                              headers: dict[str, str] | None = None) -> list[dict[str, object]]:
+                              headers: dict[str, str] | None = None, deadline: float | None = None) -> list[dict[str, object]]:
     enriched: list[dict[str, object]] = []
     for index, stream in enumerate(streams):
         item = dict(stream)
         should_probe = (
             bool(item.get('url'))
-            and not item.get('filesize')
             and not item.get('isHls')
             and (item.get('url') == preferred_url or index < 3)
         )
+        if deadline is not None and deadline - monotonic() < .25:
+            should_probe = False
         if should_probe:
-            http_info = probe_stream_http_info(str(item.get('url')), headers=headers)
+            timeout_seconds = min(4.0, max(.25, deadline - monotonic())) if deadline is not None else 4.0
+            http_info = probe_stream_http_info(str(item.get('url')), headers=headers, timeout_seconds=timeout_seconds)
             item['resourceStatus'] = http_info.get('resourceStatus', 'unverified')
             size = http_info.get('contentLength')
             if item['resourceStatus'] == 'sampled' and size:
@@ -483,6 +487,9 @@ def enrich_serialized_streams(streams: list[dict[str, object]], preferred_url: s
                 item['contentType'] = http_info.get('contentType')
             if http_info.get('finalHost'):
                 item['finalHost'] = http_info.get('finalHost')
+        elif item.get('filesize') and not item.get('resourceStatus'):
+            item['resourceStatus'] = 'declared'
+            item['sizeSource'] = 'platform-declared'
         enriched.append(item)
     return enriched
 
@@ -666,10 +673,9 @@ def build_probe_summary(result: MediaFetchResult) -> dict[str, object]:
     }
 
 
-def serialize_probe_result(result: MediaFetchResult) -> dict[str, object]:
+def serialize_probe_result(result: MediaFetchResult, *, deadline: float | None = None) -> dict[str, object]:
     from fetchers.registry import get_registered_adapters
     adapter = next((item for item in get_registered_adapters() if item.platform_name == result.platform), None)
-    ranked = recommendations(result.video_streams)
     preferred_url = result.preferred_video.url if result.preferred_video else None
     serialized_video_streams = enrich_serialized_streams(
         [serialize_stream(stream) for stream in result.video_streams],
@@ -678,8 +684,14 @@ def serialize_probe_result(result: MediaFetchResult) -> dict[str, object]:
             'User-Agent': getattr(adapter, 'download_user_agent', None) or 'Mozilla/5.0',
             'Referer': getattr(adapter, 'download_referer', None) or result.source_url,
         },
+        deadline=deadline,
     )
     stream_by_url = {str(stream.get('url')): stream for stream in serialized_video_streams if stream.get('url')}
+    ranked = recommendations([
+        replace(stream, filesize=(stream_by_url.get(stream.url) or {}).get('filesize')
+                if (stream_by_url.get(stream.url) or {}).get('resourceStatus') == 'sampled' else None)
+        for stream in result.video_streams
+    ])
 
     def recommendation(strategy: str) -> dict[str, object] | None:
         item = ranked[strategy]
@@ -703,9 +715,15 @@ def serialize_probe_result(result: MediaFetchResult) -> dict[str, object]:
             probe_summary['downloadHint'] = '当前推荐流返回错误或非媒体内容，请更换候选流或稍后重试'
         else:
             probe_summary['downloadHint'] = '资源尚未核实；解析成功不代表文件可下载'
-        if preferred_stream.get('filesize') and not probe_summary.get('bestFilesize'):
+        if preferred_stream.get('resourceStatus') in {'sampled', 'declared'}:
             probe_summary['bestFilesize'] = preferred_stream.get('filesize')
             probe_summary['bestFilesizeLabel'] = preferred_stream.get('filesizeLabel')
+            probe_summary['sizeSource'] = ('range-verified' if preferred_stream.get('resourceStatus') == 'sampled'
+                                           else 'platform-declared')
+        else:
+            probe_summary['bestFilesize'] = None
+            probe_summary['bestFilesizeLabel'] = None
+            probe_summary['sizeSource'] = 'unknown'
 
     return {
         'success': True,
@@ -1370,15 +1388,16 @@ def platform_status():
     registered = {'douyin', 'kuaishou', 'bilibili', 'xiaohongshu', 'weibo', 'channels', 'youtube', 'tiktok', 'twitter_x'}
     latest: dict[str, dict[str, object]] = {}
     latest_probe: dict[str, dict[str, object]] = {}
-    with _diagnostic_lock:
-        diagnostics = list(_diagnostic_runs.values())
-    for run in reversed(diagnostics):
+    diagnostics = [task.result or {} for task in task_store.list(TaskKind.DIAGNOSTIC)]
+    for run in diagnostics:
         for result in reversed(run.get('results') or []):
             platform = str(result.get('platform') or '')
             if platform and platform not in latest_probe:
                 latest_probe[platform] = {'lastProbeStatus': ('success' if result.get('success') else 'failed') if fresh(result.get('checkedAt')) else 'stale',
                                           'lastProbeAt': result.get('checkedAt'),
-                                          'lastResourceStatus': result.get('resourceStatus')}
+                                          'lastResourceStatus': result.get('resourceStatus'),
+                                          'lastFullDownloadValidated': result.get('downloadValidated') if fresh(result.get('checkedAt')) else None,
+                                          'lastFullDownloadAt': result.get('checkedAt') if result.get('downloadValidated') is not None else None}
     for task in task_store.list(TaskKind.MEDIA):
         result = task.result or {}
         platform = str(result.get('platform') or task.payload.get('platform') or '').strip()
@@ -2333,6 +2352,25 @@ def cancel_task(task_id: str):
             remove_task_workspace(task_id)
             _cleanup_convert_preview(task_id)
         return JSONResponse({'success': True, 'deleted': True, 'task': deleted.to_dict() if deleted else None})
+    if task.kind == TaskKind.DIAGNOSTIC:
+        with _diagnostic_lock:
+            cancel_event = _diagnostic_cancels.get(task_id)
+            future = _diagnostic_futures.get(task_id)
+            if task_id in _diagnostic_runs:
+                _diagnostic_runs[task_id]['status'] = 'cancelled'
+                _diagnostic_runs[task_id]['completedAt'] = datetime.now(timezone.utc).isoformat()
+            snapshot = dict(_diagnostic_runs.get(task_id) or {})
+        if cancel_event:
+            cancel_event.set()
+        cancelled_before_start = bool(future and future.cancel())
+        if cancelled_before_start:
+            with _diagnostic_lock:
+                _diagnostic_cancels.pop(task_id, None)
+                _diagnostic_futures.pop(task_id, None)
+        task_store.update(task_id, status=TaskStatus.CANCELLED, stage='已取消', error='媒体诊断已取消',
+                          result=snapshot or None)
+        current = task_store.get(task_id)
+        return JSONResponse({'success': True, 'task': current.to_dict() if current else None})
     if task.kind == TaskKind.PDF:
         if not pdf_queue.cancel(task_id):
             return JSONResponse({'success': False, 'error': '任务已结束，无需取消'}, status_code=409)
@@ -2490,22 +2528,24 @@ def reveal_output_file(path: str = Form(...)):
 
 @app.post('/api/probe')
 def probe(payload: ProbeRequest):
+    started = monotonic()
+    budget_seconds = max(5, min(180, int(os.getenv('STREAMDOCK_MEDIA_PROBE_TIMEOUT_MS', '90000')) / 1000))
+    deadline = started + budget_seconds
     try:
         if deployment_security().server and (payload.bilibiliCookie or payload.bilibiliCookieFile):
             raise ValueError('服务器模式请使用平台授权配置，不接受探测请求中的原始 Cookie 或文件路径')
         profile = media_auth_profile(payload.link, payload.authProfileId)
         if deployment_security().server:
             from fetchers.probe_worker import probe_with_budget
-            result = probe_with_budget(payload.link, profile)
+            remaining_ms = int((deadline - monotonic()) * 1000)
+            if remaining_ms <= 0:
+                raise MediaProbeError('network_timeout', 'probe_budget', '媒体解析超过总时间预算', retryable=True)
+            result = probe_with_budget(payload.link, profile, timeout_ms=remaining_ms)
         else:
             with use_auth(profile), bilibili_cookie_env(payload.bilibiliCookie, payload.bilibiliCookieFile):
                 result = probe_media(payload.link)
     except Exception as exc:
-        error_info = classify_error(str(exc), fallback='链接探测失败')
-        if isinstance(exc, MediaProbeError):
-            error_info.update(code=exc.code, retryable=exc.retryable, stage=exc.stage)
-        else:
-            error_info['stage'] = 'http' if isinstance(exc, requests.HTTPError) else 'parser'
+        error_info = classify_probe_exception(exc)
         trace_id = uuid4().hex
         return JSONResponse(
             {
@@ -2522,7 +2562,9 @@ def probe(payload: ProbeRequest):
     # Resource sampling happens during serialization, after the parser's own
     # auth context has ended. Keep the same scoped profile for that request.
     with use_auth(profile):
-        return JSONResponse(serialize_probe_result(result))
+        serialized = (serialize_probe_result(result, deadline=deadline) if deployment_security().server
+                      else serialize_probe_result(result))
+        return JSONResponse(serialized)
 
 
 @app.post('/api/media/probe')
@@ -2547,6 +2589,21 @@ def put_media_auth(platform: str, payload: MediaAuthRequest, request: Request):
     return JSONResponse({'success': True, 'profile': profile.public()})
 
 
+@app.post('/api/media/auth/{platform}/import')
+async def import_media_auth_file(platform: str, request: Request, file: UploadFile = File(...), save: bool = Form(False)):
+    if deployment_security().server and request.url.scheme != 'https':
+        return JSONResponse({'success': False, 'error': '服务器导入平台凭据必须使用 HTTPS'}, status_code=403)
+    try:
+        contents = await file.read(32 * 1024 + 1)
+        cookie, scopes = parse_cookie_file(platform, contents, with_scopes=True)
+        profile = auth_store.put(platform, cookie, save=save, cookie_scopes=scopes)
+    except (ValueError, RuntimeError) as exc:
+        return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
+    finally:
+        await file.close()
+    return JSONResponse({'success': True, 'profile': profile.public()})
+
+
 @app.delete('/api/media/auth/{platform}')
 def delete_media_auth(platform: str):
     try:
@@ -2563,6 +2620,9 @@ def verify_media_auth(platform: str):
     profile = auth_store.get(platform)
     if profile is None:
         return JSONResponse({'success': False, 'status': 'not_configured'}, status_code=409)
+    if auth_store.verification_recent(platform):
+        return JSONResponse({'success': False, 'status': 'rate_limited', 'error': '授权验证每平台每分钟最多一次'},
+                            status_code=429, headers={'Retry-After': '60'})
     if platform != 'bilibili':
         auth_store.set_verification(platform, profile.version, 'unknown')
         return JSONResponse({'success': True, 'status': 'unknown', 'profileId': profile.id,
@@ -2583,26 +2643,31 @@ def verify_media_auth(platform: str):
                              'message': '网络或接口检查未完成，不能据此判定授权过期'})
 
 
-def _run_media_diagnostic(run_id: str, links: list[str], full_download: bool) -> None:
+def _run_media_diagnostic(run_id: str, links: list[str], full_download: bool,
+                          auth_refs: list[tuple[str, int] | None] | None = None) -> None:
     from fetchers.registry import get_registered_adapters
     from fetchers.pipeline import detect_platform_adapter
+    from fetchers.probe_worker import probe_with_budget
     rows: list[dict[str, object]] = []
     with _diagnostic_lock:
         _diagnostic_runs[run_id]['status'] = 'running'
-    for link in links:
+        cancel_event = _diagnostic_cancels[run_id]
+    task_store.update(run_id, status=TaskStatus.RUNNING, stage='解析诊断中')
+    for index, link in enumerate(links):
+        if cancel_event.is_set():
+            break
         started = monotonic()
         row: dict[str, object] = {'inputId': hashlib.sha256(link.encode()).hexdigest()[:16]}
         try:
             row['platform'] = detect_platform_adapter(link).platform_name
-            profile = media_auth_profile(link)
-            if deployment_security().server:
-                from fetchers.probe_worker import probe_with_budget
-                result = probe_with_budget(link, profile)
-            else:
-                with use_auth(profile):
-                    result = probe_media(link)
+            reference = auth_refs[index] if auth_refs is not None else None
+            profile = (media_auth_profile(link, reference[0], reference[1]) if reference
+                       else None if auth_refs is not None else media_auth_profile(link))
+            row['authVersion'] = profile.version if profile else None
+            result = probe_with_budget(link, profile, cancel_event=cancel_event)
+            if cancel_event.is_set():
+                break
             row.update(success=True, platform=result.platform,
-                       authVersion=profile.version if profile else None,
                        browserRuntime=result.metadata.get('browser_runtime'),
                        strategy=safe_metadata(result.metadata).get('resolve_method') or safe_metadata(result.metadata).get('capture_strategy'))
             adapter = next((a for a in get_registered_adapters() if a.platform_name == result.platform), None)
@@ -2619,7 +2684,8 @@ def _run_media_diagnostic(run_id: str, links: list[str], full_download: bool) ->
                         try:
                             row['downloadValidation'] = validate_full_download(result,
                                 user_agent=getattr(adapter, 'download_user_agent', None) or 'Mozilla/5.0',
-                                referer=getattr(adapter, 'download_referer', None) or result.source_url)
+                                referer=getattr(adapter, 'download_referer', None) or result.source_url,
+                                cancel_event=cancel_event)
                             row['downloadValidated'] = True
                         except Exception as exc:
                             row['downloadValidated'] = False
@@ -2631,33 +2697,60 @@ def _run_media_diagnostic(run_id: str, links: list[str], full_download: bool) ->
                         try:
                             row['downloadValidation'] = validate_full_download(result,
                                 user_agent=getattr(adapter, 'download_user_agent', None) or 'Mozilla/5.0',
-                                referer=getattr(adapter, 'download_referer', None) or result.source_url)
+                                referer=getattr(adapter, 'download_referer', None) or result.source_url,
+                                cancel_event=cancel_event)
                             row['downloadValidated'] = True
                         except Exception as exc:
                             row['downloadValidated'] = False
                             row['downloadError'] = classify_error(str(exc), fallback='图文集合校验失败')['message']
         except Exception as exc:
-            error = classify_error(str(exc), fallback='诊断未完成')
-            row.update(success=False, errorCode=error['code'], message=error['message'])
+            error = classify_probe_exception(exc)
+            row.update(success=False, errorCode=error['code'], errorStage=error['stage'],
+                       traceId=uuid4().hex, message=error['message'])
+            if error.get('causes'):
+                row['stageCauses'] = error['causes']
         row['elapsedMs'] = round((monotonic() - started) * 1000)
         row['checkedAt'] = datetime.now(timezone.utc).isoformat()
         rows.append(row)
         with _diagnostic_lock:
             _diagnostic_runs[run_id]['results'] = list(rows)
+            snapshot = dict(_diagnostic_runs[run_id])
+        if not cancel_event.is_set():
+            task_store.update(run_id, result=snapshot, progress=100 * len(rows) / len(links),
+                              stage=f'已诊断 {len(rows)}/{len(links)} 条')
     with _diagnostic_lock:
-        _diagnostic_runs[run_id]['status'] = 'completed'
+        _diagnostic_runs[run_id]['status'] = 'cancelled' if cancel_event.is_set() else 'completed'
         _diagnostic_runs[run_id]['completedAt'] = datetime.now(timezone.utc).isoformat()
+        snapshot = dict(_diagnostic_runs[run_id])
+        _diagnostic_futures.pop(run_id, None)
+        _diagnostic_cancels.pop(run_id, None)
+    task_store.update(run_id, status=TaskStatus.CANCELLED if cancel_event.is_set() else TaskStatus.COMPLETED,
+                      stage='已取消' if cancel_event.is_set() else '诊断完成', result=snapshot,
+                      progress=100 if not cancel_event.is_set() else None)
 
 
 @app.post('/api/media/diagnostics')
 def create_media_diagnostics(payload: MediaDiagnosticsRequest):
     if payload.fullDownload and len(payload.links) > 2:
         return JSONResponse({'success': False, 'error': '完整下载诊断每次最多 2 条链接'}, status_code=400)
+    auth_refs: list[tuple[str, int] | None] = []
+    for link in payload.links:
+        try:
+            profile = media_auth_profile(link)
+        except ValueError:
+            profile = None
+        auth_refs.append((profile.id, profile.version) if profile else None)
     with _diagnostic_lock:
         active = sum(row['status'] in {'queued', 'running'} for row in _diagnostic_runs.values())
         if active >= 4:
             return JSONResponse({'success': False, 'error': '诊断队列已满'}, status_code=429)
-        run_id = uuid4().hex
+        task = task_store.create(TaskKind.DIAGNOSTIC, '媒体解析诊断', {
+            'inputIds': [hashlib.sha256(link.encode()).hexdigest()[:16] for link in payload.links],
+            'linkCount': len(payload.links), 'fullDownload': payload.fullDownload,
+            'authRefs': [{'profileId': ref[0], 'version': ref[1]} if ref else None for ref in auth_refs],
+        })
+        run_id = task.id
+        _diagnostic_cancels[run_id] = Event()
         _diagnostic_runs[run_id] = {'id': run_id, 'status': 'queued', 'createdAt': datetime.now(timezone.utc).isoformat(),
                                     'results': [], 'linkCount': len(payload.links), 'fullDownload': payload.fullDownload,
                                     'buildVersion': os.getenv('STREAMDOCK_BUILD_VERSION', 'unknown'),
@@ -2671,7 +2764,10 @@ def create_media_diagnostics(payload: MediaDiagnosticsRequest):
             if oldest is None:
                 break
             _diagnostic_runs.pop(oldest)
-    _diagnostic_executor.submit(_run_media_diagnostic, run_id, payload.links, payload.fullDownload)
+    future = _diagnostic_executor.submit(_run_media_diagnostic, run_id, payload.links, payload.fullDownload, auth_refs)
+    with _diagnostic_lock:
+        if not future.done():
+            _diagnostic_futures[run_id] = future
     return JSONResponse({'success': True, 'diagnostic': {'id': run_id, 'status': 'queued'}}, status_code=202)
 
 
@@ -2679,9 +2775,16 @@ def create_media_diagnostics(payload: MediaDiagnosticsRequest):
 def get_media_diagnostics(run_id: str):
     with _diagnostic_lock:
         row = _diagnostic_runs.get(run_id)
-        if row is None:
+        snapshot = dict(row) if row else None
+    if snapshot is None:
+        task = task_store.get(run_id)
+        if task is None or task.kind != TaskKind.DIAGNOSTIC:
             return JSONResponse({'success': False, 'error': '诊断任务不存在'}, status_code=404)
-        return JSONResponse({'success': True, 'diagnostic': dict(row)})
+        snapshot = dict(task.result or {'id': run_id, 'status': task.status.value,
+                                        'results': [], 'linkCount': task.payload.get('linkCount')})
+        if task.status in {TaskStatus.FAILED, TaskStatus.CANCELLED} and snapshot.get('status') in {'queued', 'running'}:
+            snapshot.update(status=task.status.value, error=task.error)
+    return JSONResponse({'success': True, 'diagnostic': snapshot})
 
 
 

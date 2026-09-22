@@ -30,6 +30,7 @@ class TaskKind(str, Enum):
     MEDIA = 'media'
     PDF = 'pdf'
     WEB_ARCHIVE = 'web_archive'
+    DIAGNOSTIC = 'diagnostic'
 
 
 class TaskStatus(str, Enum):

@@ -1114,7 +1114,12 @@ class ApiResponseShapeTests(unittest.IsolatedAsyncioTestCase):
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
-            with patch('app.probe_media', return_value=fake_result):
+            def sampled_size(url, **_kwargs):
+                size = (64 if '1080' in url else 32) * 1024 * 1024
+                return {'resourceStatus': 'sampled', 'contentLength': size,
+                        'contentLengthLabel': f'{size // (1024 * 1024)}MB'}
+            with patch('app.probe_media', return_value=fake_result), \
+                 patch('app.probe_stream_http_info', side_effect=sampled_size):
                 response = await client.post('/api/probe', json={'link': 'https://v.douyin.com/demo/'})
 
         data = response.json()

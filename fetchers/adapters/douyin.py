@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any, TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
@@ -8,13 +9,14 @@ from urllib.parse import parse_qs, urlparse
 import browser_cookie3
 import requests
 from fetchers.browser_runtime import browser_context, BrowserUnavailableError
+from fetchers.errors import MediaProbeError
 from fetchers.auth_context import current_auth, scoped_request
 
 if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext
 
 from fetchers.adapters.base import BasePlatformAdapter
-from fetchers.adapters.common import collect_subtitle_tracks_from_payload, extract_balanced_json_after, get_url_host, host_matches
+from fetchers.adapters.common import collect_subtitle_tracks_from_payload, extract_balanced_json_after, get_url_host, host_matches, should_fallback_to_browser
 from fetchers.models import ImageAsset, MediaFetchResult, MediaStream
 
 URL_PATTERN = re.compile(r"https?://[^\s]+")
@@ -165,6 +167,8 @@ def fetch_share_page_detail(link: str) -> dict[str, Any]:
                     return detail
         except Exception as exc:
             last_error = exc
+            if isinstance(exc, requests.HTTPError) and exc.response is not None and exc.response.status_code in {401, 403, 412, 429}:
+                raise
             continue
     raise RuntimeError(f"分享页结构化数据解析失败：{last_error}")
 
@@ -352,6 +356,10 @@ def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int
     )
     final_url = page.url
     title = page.title()
+    if any(marker in str(title).lower() for marker in ('captcha', 'security verification', '人机验证', '安全验证', '验证码')):
+        raise MediaProbeError('verification_required', 'browser_page', '抖音页面要求交互验证，已停止自动解析')
+    if any(marker in urlparse(str(final_url)).path.lower() for marker in ('/login', '/signin', '/passport')):
+        raise MediaProbeError('authentication_required', 'browser_page', '抖音页面要求登录，请配置平台授权')
     dom_video_sources = [item.get("src") for item in video_sources if item.get("src")]
     return choose_media_capture(
         candidate_video_url=candidate_video_url,
@@ -399,6 +407,8 @@ def load_chrome_cookies_for_douyin() -> list[dict[str, Any]]:
         return browser_cookies(profile)
     from deployment_security import deployment_security
     if deployment_security().server:
+        return []
+    if os.getenv('STREAMDOCK_ALLOW_DESKTOP_BROWSER_COOKIES', '0') != '1':
         return []
     cookie_jar = browser_cookie3.chrome(domain_name="douyin.com")
     cookies: list[dict[str, Any]] = []
@@ -458,12 +468,17 @@ class DouyinAdapter(BasePlatformAdapter):
             raise_if_generic_home_capture(capture)
             strategy = "share-page"
         except Exception as share_error:
+            if not should_fallback_to_browser(share_error):
+                raise
             try:
                 capture = capture_media_no_login(normalized_link)
                 raise_if_generic_home_capture(capture)
                 strategy = "no-login"
             except Exception as no_login_error:
                 if isinstance(no_login_error, BrowserUnavailableError):
+                    no_login_error.causes.insert(0, f'share_page: {type(share_error).__name__}: {share_error}')
+                    raise
+                if not should_fallback_to_browser(no_login_error) and not isinstance(no_login_error, TimeoutError):
                     raise
                 try:
                     capture = capture_media_with_chrome_cookies(normalized_link)

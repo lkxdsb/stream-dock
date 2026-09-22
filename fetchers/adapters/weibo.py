@@ -18,7 +18,9 @@ from fetchers.adapters.common import (
     should_fallback_to_browser,
 )
 from fetchers.models import MediaFetchResult, MediaStream
+from fetchers.errors import MediaProbeError
 from fetchers.link_normalization import normalize_share_url
+from fetchers.browser_runtime import BrowserUnavailableError
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -52,6 +54,13 @@ class WeiboAdapter(BasePlatformAdapter):
             response.raise_for_status()
             payload = self._extract_render_data(response.text)
             status = payload.get("status") or payload
+            mixed_items = ((status.get('mix_media_info') or {}).get('items') or [])
+            if isinstance(mixed_items, list):
+                video_items = [item for item in mixed_items if isinstance(item, dict) and (
+                    item.get('media_info') or item.get('video') or item.get('type') == 'video')]
+                if len(video_items) > 1:
+                    raise MediaProbeError('multiple_media_unsupported', 'metadata',
+                                          '该微博包含多个视频，当前单文件下载不能代表完整帖子；请使用单个视频分享地址')
             page_info = status.get("page_info") or {}
             media_info = page_info.get("media_info") or {}
 
@@ -85,7 +94,11 @@ class WeiboAdapter(BasePlatformAdapter):
         except Exception as exc:
             if not should_fallback_to_browser(exc):
                 raise
-            capture = capture_media_with_browser(normalized_link, user_agent=USER_AGENT)
+            try:
+                capture = capture_media_with_browser(normalized_link, user_agent=USER_AGENT)
+            except BrowserUnavailableError as browser_error:
+                browser_error.causes.insert(0, f'http_parser: {type(exc).__name__}: {exc}')
+                raise
             return self._build_fallback_result(normalized_link, capture)
 
     def _extract_render_data(self, html: str) -> dict[str, Any]:

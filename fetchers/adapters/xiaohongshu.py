@@ -20,6 +20,7 @@ from fetchers.adapters.common import (
     should_fallback_to_browser,
 )
 from fetchers.models import MediaFetchResult, MediaStream
+from fetchers.browser_runtime import BrowserUnavailableError
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -104,7 +105,11 @@ class XiaohongshuAdapter(BasePlatformAdapter):
         except Exception as exc:
             if not should_fallback_to_browser(exc):
                 raise
-            capture = capture_media_with_browser(normalized_link, user_agent=USER_AGENT)
+            try:
+                capture = capture_media_with_browser(normalized_link, user_agent=USER_AGENT)
+            except BrowserUnavailableError as browser_error:
+                browser_error.causes.insert(0, f'http_parser: {type(exc).__name__}: {exc}')
+                raise
             return self._build_fallback_result(normalized_link, capture)
 
     def _extract_initial_state(self, html: str) -> dict[str, Any]:

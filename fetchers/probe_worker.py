@@ -6,6 +6,7 @@ import multiprocessing
 import os
 import signal
 import threading
+import time
 
 from fetchers.auth_context import AuthProfile, use_auth
 from fetchers.errors import MediaProbeError
@@ -28,31 +29,41 @@ def _probe_child(conn, link: str, profile: AuthProfile | None, cookie: str | Non
         finally:
             reset_manual_cookie_overrides(tokens)
     except MediaProbeError as exc:
-        conn.send(('error', (exc.code, exc.stage, exc.retryable, str(exc))))
+        conn.send(('error', (exc.code, exc.stage, exc.retryable, str(exc), exc.retry_after,
+                             exc.action, exc.causes)))
     except Exception as exc:
-        import requests
-        from error_catalog import classify_error
-        info = classify_error(str(exc), fallback='解析未完成')
-        stage = 'http' if isinstance(exc, requests.HTTPError) else 'normalization' if isinstance(exc, ValueError) else 'parser'
-        conn.send(('error', (info['code'], stage, info['retryable'], info['message'])))
+        from error_catalog import classify_probe_exception
+        info = classify_probe_exception(exc)
+        conn.send(('error', (info['code'], info['stage'], info['retryable'], info['message'],
+                             info.get('retryAfter'), info.get('action'), info.get('causes', []))))
     finally:
         conn.close()
 
 
 def probe_with_budget(link: str, profile: AuthProfile | None = None, *, cookie: str | None = None,
-                      cookie_file: str | None = None, timeout_ms: int | None = None):
+                      cookie_file: str | None = None, timeout_ms: int | None = None,
+                      cancel_event: threading.Event | None = None):
     raw_budget = timeout_ms if timeout_ms is not None else int(os.getenv('STREAMDOCK_MEDIA_PROBE_TIMEOUT_MS', '90000'))
-    budget_seconds = max(5_000, min(raw_budget, 180_000)) / 1000
+    minimum_ms = 250 if timeout_ms is not None else 5_000
+    budget_seconds = max(minimum_ms, min(raw_budget, 180_000)) / 1000
+    started = time.monotonic()
     if not _probe_slots.acquire(timeout=min(10, budget_seconds)):
         raise MediaProbeError('browser_busy', 'probe_queue', '媒体解析并发已满，请稍后重试', retryable=True)
     ctx = multiprocessing.get_context('spawn')
     receive, send = ctx.Pipe(duplex=False)
     process = ctx.Process(target=_probe_child, args=(send, link, profile, cookie, cookie_file))
     try:
+        if time.monotonic() - started >= budget_seconds:
+            raise MediaProbeError('network_timeout', 'probe_budget', '媒体解析超过总时间预算', retryable=True)
         process.start()
         send.close()
-        if not receive.poll(budget_seconds):
-            raise MediaProbeError('network_timeout', 'probe_budget', '媒体解析超过总时间预算', retryable=True)
+        remaining = max(0, budget_seconds - (time.monotonic() - started))
+        while not receive.poll(min(.25, remaining)):
+            if cancel_event is not None and cancel_event.is_set():
+                raise MediaProbeError('task_cancelled', 'probe_budget', '媒体诊断已取消')
+            remaining -= min(.25, remaining)
+            if remaining <= 0:
+                raise MediaProbeError('network_timeout', 'probe_budget', '媒体解析超过总时间预算', retryable=True)
         try:
             state, payload = receive.recv()
         except EOFError as exc:
@@ -60,8 +71,9 @@ def probe_with_budget(link: str, profile: AuthProfile | None = None, *, cookie: 
         process.join(timeout=1)
         if state == 'ok':
             return payload
-        code, stage, retryable, message = payload
-        raise MediaProbeError(code, stage, message, retryable=retryable)
+        code, stage, retryable, message, retry_after, action, causes = payload
+        raise MediaProbeError(code, stage, message, retryable=retryable,
+                              retry_after=retry_after, action=action, causes=causes)
     finally:
         receive.close()
         send.close()

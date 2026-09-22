@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from importlib.metadata import PackageNotFoundError, version as package_version
 import threading
 import time
 from contextlib import contextmanager
@@ -27,7 +28,7 @@ _slots = threading.BoundedSemaphore(max(1, int(os.getenv('STREAMDOCK_BROWSER_CON
 _check_lock = threading.Lock()
 _cached_check: dict[str, Any] | None = None
 _checked_at = 0.0
-_check_mode: tuple[str, str] | None = None
+_check_mode: tuple[str, str, str] | None = None
 CHECK_TTL_SECONDS = 300
 
 
@@ -102,7 +103,11 @@ def browser_capability(*, refresh: bool = False) -> dict[str, Any]:
     except ValueError as exc:
         return {'status': 'error', 'runtime': None, 'version': None, 'detail': str(exc),
                 'checkedAt': datetime.now(timezone.utc).isoformat(), 'durationMs': 0}
-    config_key = (mode, os.getenv('STREAMDOCK_BROWSER_LAUNCH_TIMEOUT_MS', '10000'))
+    try:
+        playwright_version = package_version('playwright')
+    except PackageNotFoundError:
+        playwright_version = 'missing'
+    config_key = (mode, os.getenv('STREAMDOCK_BROWSER_LAUNCH_TIMEOUT_MS', '10000'), playwright_version)
     if not refresh:
         cached = dict(_cached_check) if _cached_check and _check_mode == config_key else None
         if cached is None:

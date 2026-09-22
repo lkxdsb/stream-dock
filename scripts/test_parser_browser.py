@@ -106,8 +106,33 @@ def main() -> None:
             page.locator('#submitButton').click()
             page.wait_for_function('window.__sent !== null')
             assert page.evaluate('window.__sent.videoQuality') == 'sid:hevc'
+            page.goto(f'http://127.0.0.1:{port}/use#settings')
+            page.locator('[data-use-tab="settings"]').click()
+            page.evaluate('''() => { const original = window.fetch.bind(window); window.__diagCancelled = false;
+              window.fetch = (url, options = {}) => {
+                const value = String(url);
+                if (value === '/api/media/diagnostics' && options.method === 'POST')
+                  return Promise.resolve(new Response(JSON.stringify({success:true,diagnostic:{id:'diag-fixture',status:'queued'}}),
+                    {status:202,headers:{'Content-Type':'application/json'}}));
+                if (value === '/api/media/diagnostics/diag-fixture')
+                  return Promise.resolve(new Response(JSON.stringify({success:true,diagnostic:{id:'diag-fixture',
+                    status:window.__diagCancelled?'cancelled':'running',results:[]}}),
+                    {status:200,headers:{'Content-Type':'application/json'}}));
+                if (value === '/api/tasks/diag-fixture' && options.method === 'DELETE') {
+                  window.__diagCancelled = true;
+                  return Promise.resolve(new Response(JSON.stringify({success:true}),
+                    {status:200,headers:{'Content-Type':'application/json'}}));
+                }
+                return original(url, options);
+              };
+            }''')
+            page.locator('#mediaDiagnosticLinks').fill('https://weibo.com/tv/show/1034:12345')
+            page.locator('#mediaDiagnosticRun').click()
+            page.locator('#mediaDiagnosticCancel').click()
+            page.wait_for_function("document.querySelector('#mediaDiagnosticStatus').textContent.includes('cancelled')", timeout=5000)
+            assert page.evaluate('window.__diagCancelled')
             browser.close()
-        print('REAL_BROWSER_PARSER=passed batch-retry=preserved stream-id=hevc')
+        print('REAL_BROWSER_PARSER=passed batch-retry=preserved stream-id=hevc diagnostic-cancel=passed')
     finally:
         server.terminate()
         try:

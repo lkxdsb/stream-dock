@@ -193,6 +193,7 @@
       return;
     }
     const bestSize = summary.bestFilesizeLabel || best.filesizeLabel || formatBytes(best.filesize) || '平台未返回';
+    const sizeHint = summary.sizeSource === 'platform-declared' ? `${bestSize}（平台声明·待核实）` : bestSize;
     const bestBitrate = summary.bestBitrateLabel || bitrateLabel(best.bitrate) || '未知';
     const bestContainer = String(summary.bestContainer || best.container || (best.isHls ? 'm3u8' : '') || '未知').toUpperCase();
     const streamCount = Number(summary.qualityCount ?? data.videoStreams?.length ?? 0);
@@ -202,7 +203,7 @@
     probeFacts.innerHTML = [
       `${streamCount || 0} 路视频流`,
       recommendation ? `最高可达 ${quality?.friendlyResolution?.(recommendation) || `${recommendation.height || ''}P`}` : '自动优选',
-      best.filesize || summary.bestFilesize ? `约 ${bestSize}` : '大小未知',
+      best.filesize || summary.bestFilesize ? `约 ${sizeHint}` : '大小未知',
       data.coverUrl ? '封面可保存' : '无封面',
       subtitleHint,
       data.probeSummary?.delivery === 'hls' ? 'HLS 合流' : '直链资源',
@@ -239,7 +240,9 @@
     if (streamDetails) streamDetails.querySelector('summary').textContent = `高级技术详情（${deduplicated.length} 路独立媒体流）`;
     streamTable.innerHTML = deduplicated.map((stream) => {
       const strategy = recommended.get(stream.streamId); const reason = strategy === 'best_quality' ? '最佳画质' : strategy === 'best_compatibility' ? '最佳兼容' : strategy === 'smallest_size' ? '最小体积' : '';
-      return `<div class="media-stream-row" data-stream-id="${escapeHtml(stream.streamId || '')}"><strong>${escapeHtml(quality?.friendlyResolution?.(stream) || '清晰度未知')}</strong><span>${escapeHtml(stream.width && stream.height ? `${stream.width}×${stream.height}` : '分辨率未知')}</span><span>${escapeHtml((stream.codec || '编码未知').toUpperCase())}</span><span>${escapeHtml(stream.bitrate ? `${Math.round(stream.bitrate / 1000)} kbps` : '码率未知')}</span><span>${escapeHtml(stream.filesizeLabel || formatBytes(stream.filesize) || (stream.isHls ? 'HLS 分片' : '大小未知'))}</span><button type="button" data-select-stream="${escapeHtml(stream.streamId || '')}">${escapeHtml(reason || '使用此流')}</button></div>`;
+      const sizeLabel = stream.filesizeLabel || formatBytes(stream.filesize) || (stream.isHls ? 'HLS 分片' : '大小未知');
+      const displaySize = stream.resourceStatus === 'declared' ? `${sizeLabel}（平台声明·待核实）` : sizeLabel;
+      return `<div class="media-stream-row" data-stream-id="${escapeHtml(stream.streamId || '')}"><strong>${escapeHtml(quality?.friendlyResolution?.(stream) || '清晰度未知')}</strong><span>${escapeHtml(stream.width && stream.height ? `${stream.width}×${stream.height}` : '分辨率未知')}</span><span>${escapeHtml((stream.codec || '编码未知').toUpperCase())}</span><span>${escapeHtml(stream.bitrate ? `${Math.round(stream.bitrate / 1000)} kbps` : '码率未知')}</span><span>${escapeHtml(displaySize)}</span><button type="button" data-select-stream="${escapeHtml(stream.streamId || '')}">${escapeHtml(reason || '使用此流')}</button></div>`;
     }).join('');
     streamTable.querySelectorAll('[data-select-stream]').forEach((button) => button.addEventListener('click', () => {
       const stream = deduplicated.find((item) => item.streamId === button.dataset.selectStream);

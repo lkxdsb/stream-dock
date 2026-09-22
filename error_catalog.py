@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 import re
+import requests
 
 
 def _last_error_line(raw: str, fallback: str) -> str:
@@ -11,6 +12,7 @@ def _last_error_line(raw: str, fallback: str) -> str:
     if ':' in last and any(last.startswith(prefix) for prefix in prefixes):
         last = last.split(':', 1)[1].strip()
     last = re.sub(r'https?://[^\s]+', '[url]', last, flags=re.I)
+    last = re.sub(r'(?i)\b(?:cookie|authorization)\s*:\s*[^\r\n]+', '[credential]', last)
     last = re.sub(r'(?i)(?:SESSDATA|bili_jct|sessionid|cookie)=([^\s;]+)', '[credential]', last)
     return f'{last[:317]}...' if len(last) > 320 else last
 
@@ -46,12 +48,22 @@ def classify_error(raw_error: str | None, *, fallback: str = '操作失败') -> 
         return result('browser_unavailable', 'environment', '浏览器解析不可用', '请管理员检查浏览器运行环境；纯 HTTP 解析仍可使用。', retryable=False, action='health', action_label='检查环境')
     if 'browser concurrency limit reached' in lowered:
         return result('browser_busy', 'environment', '浏览器解析繁忙', '请稍后再试。', retryable=True, action='retry', action_label='稍后重试')
+    if any(marker in lowered for marker in ('captcha', 'verification required', 'challenge required')) or any(marker in raw for marker in ('验证码', '安全验证', '人机验证')):
+        return result('verification_required', 'provider', '平台要求交互验证', '请先在平台完成验证；自动解析不会绕过验证。', retryable=False, action='auth', action_label='检查平台授权')
     if 'unsupported weibo video link variant' in lowered:
         return result('unsupported_link_variant', 'input', '暂不支持的微博视频地址', '该分享地址缺少可识别的视频标识，请提供完整作品链接。', retryable=False, action='reselect', action_label='重新输入链接')
     if '412 client error' in lowered or '403 client error' in lowered:
         return result('upstream_access_rejected', 'provider', '平台拒绝访问', '当前访问条件被平台拒绝，请检查访问环境。', retryable=False, action='logs', action_label='查看诊断')
     if '429 client error' in lowered:
         return result('rate_limited', 'provider', '平台请求受限', '请等待平台限流解除后再试。', retryable=True, action='retry', action_label='稍后重试')
+    if '授权版本已撤销' in raw or '授权配置已失效' in raw or '授权配置已不存在' in raw:
+        return result('authorization_revoked', 'authorization', '任务授权已撤销', '请重新授权后提交任务；不会自动改用新账号。', retryable=False, action='auth', action_label='重新授权')
+    if any(marker in lowered for marker in ('cookie expired', 'session expired', 'authorization expired')) or any(marker in raw for marker in ('登录态已失效', '授权已过期')):
+        return result('authorization_expired', 'authorization', '平台授权已失效', '请更新该平台授权后重新提交。', retryable=False, action='auth', action_label='更新授权')
+    if 'resource invalid' in lowered or '资源返回非媒体内容' in raw:
+        return result('resource_invalid', 'resource', '候选资源无效', '平台返回的候选地址不是可下载媒体，请重新解析或切换候选流。', retryable=True, action='retry', action_label='重新解析')
+    if 'resource unverified' in lowered or '资源尚未核实' in raw:
+        return result('resource_unverified', 'resource', '候选资源待核实', '仅取得媒体元数据，尚未证明候选资源可下载。', retryable=True, action='retry', action_label='重新核实')
     if '取消' in raw or 'cancelled' in lowered or 'canceled' in lowered:
         return result('task_cancelled', 'task', '任务已取消', '任务记录已保留，可以重新提交。', retryable=True, action='retry', action_label='重新提交')
     if 'no space' in lowered or '磁盘空间' in raw or 'disk full' in lowered:
@@ -84,3 +96,54 @@ def classify_error(raw_error: str | None, *, fallback: str = '操作失败') -> 
         return result('network_unavailable', 'network', '网络连接失败', '请检查网络后重新执行；平台临时资源链接也可能已经失效。', retryable=True, action='retry', action_label='重新执行')
 
     return result('unknown_error', 'unknown', '这次没有成功完成', _last_error_line(raw, fallback) or fallback, retryable=True, action='logs', action_label='查看运行记录')
+
+
+def classify_probe_exception(exc: Exception) -> dict[str, Any]:
+    """Classify typed parser failures before legacy message heuristics."""
+    from fetchers.errors import MediaProbeError
+    info = classify_error(str(exc), fallback='链接探测失败')
+    if isinstance(exc, MediaProbeError):
+        info.update(code=exc.code, stage=exc.stage, retryable=exc.retryable)
+        if exc.action:
+            info['action'] = exc.action
+        if exc.retry_after is not None:
+            info['retryAfter'] = exc.retry_after
+        if exc.platform:
+            info['platform'] = exc.platform
+        if exc.causes:
+            info['causes'] = [_last_error_line(cause, '阶段失败') for cause in exc.causes[:3]]
+        return info
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        status = exc.response.status_code
+        mapping = {
+            401: ('authentication_required', 'auth', False, 'auth'),
+            403: ('upstream_access_rejected', 'http', False, 'logs'),
+            404: ('content_unavailable', 'http', False, 'reselect'),
+            412: ('upstream_access_rejected', 'http', False, 'logs'),
+            429: ('rate_limited', 'http', True, 'retry'),
+        }
+        if status in mapping:
+            code, stage, retryable, action = mapping[status]
+            info.update(code=code, stage=stage, retryable=retryable, action=action)
+            info['message'] = {
+                401: '平台明确要求登录；请配置该平台授权后重试。',
+                403: '平台拒绝当前访问；不能仅据此断定授权过期。',
+                404: '平台未找到该内容；请检查分享链接是否仍有效。',
+                412: '平台拒绝当前访问条件；请检查服务器网络及平台限制。',
+                429: '平台请求受限；请按 Retry-After 等待后重试。',
+            }[status]
+            if status == 429:
+                delay = str(exc.response.headers.get('Retry-After') or '')
+                if delay.isdigit():
+                    info['retryAfter'] = min(int(delay), 86400)
+        else:
+            info['stage'] = 'http'
+    elif isinstance(exc, requests.Timeout):
+        info.update(code='network_timeout', stage='network', retryable=True)
+    elif isinstance(exc, requests.ConnectionError):
+        info.update(code='network_unavailable', stage='network', retryable=True)
+    elif isinstance(exc, ValueError):
+        info['stage'] = 'auth' if '授权' in str(exc) else 'normalization'
+    else:
+        info.setdefault('stage', 'parser')
+    return info

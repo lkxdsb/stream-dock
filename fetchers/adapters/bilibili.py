@@ -142,6 +142,8 @@ def load_bilibili_cookies() -> tuple[Any | None, str | None]:
     from deployment_security import deployment_security
     if deployment_security().server:
         return None, None
+    if os.getenv('STREAMDOCK_ALLOW_DESKTOP_BROWSER_COOKIES', '0') != '1':
+        return None, None
 
     browser_loaders = [
         ("chrome", browser_cookie3.chrome),

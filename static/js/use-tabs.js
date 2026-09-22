@@ -15,6 +15,7 @@
   const platformSettingsKey = 'streamdock.platform.settings.v1';
   const mediaAuthPlatform = document.getElementById('mediaAuthPlatform');
   const mediaAuthCookie = document.getElementById('mediaAuthCookie');
+  const mediaAuthFile = document.getElementById('mediaAuthFile');
   const mediaAuthStatus = document.getElementById('mediaAuthStatus');
 
   function clearLegacyCookieCache(key) {
@@ -111,22 +112,33 @@
     const response = await fetch('/api/media/auth');
     const data = await response.json();
     const selected = (data.profiles || []).find((item) => item.platform === mediaAuthPlatform.value);
+    const verification = ({ valid: '最近确认有效', unknown: '有效性未确认', unchecked: '尚未验证' })[selected?.verificationStatus] || selected?.verificationStatus || '尚未验证';
     mediaAuthStatus.textContent = selected?.configured
-      ? `已配置 · 版本 ${selected.version} · ${selected.persisted ? '服务器加密保存' : '仅当前进程内存'} · 授权有效性未检查`
+      ? `已配置 · 版本 ${selected.version} · ${selected.persisted ? '服务器加密保存' : '仅当前进程内存'} · ${verification}`
       : '未配置授权';
   }
   mediaAuthPlatform?.addEventListener('change', () => { refreshMediaAuth().catch(() => { mediaAuthStatus.textContent = '状态查询失败'; }); });
   document.getElementById('mediaAuthImport')?.addEventListener('click', async () => {
     const cookie = mediaAuthCookie?.value || '';
-    if (!cookie) return;
+    const file = mediaAuthFile?.files?.[0];
+    if (!cookie && !file) return;
     try {
-      const response = await fetch(`/api/media/auth/${encodeURIComponent(mediaAuthPlatform.value)}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cookie, save: Boolean(document.getElementById('mediaAuthSave')?.checked) }),
-      });
+      let response;
+      if (file) {
+        const form = new FormData();
+        form.append('file', file);
+        form.append('save', String(Boolean(document.getElementById('mediaAuthSave')?.checked)));
+        response = await fetch(`/api/media/auth/${encodeURIComponent(mediaAuthPlatform.value)}/import`, { method: 'POST', body: form });
+      } else {
+        response = await fetch(`/api/media/auth/${encodeURIComponent(mediaAuthPlatform.value)}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cookie, save: Boolean(document.getElementById('mediaAuthSave')?.checked) }),
+        });
+      }
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '导入失败');
       mediaAuthCookie.value = '';
+      if (mediaAuthFile) mediaAuthFile.value = '';
       await refreshMediaAuth();
     } catch (error) { mediaAuthStatus.textContent = error.message || '导入失败'; }
   });
@@ -141,16 +153,28 @@
   });
   refreshMediaAuth().catch(() => {});
 
-  document.getElementById('mediaDiagnosticRun')?.addEventListener('click', async () => {
+  let activeDiagnosticId = null;
+  const diagnosticCancel = document.getElementById('mediaDiagnosticCancel');
+  const diagnosticRun = document.getElementById('mediaDiagnosticRun');
+  diagnosticCancel?.addEventListener('click', async () => {
+    if (!activeDiagnosticId) return;
+    const response = await fetch(`/api/tasks/${encodeURIComponent(activeDiagnosticId)}`, { method: 'DELETE' });
+    if (!response.ok) { document.getElementById('mediaDiagnosticStatus').textContent = '诊断取消失败'; return; }
+    diagnosticCancel.disabled = true;
+  });
+  diagnosticRun?.addEventListener('click', async () => {
     const output = document.getElementById('mediaDiagnosticStatus');
     const links = (document.getElementById('mediaDiagnosticLinks')?.value || '').split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
     const fullDownload = Boolean(document.getElementById('mediaDiagnosticFull')?.checked);
     if (!links.length || links.length > (fullDownload ? 2 : 10)) { output.textContent = `请输入 1–${fullDownload ? 2 : 10} 条链接`; return; }
+    diagnosticRun.disabled = true;
     try {
       const response = await fetch('/api/media/diagnostics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ links, fullDownload }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '诊断未启动');
       const id = data.diagnostic.id;
+      activeDiagnosticId = id;
+      if (diagnosticCancel) diagnosticCancel.disabled = false;
       output.textContent = `诊断任务 ${id} 已排队`;
       for (let index = 0; index < (fullDownload ? 360 : 180); index += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
@@ -158,8 +182,9 @@
         const state = (await check.json()).diagnostic;
         if (!state) throw new Error('诊断状态丢失');
         output.textContent = JSON.stringify({ status: state.status, results: state.results }, null, 2);
-        if (state.status === 'completed') break;
+        if (['completed', 'cancelled', 'failed'].includes(state.status)) break;
       }
     } catch (error) { output.textContent = error.message || '诊断失败'; }
+    finally { activeDiagnosticId = null; diagnosticRun.disabled = false; if (diagnosticCancel) diagnosticCancel.disabled = true; }
   });
 })();
