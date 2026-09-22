@@ -60,10 +60,11 @@
     qualityPreset.innerHTML = '';
     Object.entries(strategyLabels).forEach(([strategy, label]) => {
       const stream = recommendations?.[strategy]?.stream;
-      if (!stream?.qualityLabel) return;
+      if (!stream?.streamId && !stream?.qualityLabel) return;
       const option = document.createElement('option');
       option.value = strategy;
       option.dataset.qualityLabel = stream.qualityLabel || '';
+      option.dataset.streamId = stream.streamId || '';
       option.textContent = [label, friendlyResolution(stream), stream.codec?.toUpperCase()].filter(Boolean).join(' · ');
       option.selected = strategy === preferredStrategy;
       qualityPreset.appendChild(option);
@@ -72,16 +73,18 @@
   }
 
   function selectedQualityLabel() {
-    return qualityPreset?.selectedOptions?.[0]?.dataset?.qualityLabel || '';
+    const selected = qualityPreset?.selectedOptions?.[0]?.dataset;
+    return selected?.streamId || selected?.qualityLabel || '';
   }
 
   function selectManualStream(stream) {
-    if (!qualityPreset || !stream?.qualityLabel) return;
+    if (!qualityPreset || (!stream?.streamId && !stream?.qualityLabel)) return;
     qualityPreset.querySelectorAll('option[data-manual="true"]').forEach((item) => item.remove());
     const option = document.createElement('option');
     option.value = 'manual';
     option.dataset.manual = 'true';
     option.dataset.qualityLabel = stream.qualityLabel;
+    option.dataset.streamId = stream.streamId || '';
     option.textContent = `手动选择 · ${friendlyResolution(stream)} · ${(stream.codec || '编码未知').toUpperCase()}`;
     qualityPreset.appendChild(option);
     option.selected = true;

@@ -116,7 +116,7 @@
   function updateOverview() {
     const allPlatforms = Object.values(platforms).flat();
     const counts = {
-      stable: allPlatforms.filter((item) => ['稳定', '部分'].includes(item.level)).length,
+      stable: allPlatforms.filter((item) => runtimeStatuses[platformKeys[item.name]]?.runtimeStatus === 'verified').length,
       login: allPlatforms.filter((item) => item.badges.some((badge) => badge.includes('Cookie') || badge.includes('登录态')) || item.name === '登录态增强').length,
       experimental: allPlatforms.filter((item) => ['实验', '能力', '受限'].includes(item.level)).length,
     };
@@ -128,10 +128,11 @@
 
   function runtimeLabel(item) {
     const status = runtimeStatuses[platformKeys[item.name]];
-    if (!status) return item.level;
-    if (status.runtimeStatus === 'verified') return '最近验证';
-    if (status.runtimeStatus === 'failed') return '最近失败';
-    return item.level;
+    if (!status) return '待验证';
+    if (status.runtimeStatus === 'verified') return '最近下载已验证';
+    if (status.lastProbeStatus === 'success') return '最近解析成功·下载未验证';
+    if (status.lastProbeStatus === 'failed') return '最近解析失败';
+    return '待验证';
   }
 
   function escapeHtml(value) {
@@ -177,26 +178,6 @@
   }
 
 
-  function capabilityScores(item) {
-    const badgeText = item.badges.join(' ');
-    const levelScore = item.level === '稳定' ? 92 : item.level === '部分' ? 68 : item.level === '实验' ? 52 : item.level === '受限' ? 38 : 72;
-    const qualityScore = item.quality.includes('最高') || item.quality.includes('多档') ? 86 : item.quality.includes('候选') || item.quality.includes('变体') ? 66 : 52;
-    const loginScore = badgeText.includes('Cookie') || badgeText.includes('登录态') || item.name === '登录态增强' ? 82 : item.limit.includes('登录') || item.limit.includes('权限') ? 46 : 64;
-    const fallbackScore = badgeText.includes('浏览器回退') || item.name === '浏览器回退' ? 88 : item.strategy.includes('回退') ? 72 : 48;
-    return [
-      ['稳定性', levelScore],
-      ['画质能力', qualityScore],
-      ['登录态', loginScore],
-      ['回退链路', fallbackScore],
-    ];
-  }
-
-  function renderCapabilityBars(item) {
-    return `<div class="platform-capability-bars" aria-label="${escapeHtml(item.name)} 能力评分">${capabilityScores(item).map(([label, score]) => `
-      <div class="platform-capability-bar"><span>${escapeHtml(label)}</span><i><b style="width:${score}%"></b></i><em>${score}</em></div>
-    `).join('')}</div>`;
-  }
-
   function renderDetail() {
     const item = (platforms[currentCategory] || [])[currentIndex];
     if (!item) {
@@ -209,12 +190,15 @@
         <div>
           <h3 class="detail-title">${escapeHtml(item.name)}</h3>
           <p class="detail-summary">${escapeHtml(item.summary)}</p>
-          ${renderCapabilityBars(item)}
+          <p>以下是设计支持范围；当前可用性以右侧部署实测状态为准。</p>
         </div>
         <ul class="detail-list">
           <li><span>解析策略</span><strong>${escapeHtml(item.strategy)}</strong></li>
           <li><span>画质策略</span><strong>${escapeHtml(item.quality)}</strong></li>
           <li><span>当前状态</span><strong>${escapeHtml(runtimeLabel(item))}</strong></li>
+          ${platformKeys[item.name] ? `<li><span>浏览器能力</span><strong>${escapeHtml(runtimeStatuses[platformKeys[item.name]]?.browserStatus || '未检查')}</strong></li>` : ''}
+          ${platformKeys[item.name] ? `<li><span>授权状态</span><strong>${escapeHtml(runtimeStatuses[platformKeys[item.name]]?.authStatus || '未配置')}</strong></li>` : ''}
+          ${runtimeStatuses[platformKeys[item.name]]?.lastProbeAt ? `<li><span>最近解析</span><strong>${escapeHtml(new Date(runtimeStatuses[platformKeys[item.name]].lastProbeAt).toLocaleString('zh-CN'))} · ${escapeHtml(runtimeStatuses[platformKeys[item.name]].lastProbeStatus)}</strong></li>` : ''}
           ${runtimeStatuses[platformKeys[item.name]]?.lastCheckedAt ? `<li><span>最近运行</span><strong>${escapeHtml(new Date(runtimeStatuses[platformKeys[item.name]].lastCheckedAt).toLocaleString('zh-CN'))}</strong></li>` : ''}
           <li><span>限制说明</span><strong>${escapeHtml(item.limit)}</strong></li>
         </ul>
@@ -239,6 +223,7 @@
   fetch('/api/platform-status').then((response) => response.json()).then((data) => {
     if (!data.success) return;
     runtimeStatuses = Object.fromEntries((data.platforms || []).map((item) => [item.platform, item]));
+    updateOverview();
     renderMatrix();
     renderDetail();
   }).catch(() => {});

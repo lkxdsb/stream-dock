@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+from pathlib import Path
+from contextlib import nullcontext
+from fetchers.auth_context import AuthProfile, use_auth
 from fetchers.adapters.douyin import (
     USER_AGENT,
     capture_media_no_login,
@@ -94,15 +98,18 @@ def main() -> int:
     if args.bilibiliCookieFile:
         os.environ["BILIBILI_COOKIE_FILE"] = args.bilibiliCookieFile
 
-    result = run_pipeline(
-        raw_link=args.link,
-        export_request=ExportRequest(output_path=args.outputPath, output_type=args.outputType),
-        video_quality=args.videoQuality,
-        save_assets=args.saveAssets,
-        subtitle_strategy=args.subtitleStrategy,
-        defer_generated_subtitles=args.deferGeneratedSubtitles,
-        progress_callback=progress,
-    )
+    auth_path = os.environ.get('STREAMDOCK_MEDIA_AUTH_TASK_FILE')
+    profile = AuthProfile(**json.loads(Path(auth_path).read_text(encoding='utf-8'))) if auth_path else None
+    with use_auth(profile) if profile else nullcontext():
+        result = run_pipeline(
+            raw_link=args.link,
+            export_request=ExportRequest(output_path=args.outputPath, output_type=args.outputType),
+            video_quality=args.videoQuality,
+            save_assets=args.saveAssets,
+            subtitle_strategy=args.subtitleStrategy,
+            defer_generated_subtitles=args.deferGeneratedSubtitles,
+            progress_callback=progress,
+        )
     log(f"platform: {result['platform']}")
     if result.get('title'):
         log(f"title: {result['title']}")

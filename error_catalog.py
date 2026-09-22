@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import re
 
 
 def _last_error_line(raw: str, fallback: str) -> str:
@@ -9,6 +10,8 @@ def _last_error_line(raw: str, fallback: str) -> str:
     prefixes = ('ValueError:', 'RuntimeError:', 'TimeoutError:', 'OSError:')
     if ':' in last and any(last.startswith(prefix) for prefix in prefixes):
         last = last.split(':', 1)[1].strip()
+    last = re.sub(r'https?://[^\s]+', '[url]', last, flags=re.I)
+    last = re.sub(r'(?i)(?:SESSDATA|bili_jct|sessionid|cookie)=([^\s;]+)', '[credential]', last)
     return f'{last[:317]}...' if len(last) > 320 else last
 
 
@@ -39,6 +42,16 @@ def classify_error(raw_error: str | None, *, fallback: str = '操作失败') -> 
 
     if not raw:
         return result('unknown_error', 'unknown', '任务未完成', fallback, retryable=True, action='logs', action_label='查看运行记录')
+    if 'browser unavailable:' in lowered or 'run "playwright install chrome"' in lowered:
+        return result('browser_unavailable', 'environment', '浏览器解析不可用', '请管理员检查浏览器运行环境；纯 HTTP 解析仍可使用。', retryable=False, action='health', action_label='检查环境')
+    if 'browser concurrency limit reached' in lowered:
+        return result('browser_busy', 'environment', '浏览器解析繁忙', '请稍后再试。', retryable=True, action='retry', action_label='稍后重试')
+    if 'unsupported weibo video link variant' in lowered:
+        return result('unsupported_link_variant', 'input', '暂不支持的微博视频地址', '该分享地址缺少可识别的视频标识，请提供完整作品链接。', retryable=False, action='reselect', action_label='重新输入链接')
+    if '412 client error' in lowered or '403 client error' in lowered:
+        return result('upstream_access_rejected', 'provider', '平台拒绝访问', '当前访问条件被平台拒绝，请检查访问环境。', retryable=False, action='logs', action_label='查看诊断')
+    if '429 client error' in lowered:
+        return result('rate_limited', 'provider', '平台请求受限', '请等待平台限流解除后再试。', retryable=True, action='retry', action_label='稍后重试')
     if '取消' in raw or 'cancelled' in lowered or 'canceled' in lowered:
         return result('task_cancelled', 'task', '任务已取消', '任务记录已保留，可以重新提交。', retryable=True, action='retry', action_label='重新提交')
     if 'no space' in lowered or '磁盘空间' in raw or 'disk full' in lowered:

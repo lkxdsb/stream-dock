@@ -5,6 +5,7 @@ import re
 from urllib.parse import urlparse
 
 import requests
+from fetchers.auth_context import scoped_request
 
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.adapters.common import collect_subtitle_tracks_from_payload
@@ -25,6 +26,17 @@ def extract_first_url(raw_text: str) -> str:
     if not match:
         raise ValueError("No URL found in input link text")
     return match.group(0)
+
+
+def normalize_kuaishou_bitrate(value: object) -> int | None:
+    """Real manifests use kbps; older variants may already report bps."""
+    try:
+        bitrate = int(value) if value is not None else 0
+    except (TypeError, ValueError):
+        return None
+    if bitrate <= 0:
+        return None
+    return bitrate * 1000 if bitrate < 100_000 else bitrate
 
 
 class KuaishouAdapter(BasePlatformAdapter):
@@ -59,7 +71,7 @@ class KuaishouAdapter(BasePlatformAdapter):
         if host in {"www.kuaishou.com", "kuaishou.com"}:
             match = SHORT_VIDEO_PATH_PATTERN.search(path)
             if not match and PC_SHARE_PATH_PATTERN.search(path):
-                response = requests.get(
+                response = scoped_request('get',
                     candidate,
                     headers={"User-Agent": USER_AGENT},
                     timeout=30,
@@ -76,7 +88,7 @@ class KuaishouAdapter(BasePlatformAdapter):
             return candidate
 
         if host == "v.kuaishou.com":
-            response = requests.get(
+            response = scoped_request('get',
                 candidate,
                 headers={"User-Agent": USER_AGENT},
                 timeout=30,
@@ -87,7 +99,7 @@ class KuaishouAdapter(BasePlatformAdapter):
         raise ValueError(f"Unsupported Kuaishou host: {candidate}")
 
     def fetch_media(self, normalized_link: str) -> MediaFetchResult:
-        response = requests.get(
+        response = scoped_request('get',
             normalized_link,
             headers={"User-Agent": USER_AGENT},
             timeout=30,
@@ -226,7 +238,7 @@ class KuaishouAdapter(BasePlatformAdapter):
                         codec=representation.get("videoCodec") or representation.get("codecs"),
                         width=representation.get("width") or photo.get("width"),
                         height=representation.get("height") or photo.get("height"),
-                        bitrate=representation.get("avgBitrate"),
+                        bitrate=normalize_kuaishou_bitrate(representation.get("avgBitrate")),
                         filesize=None,
                         quality_label=representation.get("qualityLabel"),
                     )
@@ -257,7 +269,7 @@ class KuaishouAdapter(BasePlatformAdapter):
                 codec=representation.get("videoCodec") or representation.get("codecs"),
                 width=representation.get("width") or photo.get("width"),
                 height=representation.get("height") or photo.get("height"),
-                bitrate=representation.get("avgBitrate"),
+                bitrate=normalize_kuaishou_bitrate(representation.get("avgBitrate")),
                 filesize=None,
                 quality_label=representation.get("qualityLabel"),
             )

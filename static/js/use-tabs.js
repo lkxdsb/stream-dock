@@ -13,6 +13,17 @@
   const ui = window.StreamDockUI;
   const settingsKey = 'streamdock.settings.v1';
   const platformSettingsKey = 'streamdock.platform.settings.v1';
+  const mediaAuthPlatform = document.getElementById('mediaAuthPlatform');
+  const mediaAuthCookie = document.getElementById('mediaAuthCookie');
+  const mediaAuthStatus = document.getElementById('mediaAuthStatus');
+
+  function clearLegacyCookieCache(key) {
+    const settings = readJson(key, {});
+    if (!settings || typeof settings !== 'object' || !Object.hasOwn(settings, 'bilibiliCookie')) return;
+    delete settings.bilibiliCookie;
+    writeJson(key, settings);
+    ui?.showToast?.('已清除浏览器中旧版 B站 Cookie 缓存；请在平台授权配置中重新导入');
+  }
 
   function readJson(key, fallback) {
     try {
@@ -42,11 +53,9 @@
       outputType.value = settings.outputType;
       outputType.dispatchEvent(new Event('change'));
     }
-    if (bilibiliCookie && settings.bilibiliCookie) bilibiliCookie.value = settings.bilibiliCookie;
     if (settingsOutputPath) settingsOutputPath.value = settings.outputPath || outputPath?.value || '~/Downloads/StreamDock';
     if (settingsOutputType) settingsOutputType.value = settings.outputType || outputType?.value || 'mp4';
     if (settingsQualityMode) settingsQualityMode.value = settings.qualityMode === 'best' ? 'best_quality' : (settings.qualityMode || 'best_quality');
-    if (settingsBilibiliCookie) settingsBilibiliCookie.value = settings.bilibiliCookie || '';
   }
 
   async function selectDirectoryInto(inputEl) {
@@ -68,11 +77,12 @@
       outputPath: settingsOutputPath?.value || outputPath?.value || '~/Downloads/StreamDock',
       outputType: settingsOutputType?.value || outputType?.value || 'mp4',
       qualityMode: settingsQualityMode?.value || 'best_quality',
-      bilibiliCookie: settingsBilibiliCookie?.value || '',
     };
     writeJson(settingsKey, settings);
     writeJson(platformSettingsKey, { ...readJson(platformSettingsKey, {}), outputPath: settings.outputPath });
     applySettings(settings);
+    if (bilibiliCookie && settingsBilibiliCookie?.value) bilibiliCookie.value = settingsBilibiliCookie.value;
+    if (settingsBilibiliCookie) settingsBilibiliCookie.value = '';
     ui?.showToast('设置已保存');
   });
 
@@ -82,6 +92,8 @@
     finally { settingsSelectOutputDirButton.disabled = false; }
   });
 
+  clearLegacyCookieCache(settingsKey);
+  clearLegacyCookieCache(platformSettingsKey);
   const platformSettings = readJson(platformSettingsKey, {});
   applySettings({ ...readJson(settingsKey, {}), ...(platformSettings.outputPath ? { outputPath: platformSettings.outputPath } : {}) });
   const initialHash = window.location.hash.replace('#', '');
@@ -93,4 +105,61 @@
 
   window.StreamDockTasks = { setActiveTab };
   window.StreamDockUseTabs = { setActiveTab };
+
+  async function refreshMediaAuth() {
+    if (!mediaAuthPlatform || !mediaAuthStatus) return;
+    const response = await fetch('/api/media/auth');
+    const data = await response.json();
+    const selected = (data.profiles || []).find((item) => item.platform === mediaAuthPlatform.value);
+    mediaAuthStatus.textContent = selected?.configured
+      ? `已配置 · 版本 ${selected.version} · ${selected.persisted ? '服务器加密保存' : '仅当前进程内存'} · 授权有效性未检查`
+      : '未配置授权';
+  }
+  mediaAuthPlatform?.addEventListener('change', () => { refreshMediaAuth().catch(() => { mediaAuthStatus.textContent = '状态查询失败'; }); });
+  document.getElementById('mediaAuthImport')?.addEventListener('click', async () => {
+    const cookie = mediaAuthCookie?.value || '';
+    if (!cookie) return;
+    try {
+      const response = await fetch(`/api/media/auth/${encodeURIComponent(mediaAuthPlatform.value)}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cookie, save: Boolean(document.getElementById('mediaAuthSave')?.checked) }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '导入失败');
+      mediaAuthCookie.value = '';
+      await refreshMediaAuth();
+    } catch (error) { mediaAuthStatus.textContent = error.message || '导入失败'; }
+  });
+  document.getElementById('mediaAuthVerify')?.addEventListener('click', async () => {
+    const response = await fetch(`/api/media/auth/${encodeURIComponent(mediaAuthPlatform.value)}/verify`, { method: 'POST' });
+    const data = await response.json();
+    mediaAuthStatus.textContent = data.message || `验证结果：${data.status || data.error || 'unknown'}`;
+  });
+  document.getElementById('mediaAuthDelete')?.addEventListener('click', async () => {
+    const response = await fetch(`/api/media/auth/${encodeURIComponent(mediaAuthPlatform.value)}`, { method: 'DELETE' });
+    if (response.ok) await refreshMediaAuth();
+  });
+  refreshMediaAuth().catch(() => {});
+
+  document.getElementById('mediaDiagnosticRun')?.addEventListener('click', async () => {
+    const output = document.getElementById('mediaDiagnosticStatus');
+    const links = (document.getElementById('mediaDiagnosticLinks')?.value || '').split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+    const fullDownload = Boolean(document.getElementById('mediaDiagnosticFull')?.checked);
+    if (!links.length || links.length > (fullDownload ? 2 : 10)) { output.textContent = `请输入 1–${fullDownload ? 2 : 10} 条链接`; return; }
+    try {
+      const response = await fetch('/api/media/diagnostics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ links, fullDownload }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '诊断未启动');
+      const id = data.diagnostic.id;
+      output.textContent = `诊断任务 ${id} 已排队`;
+      for (let index = 0; index < (fullDownload ? 360 : 180); index += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        const check = await fetch(`/api/media/diagnostics/${encodeURIComponent(id)}`);
+        const state = (await check.json()).diagnostic;
+        if (!state) throw new Error('诊断状态丢失');
+        output.textContent = JSON.stringify({ status: state.status, results: state.results }, null, 2);
+        if (state.status === 'completed') break;
+      }
+    } catch (error) { output.textContent = error.message || '诊断失败'; }
+  });
 })();

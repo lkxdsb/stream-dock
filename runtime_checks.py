@@ -423,20 +423,12 @@ def environment_health(output_path: str | None = None) -> dict[str, Any]:
     except ImportError:
         checks.append({'key': 'rarfile', 'name': 'RAR/分卷压缩包', 'status': 'missing', 'detail': '未安装 rarfile', 'required': False})
 
-    try:
-        from playwright.sync_api import sync_playwright
-
-        with sync_playwright() as playwright:
-            browser_path = Path(playwright.chromium.executable_path)
-        checks.append({
-            'key': 'playwright',
-            'name': '浏览器解析',
-            'status': 'ok' if browser_path.exists() else 'missing',
-            'detail': str(browser_path) if browser_path.exists() else 'Playwright 已安装，但 Chromium 浏览器尚未安装',
-            'required': False,
-        })
-    except Exception as exc:
-        checks.append({'key': 'playwright', 'name': '浏览器解析', 'status': 'missing', 'detail': f'Playwright 不可用：{exc}', 'required': False})
+    from fetchers.browser_runtime import browser_capability
+    capability = browser_capability()
+    checks.append({
+        'key': 'playwright', 'name': '浏览器解析', 'required': False,
+        **capability,
+    })
 
     try:
         from fetchers.subtitle_asr import asr_engine_status

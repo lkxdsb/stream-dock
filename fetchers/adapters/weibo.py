@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 import requests
+from fetchers.auth_context import scoped_request
 
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.adapters.common import (
@@ -14,8 +15,10 @@ from fetchers.adapters.common import (
     extract_first_url,
     get_url_host,
     host_matches,
+    should_fallback_to_browser,
 )
 from fetchers.models import MediaFetchResult, MediaStream
+from fetchers.link_normalization import normalize_share_url
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -25,7 +28,7 @@ USER_AGENT = (
 
 class WeiboAdapter(BasePlatformAdapter):
     platform_name = "weibo"
-    supported_hosts = ("weibo.com", "m.weibo.cn")
+    supported_hosts = ("weibo.com", "m.weibo.cn", "video.weibo.com", "video.h5.weibo.cn", "t.cn")
     download_user_agent = USER_AGENT
     download_referer = "https://weibo.com/"
 
@@ -37,11 +40,11 @@ class WeiboAdapter(BasePlatformAdapter):
         return host_matches(get_url_host(candidate), self.supported_hosts)
 
     def normalize_link(self, raw_link: str) -> str:
-        return ensure_supported_host(extract_first_url(raw_link).strip(), self.supported_hosts, "Weibo")
+        return ensure_supported_host(normalize_share_url(raw_link), self.supported_hosts, "Weibo")
 
     def fetch_media(self, normalized_link: str) -> MediaFetchResult:
         try:
-            response = requests.get(
+            response = scoped_request('get',
                 normalized_link,
                 headers={"User-Agent": USER_AGENT, "Referer": self.download_referer},
                 timeout=30,
@@ -79,7 +82,9 @@ class WeiboAdapter(BasePlatformAdapter):
                     "raw_platform_id": status.get("id"),
                 },
             )
-        except Exception:
+        except Exception as exc:
+            if not should_fallback_to_browser(exc):
+                raise
             capture = capture_media_with_browser(normalized_link, user_agent=USER_AGENT)
             return self._build_fallback_result(normalized_link, capture)
 
@@ -149,6 +154,7 @@ class WeiboAdapter(BasePlatformAdapter):
             ),
             metadata={
                 "resolve_method": "playwright-fallback",
+                "browser_runtime": capture.get('browser_runtime'),
                 "raw_platform_id": self._extract_status_id(normalized_link),
             },
         )

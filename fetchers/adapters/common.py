@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from urllib.parse import urlparse, urlsplit, urlunsplit
+import requests
 
-from playwright.sync_api import BrowserContext, sync_playwright
+from fetchers.browser_runtime import browser_context
+
+if TYPE_CHECKING:
+    from playwright.sync_api import BrowserContext
 
 from fetchers.models import SubtitleTrack
 
@@ -425,14 +429,16 @@ def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int
 
 
 def capture_media_with_browser(link: str, *, user_agent: str, wait_ms: int = 10_000) -> dict[str, Any]:
-    with sync_playwright() as p:
-        browser = p.chromium.launch(channel="chrome", headless=True)
-        context = browser.new_context(
-            viewport={"width": 1440, "height": 900},
-            locale="zh-CN",
-            user_agent=user_agent,
-        )
-        try:
-            return _capture_media_from_context(context, link, wait_ms=wait_ms)
-        finally:
-            browser.close()
+    with browser_context(user_agent=user_agent) as (context, runtime, _version):
+        capture = _capture_media_from_context(context, link, wait_ms=wait_ms)
+        capture['browser_runtime'] = runtime
+        return capture
+
+
+def should_fallback_to_browser(exc: Exception) -> bool:
+    """A clear upstream rejection is not evidence that JavaScript is required."""
+    return not (
+        isinstance(exc, requests.HTTPError)
+        and exc.response is not None
+        and exc.response.status_code in {401, 403, 412, 429}
+    )

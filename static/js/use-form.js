@@ -33,6 +33,7 @@
   let lastProbeContentType = '';
   let workflowSequence = 0;
   let approvedBatchProbe = null;
+  let pendingBatchSuccess = [];
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const mediaCoverSrc = (value) => {
     const raw = String(value || '').trim();
@@ -233,21 +234,15 @@
       ].join('');
     }
     const recommended = new Map();
-    Object.entries(data.recommendations || {}).forEach(([strategy, item]) => { if (item?.stream?.qualityLabel) recommended.set(item.stream.qualityLabel, strategy); });
-    const deduplicated = Array.from((data.videoStreams || []).reduce((groups, stream) => {
-      const codec = String(stream.codec || '').toLowerCase().replace(/[^a-z0-9].*$/, '');
-      const key = `${stream.width || 0}x${stream.height || 0}:${codec}`;
-      const previous = groups.get(key);
-      if (!previous || Number(stream.bitrate || 0) > Number(previous.bitrate || 0)) groups.set(key, stream);
-      return groups;
-    }, new Map()).values()).sort((a, b) => Number(b.height || 0) - Number(a.height || 0) || Number(b.bitrate || 0) - Number(a.bitrate || 0)).slice(0, 10);
-    if (streamDetails) streamDetails.querySelector('summary').textContent = `高级技术详情（已从 ${(data.videoStreams || []).length} 路去重为 ${deduplicated.length} 路）`;
+    Object.entries(data.recommendations || {}).forEach(([strategy, item]) => { if (item?.stream?.streamId) recommended.set(item.stream.streamId, strategy); });
+    const deduplicated = [...(data.videoStreams || [])].sort((a, b) => Number(b.height || 0) - Number(a.height || 0) || Number(b.bitrate || 0) - Number(a.bitrate || 0));
+    if (streamDetails) streamDetails.querySelector('summary').textContent = `高级技术详情（${deduplicated.length} 路独立媒体流）`;
     streamTable.innerHTML = deduplicated.map((stream) => {
-      const strategy = recommended.get(stream.qualityLabel); const reason = strategy === 'best_quality' ? '最佳画质' : strategy === 'best_compatibility' ? '最佳兼容' : strategy === 'smallest_size' ? '最小体积' : '';
-      return `<div class="media-stream-row" data-stream-label="${escapeHtml(stream.qualityLabel || '')}"><strong>${escapeHtml(quality?.friendlyResolution?.(stream) || '清晰度未知')}</strong><span>${escapeHtml(stream.width && stream.height ? `${stream.width}×${stream.height}` : '分辨率未知')}</span><span>${escapeHtml((stream.codec || '编码未知').toUpperCase())}</span><span>${escapeHtml(stream.bitrate ? `${Math.round(stream.bitrate / 1000)} kbps` : '码率未知')}</span><span>${escapeHtml(stream.filesizeLabel || formatBytes(stream.filesize) || (stream.isHls ? 'HLS 分片' : '大小未知'))}</span><button type="button" data-select-stream="${escapeHtml(stream.qualityLabel || '')}">${escapeHtml(reason || '使用此流')}</button></div>`;
+      const strategy = recommended.get(stream.streamId); const reason = strategy === 'best_quality' ? '最佳画质' : strategy === 'best_compatibility' ? '最佳兼容' : strategy === 'smallest_size' ? '最小体积' : '';
+      return `<div class="media-stream-row" data-stream-id="${escapeHtml(stream.streamId || '')}"><strong>${escapeHtml(quality?.friendlyResolution?.(stream) || '清晰度未知')}</strong><span>${escapeHtml(stream.width && stream.height ? `${stream.width}×${stream.height}` : '分辨率未知')}</span><span>${escapeHtml((stream.codec || '编码未知').toUpperCase())}</span><span>${escapeHtml(stream.bitrate ? `${Math.round(stream.bitrate / 1000)} kbps` : '码率未知')}</span><span>${escapeHtml(stream.filesizeLabel || formatBytes(stream.filesize) || (stream.isHls ? 'HLS 分片' : '大小未知'))}</span><button type="button" data-select-stream="${escapeHtml(stream.streamId || '')}">${escapeHtml(reason || '使用此流')}</button></div>`;
     }).join('');
     streamTable.querySelectorAll('[data-select-stream]').forEach((button) => button.addEventListener('click', () => {
-      const stream = deduplicated.find((item) => item.qualityLabel === button.dataset.selectStream);
+      const stream = deduplicated.find((item) => item.streamId === button.dataset.selectStream);
       quality?.selectManualStream?.(stream);
       streamTable.querySelectorAll('.media-stream-row').forEach((row) => row.classList.remove('is-selected'));
       button.closest('.media-stream-row').classList.add('is-selected');
@@ -408,10 +403,11 @@
     return message || '请求失败，请稍后重试。';
   }
 
-  function resetProbeState({ clearInput = false, resetWorkspace = false, toast = '' } = {}) {
+  function resetProbeState({ clearInput = false, resetWorkspace = false, keepBatchSuccess = false, toast = '' } = {}) {
     confirmedProbeKey = '';
     lastProbeContentType = '';
     approvedBatchProbe = null;
+    if (!keepBatchSuccess) pendingBatchSuccess = [];
     if (clearInput && linkInput) linkInput.value = '';
     if (probePreview) probePreview.hidden = true;
     if (probeCancel) probeCancel.hidden = true;
@@ -540,7 +536,7 @@
         const probeKey = buildProbeKey(requestedLinks, payload);
         if (approvedBatchProbe?.probeKey === probeKey) links = approvedBatchProbe.successfulLinks.slice();
         if (confirmedProbeKey !== probeKey) {
-          if (links.length === 1) {
+          if (links.length === 1 && !pendingBatchSuccess.length) {
             const probeData = await quality.probeQualityOptions(links[0], { silent: true });
             if (sequence !== workflowSequence || !probeData) return;
             payload.videoQuality = String(quality?.selectedQualityLabel?.() || '').trim();
@@ -554,10 +550,14 @@
           } else {
             const batchProbe = await probeBatchLinks(links);
             if (sequence !== workflowSequence) return;
-            renderBatchProbePreview(batchProbe, payload);
+            const combinedProbe = [
+              ...pendingBatchSuccess.map((link) => ({ link, success: true, data: { platform: '已保留', title: link, videoStreams: [], assetSummary: { subtitleCount: 0 } } })),
+              ...batchProbe,
+            ];
+            renderBatchProbePreview(combinedProbe, payload);
             const failed = batchProbe.filter((item) => !item.success);
             if (failed.length) {
-              const successfulLinks = batchProbe.filter((item) => item.success).map((item) => item.link);
+              const successfulLinks = [...new Set([...pendingBatchSuccess, ...batchProbe.filter((item) => item.success).map((item) => item.link)])];
               if (successfulLinks.length) {
                 approvedBatchProbe = { probeKey, successfulLinks, failedLinks: failed.map((item) => item.link) };
                 if (probeRetryFailed) probeRetryFailed.hidden = false;
@@ -576,12 +576,15 @@
               submitButton.classList.remove('loading');
               return;
             }
+            if (pendingBatchSuccess.length) {
+              approvedBatchProbe = { probeKey, successfulLinks: [...new Set([...pendingBatchSuccess, ...links])], failedLinks: [] };
+            }
             confirmedProbeKey = probeKey;
-            result?.setStatus('running', `${links.length} 条视频已识别，请确认后开始下载`);
+            result?.setStatus('running', `${approvedBatchProbe?.successfulLinks.length || links.length} 条视频已识别，请确认后开始下载`);
             logs?.renderLogs(['批量视频资源识别完成', `链接数量：${links.length}`, payload.saveAssets ? '确认后会同时保存封面和字幕；无原生字幕时按当前字幕策略兜底。' : '当前未开启封面和字幕保存。', '请确认后再次点击。']);
           }
           submitButton.disabled = false;
-          submitButton.textContent = links.length > 1 ? '确认并开始批量下载' : (lastProbeContentType === 'images' ? '确认并下载图片集' : '确认并开始下载');
+          submitButton.textContent = (approvedBatchProbe?.successfulLinks.length || links.length) > 1 ? '确认并开始批量下载' : (lastProbeContentType === 'images' ? '确认并下载图片集' : '确认并开始下载');
           submitButton.classList.remove('loading');
           return;
         }
@@ -618,7 +621,7 @@
       if (sequence !== workflowSequence) return;
       submitButton.disabled = false;
       submitButton.textContent = confirmedProbeKey
-        ? (approvedBatchProbe ? `继续处理 ${approvedBatchProbe.successfulLinks.length} 条可用链接` : (extractLinks(linkInput?.value || '').length > 1 ? '确认并开始批量下载' : (lastProbeContentType === 'images' ? '确认并下载图片集' : '确认并开始下载')))
+        ? (approvedBatchProbe?.failedLinks?.length ? `继续处理 ${approvedBatchProbe.successfulLinks.length} 条可用链接` : ((approvedBatchProbe?.successfulLinks.length || extractLinks(linkInput?.value || '').length) > 1 ? '确认并开始批量下载' : (lastProbeContentType === 'images' ? '确认并下载图片集' : '确认并开始下载')))
         : '开始解析';
       submitButton.classList.remove('loading');
     }
@@ -646,9 +649,10 @@
   probeRetryFailed?.addEventListener('click', () => {
     const failedLinks = approvedBatchProbe?.failedLinks?.slice() || [];
     if (!failedLinks.length) return;
-    resetProbeState({ clearInput: false });
+    pendingBatchSuccess = approvedBatchProbe.successfulLinks.slice();
+    resetProbeState({ clearInput: false, keepBatchSuccess: true });
     if (linkInput) linkInput.value = failedLinks.join('\n');
-    result?.setStatus('running', `已保留 ${failedLinks.length} 条失败链接，可重新识别`);
+    result?.setStatus('running', `已保留 ${pendingBatchSuccess.length} 条成功链接，可重试 ${failedLinks.length} 条失败链接`);
     linkInput?.focus();
   });
 

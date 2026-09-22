@@ -303,6 +303,15 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8002
 
 `STREAMDOCK_ALLOW_LAN_API=1` 会被视为服务器模式，不再允许无认证的 LAN 暴露。当前是单信任用户部署边界，不是多租户账号系统。生产环境请在 TLS 反向代理后运行，并设置 `STREAMDOCK_SECURE_COOKIE=1`。
 
+### 媒体解析运行时与部署诊断
+
+- `STREAMDOCK_BROWSER_MODE=auto`（默认）先使用 Playwright 自带 Chromium，**只有启动失败**才尝试系统 Chrome；也可设为 `chromium`、`chrome` 或 `disabled`。不在请求期间安装浏览器。`STREAMDOCK_BROWSER_LAUNCH_TIMEOUT_MS=10000` 与 `STREAMDOCK_BROWSER_CONCURRENCY=2` 控制启动及并发；缺少浏览器不影响纯 HTTP 解析或文件转换。
+- `/api/health/ready` 只读取浏览器检查缓存，未主动检查时显示 `unchecked`。在页面“重新检查”或调用 `POST /api/health/browser/refresh` 后，服务账号会实际启动浏览器并执行本地 JavaScript/DOM 检查，结果缓存 5 分钟。此检查**不证明**媒体平台可访问。
+- `GET /api/media/auth` 只返回六个平台的配置状态；`PUT/DELETE /api/media/auth/{platform}` 导入或撤销 Cookie；`POST /api/media/auth/{platform}/verify` 目前仅 B站能作登录态专用验证，其余平台返回 `unknown`，不能将导入成功标为有效。服务器导入凭据要求 HTTPS；应用会话令牌与媒体平台授权互不替代。默认仅当前服务进程内存保存授权，重启失效。
+- 若确需重启保留授权，请分别配置 `STREAMDOCK_MEDIA_AUTH_KEY`（Fernet 密钥，可由 `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` 生成）与 `STREAMDOCK_MEDIA_AUTH_STORE`（仅服务账号可读的密文文件），并在导入时选择保存。密钥不要与密文文件放在同一位置。当前授权存储是进程内状态加可选密文快照，**必须以单 worker 运行**；多 worker 共享/并发更新尚未实现。
+- `POST /api/media/diagnostics` 接受 1–10 条链接，`GET /api/media/diagnostics/{id}` 查询当前进程诊断结果；默认只解析并读取至多 1 KiB 媒体前缀。显式传 `fullDownload=true` 时每次至多 2 条，选定的视频/分离音轨下载到临时目录，按单文件默认 64 MiB（`STREAMDOCK_DIAGNOSTIC_MAX_BYTES`，硬上限 256 MiB）、180 秒预算执行 FFprobe、FFmpeg 全程解码与视频抽帧；图文则逐张下载并解码，结束后均清理临时文件。yt-dlp 虚拟地址不在完整下载诊断范围。任务记录仅在进程内、上限 40 条；重启会清空。
+- 服务器上线后，先用原 60 条链接复测三轮，再准备当前可播放正向样本、按平台验证授权与下载质量。`resourceSampled` 只表示前缀可读；必须通过服务器实际交付文件的完整 FFprobe/FFmpeg 解码和内容抽帧，才能标记完整质量通过。浏览器组件恢复不能直接说明六个平台已恢复。
+
 ### 可选依赖
 
 | 能力 | 依赖 |

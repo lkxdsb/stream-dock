@@ -10,7 +10,10 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from datetime import datetime, timezone
 from threading import Lock
 from threading import Thread
 from time import monotonic, sleep
@@ -37,6 +40,8 @@ from converters.sniff import validate_declared_format
 from error_catalog import classify_error
 from fetchers.adapters.bilibili import USER_AGENT as BILIBILI_USER_AGENT, reset_manual_cookie_overrides, set_manual_cookie_overrides
 from fetchers.models import ImageAsset, MediaFetchResult, MediaStream, SubtitleTrack
+from fetchers.errors import MediaProbeError
+from fetchers.auth_context import PLATFORM_DOMAINS, auth_store, use_auth, scoped_request
 from fetchers.pipeline import available_output_path, generate_metadata_subtitle_file, probe_media
 from fetchers.subtitle_asr import asr_available, generate_asr_subtitle_file
 from fetchers.subtitle_ocr import generate_ocr_subtitle_file, ocr_available
@@ -228,6 +233,7 @@ class FetchRequest(BaseModel):
     outputPath: str = Field(min_length=1)
     outputType: str = Field(pattern=r'^(m4a|mp3|mp4|wav|flac|aac|ogg|opus|mkv|mov|webm)$')
     videoQuality: str | None = None
+    authProfileId: str | None = None
     bilibiliCookie: str | None = None
     bilibiliCookieFile: str | None = None
     saveAssets: bool = False
@@ -239,6 +245,7 @@ class BatchFetchRequest(BaseModel):
     outputPath: str = Field(min_length=1)
     outputType: str = Field(pattern=r'^(m4a|mp3|mp4|wav|flac|aac|ogg|opus|mkv|mov|webm)$')
     videoQuality: str | None = None
+    authProfiles: dict[str, str] | None = None
     bilibiliCookie: str | None = None
     bilibiliCookieFile: str | None = None
     saveAssets: bool = False
@@ -276,6 +283,35 @@ class ProbeRequest(BaseModel):
     link: str = Field(min_length=1)
     bilibiliCookie: str | None = None
     bilibiliCookieFile: str | None = None
+    authProfileId: str | None = None
+
+
+class MediaAuthRequest(BaseModel):
+    cookie: str = Field(min_length=3, max_length=16384)
+    save: bool = False
+
+
+class MediaDiagnosticsRequest(BaseModel):
+    links: list[str] = Field(min_length=1, max_length=10)
+    fullDownload: bool = False
+
+
+_diagnostic_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='streamdock-media-diagnostic')
+_diagnostic_lock = Lock()
+_diagnostic_runs: dict[str, dict[str, object]] = {}
+
+
+def media_auth_profile(link: str, profile_id: str | None = None, version: int | None = None):
+    from fetchers.pipeline import detect_platform_adapter
+    try:
+        platform = detect_platform_adapter(link).platform_name
+    except ValueError:
+        if profile_id:
+            raise
+        return None
+    if profile_id and platform not in PLATFORM_DOMAINS:
+        raise ValueError('该平台尚不支持授权配置')
+    return auth_store.get(platform, profile_id, version) if platform in PLATFORM_DOMAINS else None
 
 
 
@@ -362,11 +398,13 @@ def extract_all_matches(stdout: str, pattern: re.Pattern[str]) -> list[str]:
     return values
 
 def serialize_stream(stream: MediaStream) -> dict[str, object]:
+    from fetchers.stream_identity import stream_id
     stream_url = stream.url.decode('utf-8', errors='ignore') if isinstance(stream.url, bytes) else str(stream.url)
     parsed = urlparse(stream_url)
     path = str(parsed.path or '').lower()
     is_hls = (stream.container or '').lower() == 'm3u8' or path.endswith('.m3u8')
     return {
+        'streamId': stream_id(stream),
         'url': stream_url,
         'host': parsed.netloc,
         'streamType': stream.stream_type,
@@ -382,28 +420,46 @@ def serialize_stream(stream: MediaStream) -> dict[str, object]:
     }
 
 
-def probe_stream_http_info(url: str, *, timeout_seconds: float = 4.0) -> dict[str, object]:
+def probe_stream_http_info(url: str, *, headers: dict[str, str] | None = None, timeout_seconds: float = 4.0) -> dict[str, object]:
+    """A bounded GET is authoritative; HEAD headers alone may describe an error page."""
+    if urlparse(url).scheme not in {'http', 'https'}:
+        return {'resourceStatus': 'unverified'}
+    request_headers = {'User-Agent': 'Mozilla/5.0', **(headers or {}), 'Range': 'bytes=0-1023'}
     try:
-        response = requests.head(
-            url,
-            headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.douyin.com/'},
-            timeout=(timeout_seconds, timeout_seconds),
-            allow_redirects=True,
-        )
-        response.close()
-        content_length = response.headers.get('content-length')
-        return {
-            'status': response.status_code,
-            'contentType': response.headers.get('content-type'),
-            'contentLength': int(content_length) if content_length and content_length.isdigit() else None,
-            'contentLengthLabel': format_bytes(int(content_length)) if content_length and content_length.isdigit() else None,
-            'finalHost': urlparse(response.url).netloc,
-        }
+        response = scoped_request('get', url, headers=request_headers, timeout=(timeout_seconds, timeout_seconds),
+                                allow_redirects=True, stream=True)
+        try:
+            status = response.status_code
+            content_type = str(response.headers.get('content-type') or '').split(';', 1)[0].strip().lower()
+            prefix = next(response.iter_content(chunk_size=1024), b'')[:1024]
+            media_type = content_type.startswith(('video/', 'audio/')) or content_type in {
+                'application/octet-stream', 'binary/octet-stream', 'application/vnd.apple.mpegurl',
+                'application/x-mpegurl',
+            }
+            looks_like_error = prefix.lstrip().lower().startswith((b'<html', b'<!doctype', b'<?xml', b'<error', b'{"error'))
+            if status not in {200, 206} or not prefix or not media_type or looks_like_error:
+                return {'status': status, 'resourceStatus': 'invalid' if status not in {200, 206} or looks_like_error else 'unverified'}
+            content_range = str(response.headers.get('content-range') or '')
+            range_match = re.fullmatch(r'bytes\s+\d+-\d+/(\d+)', content_range, re.I)
+            length_header = str(response.headers.get('content-length') or '')
+            total = int(range_match.group(1)) if status == 206 and range_match else (
+                int(length_header) if status == 200 and length_header.isdigit() else None
+            )
+            if total is not None and total < len(prefix):
+                total = None
+            return {
+                'status': status, 'resourceStatus': 'sampled', 'contentType': content_type,
+                'contentLength': total, 'contentLengthLabel': format_bytes(total) if total else None,
+                'finalHost': urlparse(response.url).netloc,
+            }
+        finally:
+            response.close()
     except Exception:
-        return {}
+        return {'resourceStatus': 'unverified'}
 
 
-def enrich_serialized_streams(streams: list[dict[str, object]], preferred_url: str | None) -> list[dict[str, object]]:
+def enrich_serialized_streams(streams: list[dict[str, object]], preferred_url: str | None,
+                              headers: dict[str, str] | None = None) -> list[dict[str, object]]:
     enriched: list[dict[str, object]] = []
     for index, stream in enumerate(streams):
         item = dict(stream)
@@ -414,12 +470,16 @@ def enrich_serialized_streams(streams: list[dict[str, object]], preferred_url: s
             and (item.get('url') == preferred_url or index < 3)
         )
         if should_probe:
-            http_info = probe_stream_http_info(str(item.get('url')))
+            http_info = probe_stream_http_info(str(item.get('url')), headers=headers)
+            item['resourceStatus'] = http_info.get('resourceStatus', 'unverified')
             size = http_info.get('contentLength')
-            if size:
+            if item['resourceStatus'] == 'sampled' and size:
                 item['filesize'] = size
                 item['filesizeLabel'] = http_info.get('contentLengthLabel')
-            if http_info.get('contentType'):
+            else:
+                item['filesize'] = None
+                item['filesizeLabel'] = None
+            if item['resourceStatus'] == 'sampled' and http_info.get('contentType'):
                 item['contentType'] = http_info.get('contentType')
             if http_info.get('finalHost'):
                 item['finalHost'] = http_info.get('finalHost')
@@ -453,6 +513,7 @@ def serialize_image_asset(image: ImageAsset) -> dict[str, object]:
 def safe_metadata(metadata: dict[str, object]) -> dict[str, object]:
     allowed = {
         'capture_strategy', 'resolve_method', 'media_kind', 'cookie_source',
+        'browser_runtime',
         'stream_layout', 'bvid', 'cid', 'raw_platform_id', 'aweme_id', 'note_id', 'photo_id', 'short_url',
         'image_count',
     }
@@ -606,11 +667,17 @@ def build_probe_summary(result: MediaFetchResult) -> dict[str, object]:
 
 
 def serialize_probe_result(result: MediaFetchResult) -> dict[str, object]:
+    from fetchers.registry import get_registered_adapters
+    adapter = next((item for item in get_registered_adapters() if item.platform_name == result.platform), None)
     ranked = recommendations(result.video_streams)
     preferred_url = result.preferred_video.url if result.preferred_video else None
     serialized_video_streams = enrich_serialized_streams(
         [serialize_stream(stream) for stream in result.video_streams],
         preferred_url,
+        headers={
+            'User-Agent': getattr(adapter, 'download_user_agent', None) or 'Mozilla/5.0',
+            'Referer': getattr(adapter, 'download_referer', None) or result.source_url,
+        },
     )
     stream_by_url = {str(stream.get('url')): stream for stream in serialized_video_streams if stream.get('url')}
 
@@ -629,17 +696,22 @@ def serialize_probe_result(result: MediaFetchResult) -> dict[str, object]:
     probe_summary = build_probe_summary(result)
     if result.preferred_video and result.preferred_video.url in stream_by_url:
         preferred_stream = stream_by_url[result.preferred_video.url]
+        probe_summary['resourceStatus'] = preferred_stream.get('resourceStatus', 'unverified')
+        if preferred_stream.get('resourceStatus') == 'sampled':
+            probe_summary['downloadHint'] = '资源前缀可读；完整下载与解码尚未验证'
+        elif preferred_stream.get('resourceStatus') == 'invalid':
+            probe_summary['downloadHint'] = '当前推荐流返回错误或非媒体内容，请更换候选流或稍后重试'
+        else:
+            probe_summary['downloadHint'] = '资源尚未核实；解析成功不代表文件可下载'
         if preferred_stream.get('filesize') and not probe_summary.get('bestFilesize'):
             probe_summary['bestFilesize'] = preferred_stream.get('filesize')
             probe_summary['bestFilesizeLabel'] = preferred_stream.get('filesizeLabel')
-            probe_summary['downloadHint'] = (
-                '文件较大，建议确认网络稳定后下载'
-                if int(preferred_stream.get('filesize') or 0) >= 100 * 1024 * 1024
-                else '资源体积较小或中等，可直接下载'
-            )
 
     return {
         'success': True,
+        'validationStages': {'metadataExtracted': True,
+                             'resourceSampled': probe_summary.get('resourceStatus') == 'sampled',
+                             'downloadValidated': False},
         'platform': result.platform,
         'title': result.title,
         'contentType': result.content_type,
@@ -766,6 +838,23 @@ def run_media_fetch(payload: dict[str, object]) -> dict[str, object]:
         raw_cookie=str(payload.get('bilibiliCookie') or '').strip() or None,
         cookie_file=str(payload.get('bilibiliCookieFile') or '').strip() or None,
     )
+    auth_temp_path: Path | None = None
+    profile_id = str(payload.get('authProfileId') or '').strip()
+    if profile_id:
+        profile = media_auth_profile(str(payload.get('link') or ''), profile_id,
+                                     int(payload['authVersion']) if payload.get('authVersion') is not None else None)
+        if profile is None:
+            raise ValueError('平台授权配置已失效')
+        fd, filename = tempfile.mkstemp(prefix='streamdock-media-auth-')
+        auth_temp_path = Path(filename)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as auth_file:
+                json.dump(profile.__dict__, auth_file)
+            os.chmod(auth_temp_path, 0o600)
+        except Exception:
+            auth_temp_path.unlink(missing_ok=True)
+            raise
+        env['STREAMDOCK_MEDIA_AUTH_TASK_FILE'] = str(auth_temp_path)
     if task_id:
         env['STREAMDOCK_TASK_ID'] = task_id
     try:
@@ -854,6 +943,9 @@ def run_media_fetch(payload: dict[str, object]) -> dict[str, object]:
             'platform': None,
             'error': f'视频解析超时（timeout，总超时 {MEDIA_TIMEOUT_SECONDS} 秒 / 空闲超时 {MEDIA_IDLE_TIMEOUT_SECONDS} 秒），已终止任务',
         }
+    finally:
+        if auth_temp_path:
+            auth_temp_path.unlink(missing_ok=True)
 
     output_file = extract_output_file(stdout)
     platform = extract_platform(stdout)
@@ -1259,10 +1351,34 @@ def readiness(outputPath: str | None = None):
     return JSONResponse({'success': payload['healthy'], **payload}, status_code=200 if payload['healthy'] else 503)
 
 
+@app.post('/api/health/browser/refresh')
+def refresh_browser_health():
+    from fetchers.browser_runtime import browser_capability
+    return JSONResponse({'success': True, 'browser': browser_capability(refresh=True)})
+
+
 @app.get('/api/platform-status')
 def platform_status():
+    from fetchers.browser_runtime import browser_capability
+    ttl_hours = max(1, min(168, int(os.getenv('STREAMDOCK_PLATFORM_STATUS_TTL_HOURS', '24'))))
+    def fresh(value: object) -> bool:
+        try:
+            timestamp = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+            return 0 <= (datetime.now(timezone.utc) - timestamp).total_seconds() <= ttl_hours * 3600
+        except (TypeError, ValueError):
+            return False
     registered = {'douyin', 'kuaishou', 'bilibili', 'xiaohongshu', 'weibo', 'channels', 'youtube', 'tiktok', 'twitter_x'}
     latest: dict[str, dict[str, object]] = {}
+    latest_probe: dict[str, dict[str, object]] = {}
+    with _diagnostic_lock:
+        diagnostics = list(_diagnostic_runs.values())
+    for run in reversed(diagnostics):
+        for result in reversed(run.get('results') or []):
+            platform = str(result.get('platform') or '')
+            if platform and platform not in latest_probe:
+                latest_probe[platform] = {'lastProbeStatus': ('success' if result.get('success') else 'failed') if fresh(result.get('checkedAt')) else 'stale',
+                                          'lastProbeAt': result.get('checkedAt'),
+                                          'lastResourceStatus': result.get('resourceStatus')}
     for task in task_store.list(TaskKind.MEDIA):
         result = task.result or {}
         platform = str(result.get('platform') or task.payload.get('platform') or '').strip()
@@ -1274,16 +1390,20 @@ def platform_status():
             'validationPassed': bool((result.get('validation') or {}).get('valid')),
         }
     rows = []
+    browser = browser_capability()
+    auth_rows = {item['platform']: item for item in auth_store.list_public()}
     for platform in sorted(registered):
         recent = latest.get(platform)
         rows.append({
             'platform': platform,
             'registered': True,
             'runtimeStatus': (
-                'verified' if recent and recent['lastStatus'] == 'completed' and recent['validationPassed']
-                else 'failed' if recent and recent['lastStatus'] == 'failed'
+                'verified' if recent and recent['lastStatus'] == 'completed' and recent['validationPassed'] and fresh(recent['lastCheckedAt'])
                 else 'unverified'
             ),
+            'browserStatus': browser['status'],
+            'authStatus': auth_rows.get(platform, {}).get('verificationStatus', 'not_configured'),
+            **latest_probe.get(platform, {}),
             **(recent or {}),
         })
     return JSONResponse({'success': True, 'platforms': rows})
@@ -1311,6 +1431,7 @@ def use_page(request: Request):
             'request': request,
             'title': 'StreamDock · 在线使用',
             'active_nav': 'use',
+            'server_mode': deployment_security().server,
         },
     )
 
@@ -2370,28 +2491,197 @@ def reveal_output_file(path: str = Form(...)):
 @app.post('/api/probe')
 def probe(payload: ProbeRequest):
     try:
-        with bilibili_cookie_env(payload.bilibiliCookie, payload.bilibiliCookieFile):
-            result = probe_media(payload.link)
+        if deployment_security().server and (payload.bilibiliCookie or payload.bilibiliCookieFile):
+            raise ValueError('服务器模式请使用平台授权配置，不接受探测请求中的原始 Cookie 或文件路径')
+        profile = media_auth_profile(payload.link, payload.authProfileId)
+        if deployment_security().server:
+            from fetchers.probe_worker import probe_with_budget
+            result = probe_with_budget(payload.link, profile)
+        else:
+            with use_auth(profile), bilibili_cookie_env(payload.bilibiliCookie, payload.bilibiliCookieFile):
+                result = probe_media(payload.link)
     except Exception as exc:
         error_info = classify_error(str(exc), fallback='链接探测失败')
+        if isinstance(exc, MediaProbeError):
+            error_info.update(code=exc.code, retryable=exc.retryable, stage=exc.stage)
+        else:
+            error_info['stage'] = 'http' if isinstance(exc, requests.HTTPError) else 'parser'
+        trace_id = uuid4().hex
         return JSONResponse(
             {
                 'success': False,
                 'error': error_info['message'],
                 'errorCode': error_info['code'],
                 'errorInfo': error_info,
+                'traceId': trace_id,
                 'platform': None,
                 'videoStreams': [],
                 'audioStreams': [],
             }
         )
-    return JSONResponse(serialize_probe_result(result))
+    # Resource sampling happens during serialization, after the parser's own
+    # auth context has ended. Keep the same scoped profile for that request.
+    with use_auth(profile):
+        return JSONResponse(serialize_probe_result(result))
 
 
 @app.post('/api/media/probe')
 def media_probe(payload: ProbeRequest):
     """Stable media-module endpoint; /api/probe remains for compatibility."""
     return probe(payload)
+
+
+@app.get('/api/media/auth')
+def list_media_auth():
+    return JSONResponse({'success': True, 'profiles': auth_store.list_public()})
+
+
+@app.put('/api/media/auth/{platform}')
+def put_media_auth(platform: str, payload: MediaAuthRequest, request: Request):
+    if deployment_security().server and request.url.scheme != 'https':
+        return JSONResponse({'success': False, 'error': '服务器导入平台凭据必须使用 HTTPS'}, status_code=403)
+    try:
+        profile = auth_store.put(platform, payload.cookie, save=payload.save)
+    except (ValueError, RuntimeError) as exc:
+        return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
+    return JSONResponse({'success': True, 'profile': profile.public()})
+
+
+@app.delete('/api/media/auth/{platform}')
+def delete_media_auth(platform: str):
+    try:
+        auth_store.delete(platform)
+    except ValueError as exc:
+        return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
+    return JSONResponse({'success': True})
+
+
+@app.post('/api/media/auth/{platform}/verify')
+def verify_media_auth(platform: str):
+    if platform not in PLATFORM_DOMAINS:
+        return JSONResponse({'success': False, 'error': '不支持的平台'}, status_code=404)
+    profile = auth_store.get(platform)
+    if profile is None:
+        return JSONResponse({'success': False, 'status': 'not_configured'}, status_code=409)
+    if platform != 'bilibili':
+        auth_store.set_verification(platform, profile.version, 'unknown')
+        return JSONResponse({'success': True, 'status': 'unknown', 'profileId': profile.id,
+                             'message': '已配置，但该平台尚无可靠的登录态专用验证接口；公开内容解析成功不代表授权有效'})
+    try:
+        with use_auth(profile):
+            response = scoped_request('get', 'https://api.bilibili.com/x/web-interface/nav', timeout=10,
+                                      allow_redirects=False)
+        response.raise_for_status()
+        data = response.json()
+        status = 'valid' if data.get('code') == 0 and (data.get('data') or {}).get('isLogin') is True else 'unknown'
+        auth_store.set_verification(platform, profile.version, status)
+        return JSONResponse({'success': True, 'status': status, 'profileId': profile.id,
+                             'message': '已确认登录有效' if status == 'valid' else '未能确认已登录；不能单凭本次结果判定 Cookie 已过期'})
+    except Exception:
+        auth_store.set_verification(platform, profile.version, 'unknown')
+        return JSONResponse({'success': True, 'status': 'unknown', 'profileId': profile.id,
+                             'message': '网络或接口检查未完成，不能据此判定授权过期'})
+
+
+def _run_media_diagnostic(run_id: str, links: list[str], full_download: bool) -> None:
+    from fetchers.registry import get_registered_adapters
+    from fetchers.pipeline import detect_platform_adapter
+    rows: list[dict[str, object]] = []
+    with _diagnostic_lock:
+        _diagnostic_runs[run_id]['status'] = 'running'
+    for link in links:
+        started = monotonic()
+        row: dict[str, object] = {'inputId': hashlib.sha256(link.encode()).hexdigest()[:16]}
+        try:
+            row['platform'] = detect_platform_adapter(link).platform_name
+            profile = media_auth_profile(link)
+            if deployment_security().server:
+                from fetchers.probe_worker import probe_with_budget
+                result = probe_with_budget(link, profile)
+            else:
+                with use_auth(profile):
+                    result = probe_media(link)
+            row.update(success=True, platform=result.platform,
+                       authVersion=profile.version if profile else None,
+                       browserRuntime=result.metadata.get('browser_runtime'),
+                       strategy=safe_metadata(result.metadata).get('resolve_method') or safe_metadata(result.metadata).get('capture_strategy'))
+            adapter = next((a for a in get_registered_adapters() if a.platform_name == result.platform), None)
+            with use_auth(profile):
+                if result.preferred_video:
+                    resource = probe_stream_http_info(result.preferred_video.url, headers={
+                        'User-Agent': getattr(adapter, 'download_user_agent', None) or 'Mozilla/5.0',
+                        'Referer': getattr(adapter, 'download_referer', None) or result.source_url,
+                    })
+                    row['resourceStatus'] = resource.get('resourceStatus', 'unverified')
+                    row['sampledSizeBytes'] = resource.get('contentLength')
+                    if full_download:
+                        from fetchers.diagnostic_download import validate_full_download
+                        try:
+                            row['downloadValidation'] = validate_full_download(result,
+                                user_agent=getattr(adapter, 'download_user_agent', None) or 'Mozilla/5.0',
+                                referer=getattr(adapter, 'download_referer', None) or result.source_url)
+                            row['downloadValidated'] = True
+                        except Exception as exc:
+                            row['downloadValidated'] = False
+                            row['downloadError'] = classify_error(str(exc), fallback='完整文件校验失败')['message']
+                else:
+                    row['resourceStatus'] = 'not_sampled'
+                    if full_download and result.content_type == 'images':
+                        from fetchers.diagnostic_download import validate_full_download
+                        try:
+                            row['downloadValidation'] = validate_full_download(result,
+                                user_agent=getattr(adapter, 'download_user_agent', None) or 'Mozilla/5.0',
+                                referer=getattr(adapter, 'download_referer', None) or result.source_url)
+                            row['downloadValidated'] = True
+                        except Exception as exc:
+                            row['downloadValidated'] = False
+                            row['downloadError'] = classify_error(str(exc), fallback='图文集合校验失败')['message']
+        except Exception as exc:
+            error = classify_error(str(exc), fallback='诊断未完成')
+            row.update(success=False, errorCode=error['code'], message=error['message'])
+        row['elapsedMs'] = round((monotonic() - started) * 1000)
+        row['checkedAt'] = datetime.now(timezone.utc).isoformat()
+        rows.append(row)
+        with _diagnostic_lock:
+            _diagnostic_runs[run_id]['results'] = list(rows)
+    with _diagnostic_lock:
+        _diagnostic_runs[run_id]['status'] = 'completed'
+        _diagnostic_runs[run_id]['completedAt'] = datetime.now(timezone.utc).isoformat()
+
+
+@app.post('/api/media/diagnostics')
+def create_media_diagnostics(payload: MediaDiagnosticsRequest):
+    if payload.fullDownload and len(payload.links) > 2:
+        return JSONResponse({'success': False, 'error': '完整下载诊断每次最多 2 条链接'}, status_code=400)
+    with _diagnostic_lock:
+        active = sum(row['status'] in {'queued', 'running'} for row in _diagnostic_runs.values())
+        if active >= 4:
+            return JSONResponse({'success': False, 'error': '诊断队列已满'}, status_code=429)
+        run_id = uuid4().hex
+        _diagnostic_runs[run_id] = {'id': run_id, 'status': 'queued', 'createdAt': datetime.now(timezone.utc).isoformat(),
+                                    'results': [], 'linkCount': len(payload.links), 'fullDownload': payload.fullDownload,
+                                    'buildVersion': os.getenv('STREAMDOCK_BUILD_VERSION', 'unknown'),
+                                    'network': {
+                                        key: urlparse(value).hostname
+                                        for key in ('http_proxy', 'https_proxy')
+                                        if (value := network_subprocess_environment().get(key))
+                                    }}
+        while len(_diagnostic_runs) > 40:
+            oldest = next((key for key, value in _diagnostic_runs.items() if value['status'] == 'completed'), None)
+            if oldest is None:
+                break
+            _diagnostic_runs.pop(oldest)
+    _diagnostic_executor.submit(_run_media_diagnostic, run_id, payload.links, payload.fullDownload)
+    return JSONResponse({'success': True, 'diagnostic': {'id': run_id, 'status': 'queued'}}, status_code=202)
+
+
+@app.get('/api/media/diagnostics/{run_id}')
+def get_media_diagnostics(run_id: str):
+    with _diagnostic_lock:
+        row = _diagnostic_runs.get(run_id)
+        if row is None:
+            return JSONResponse({'success': False, 'error': '诊断任务不存在'}, status_code=404)
+        return JSONResponse({'success': True, 'diagnostic': dict(row)})
 
 
 
@@ -2614,13 +2904,33 @@ async def pdf_parse(
 
 @app.post('/api/fetch')
 def fetch(payload: FetchRequest):
-    return JSONResponse(run_media_fetch(payload.model_dump()))
+    if deployment_security().server and (payload.bilibiliCookie or payload.bilibiliCookieFile):
+        return JSONResponse({'success': False, 'error': '服务器模式请使用平台授权配置'}, status_code=400)
+    try:
+        profile = media_auth_profile(payload.link, payload.authProfileId)
+    except ValueError as exc:
+        return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
+    item = payload.model_dump()
+    if profile:
+        item.update(authProfileId=profile.id, authVersion=profile.version)
+    return JSONResponse(run_media_fetch(item))
 
 
 @app.post('/api/fetch/batch')
 def fetch_batch(payload: BatchFetchRequest):
-    items = [
-        {
+    if deployment_security().server and (payload.bilibiliCookie or payload.bilibiliCookieFile):
+        return JSONResponse({'success': False, 'error': '服务器模式请使用平台授权配置'}, status_code=400)
+    items = []
+    try:
+        for link in payload.links:
+            if not link.strip():
+                continue
+            profile_id = None
+            if payload.authProfiles:
+                from fetchers.pipeline import detect_platform_adapter
+                profile_id = payload.authProfiles.get(detect_platform_adapter(link).platform_name)
+            profile = media_auth_profile(link, profile_id)
+            item = {
             'link': link.strip(),
             'outputPath': payload.outputPath,
             'outputType': payload.outputType,
@@ -2629,10 +2939,12 @@ def fetch_batch(payload: BatchFetchRequest):
             'bilibiliCookieFile': payload.bilibiliCookieFile,
             'saveAssets': payload.saveAssets,
             'subtitleStrategy': payload.subtitleStrategy,
-        }
-        for link in payload.links
-        if link.strip()
-    ]
+            }
+            if profile:
+                item.update(authProfileId=profile.id, authVersion=profile.version)
+            items.append(item)
+    except ValueError as exc:
+        return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
     if not items:
         return JSONResponse({'success': False, 'error': '请至少输入一个有效链接', 'tasks': []}, status_code=400)
     tasks = media_queue.submit(items)

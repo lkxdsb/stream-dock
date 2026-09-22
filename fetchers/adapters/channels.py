@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import requests
+from fetchers.auth_context import scoped_request
 
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.adapters.common import (
@@ -18,8 +19,10 @@ from fetchers.adapters.common import (
     extract_script_json_by_id,
     get_url_host,
     host_matches,
+    should_fallback_to_browser,
 )
 from fetchers.models import MediaFetchResult, MediaStream
+from fetchers.browser_runtime import BrowserUnavailableError
 
 USER_AGENT = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
@@ -50,7 +53,7 @@ class ChannelsAdapter(BasePlatformAdapter):
         if host_matches(host, self.supported_hosts):
             return ensure_supported_host(candidate, self.supported_hosts, "Channels")
         if host_matches(host, self.short_link_hosts) and urlparse(candidate).path.startswith("/sph/"):
-            response = requests.get(
+            response = scoped_request('get',
                 candidate,
                 headers={"User-Agent": USER_AGENT, "Referer": self.download_referer},
                 timeout=30,
@@ -80,7 +83,7 @@ class ChannelsAdapter(BasePlatformAdapter):
                 pass
 
         try:
-            response = requests.get(
+            response = scoped_request('get',
                 normalized_link,
                 headers={"User-Agent": USER_AGENT, "Referer": self.download_referer},
                 timeout=30,
@@ -135,10 +138,14 @@ class ChannelsAdapter(BasePlatformAdapter):
                     "raw_platform_id": feed.get("feedId"),
                 },
             )
-        except Exception:
+        except Exception as exc:
+            if not should_fallback_to_browser(exc):
+                raise
             try:
                 capture = capture_media_with_browser(normalized_link, user_agent=USER_AGENT)
             except RuntimeError as exc:
+                if isinstance(exc, BrowserUnavailableError):
+                    raise
                 if short_uri:
                     raise RuntimeError(
                         "当前视频号分享链接仅返回封面或文案，未暴露真实视频流；当前环境可能需要更深的播放上下文。"
@@ -213,7 +220,7 @@ class ChannelsAdapter(BasePlatformAdapter):
             f"?_rid={self._generate_rid()}"
             "&_pageUrl=https:%2F%2Fchannels.weixin.qq.com%2Ffinder-preview%2Fpages%2Fsph"
         )
-        response = requests.post(
+        response = scoped_request('post',
             api_url,
             headers={
                 "Accept": "application/json, text/plain, */*",
@@ -242,7 +249,7 @@ class ChannelsAdapter(BasePlatformAdapter):
             "https://channels.weixin.qq.com/finder-preview/pages/feed"
             f"?entry_card_type=48&comment_scene=39&appid=0&token={general_token}&entry_scene=0&eid={export_id}"
         )
-        response = requests.post(
+        response = scoped_request('post',
             api_url,
             headers={
                 "Accept": "application/json, text/plain, */*",
@@ -329,7 +336,7 @@ class ChannelsAdapter(BasePlatformAdapter):
         if not cookie:
             return None
 
-        response = requests.post(
+        response = scoped_request('post',
             "https://yuanbao.tencent.com/api/weixin/get_parse_result",
             headers={
                 "accept": "application/json, text/plain, */*",
@@ -400,6 +407,7 @@ class ChannelsAdapter(BasePlatformAdapter):
             ),
             metadata={
                 "resolve_method": "playwright-fallback",
+                "browser_runtime": capture.get('browser_runtime'),
                 "raw_platform_id": self._extract_feed_id(normalized_link),
             },
         )

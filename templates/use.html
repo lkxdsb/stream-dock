@@ -129,10 +129,10 @@
                 <details class="advanced-options field-wide">
                   <summary><span>高级选项</span><small>登录态、封面和字幕保存</small></summary>
                   <div class="advanced-options-body">
-                    <div class="field use-field use-field-cookie">
+                    {% if not server_mode %}<div class="field use-field use-field-cookie">
                       <label for="bilibiliCookie">B站 Cookie（可选）</label>
-                      <div class="cookie-row"><input id="bilibiliCookie" name="bilibiliCookie" class="select native-input" type="text" value="" placeholder="仅在别人的机器无法读取本地浏览器登录态时填写" /></div>
-                    </div>
+                      <div class="cookie-row"><input id="bilibiliCookie" name="bilibiliCookie" class="select native-input" type="password" value="" autocomplete="off" placeholder="仅本次桌面解析使用，不会保存" /></div>
+                    </div>{% endif %}
 
                     <label class="asset-toggle" for="saveAssets">
                       <input id="saveAssets" type="checkbox" checked />
@@ -248,13 +248,30 @@
                     <option value="manual">解析时手动选择</option>
                   </select>
                 </div>
-                <div class="field use-field field-wide">
+                {% if not server_mode %}<div class="field use-field field-wide">
                   <label for="settingsBilibiliCookie">B站 Cookie（可选）</label>
-                  <input id="settingsBilibiliCookie" class="select native-input" type="text" placeholder="保存到本机浏览器 localStorage，不上传到服务端" />
-                </div>
+                  <input id="settingsBilibiliCookie" class="select native-input" type="password" autocomplete="off" placeholder="仅本次使用，不保存到浏览器" />
+                </div>{% endif %}
               </div>
               <button class="settings-save" type="submit">保存设置</button>
             </form>
+            <section class="system-health-card" aria-label="平台授权配置">
+              <div class="system-health-head"><div><strong>平台授权配置</strong><span>部署级账号；只在 HTTPS 服务器或本机导入，不保存于浏览器。</span></div></div>
+              <div class="settings-grid">
+                <div class="field use-field"><label for="mediaAuthPlatform">平台</label><select id="mediaAuthPlatform" class="select native-select"><option value="bilibili">B站</option><option value="douyin">抖音</option><option value="kuaishou">快手</option><option value="weibo">微博</option><option value="xiaohongshu">小红书</option><option value="channels">视频号</option></select></div>
+                <div class="field use-field"><label for="mediaAuthCookie">Cookie</label><input id="mediaAuthCookie" class="select native-input" type="password" autocomplete="off" placeholder="粘贴当前平台 Cookie；提交后立即清空" /></div>
+                <label class="field use-field"><input id="mediaAuthSave" type="checkbox" /> 在服务器加密保存（需配置独立密钥）</label>
+              </div>
+              <div class="settings-actions"><button type="button" id="mediaAuthImport">导入/替换授权</button><button type="button" id="mediaAuthVerify">验证授权</button><button type="button" id="mediaAuthDelete">撤销授权</button></div>
+              <p id="mediaAuthStatus" role="status">授权状态待查询</p>
+            </section>
+            <section class="system-health-card" aria-label="当前部署解析诊断">
+              <div class="system-health-head"><div><strong>检测当前部署</strong><span>默认最多 10 条链接有界取样；完整下载每次最多 2 条。</span></div></div>
+              <textarea id="mediaDiagnosticLinks" class="select native-input" rows="3" placeholder="每行一条当前可访问的分享链接"></textarea>
+              <label><input id="mediaDiagnosticFull" type="checkbox" /> 对选定流执行有界完整下载与解码</label>
+              <button type="button" id="mediaDiagnosticRun">开始诊断</button>
+              <pre id="mediaDiagnosticStatus" role="status"></pre>
+            </section>
             <section class="system-health-card" aria-label="本地环境状态">
               <div class="system-health-head"><div><strong>本地环境状态</strong><span>检查输出目录、FFmpeg 与常用转换依赖。</span></div><button type="button" data-health-refresh>重新检查</button></div>
               <div class="system-health-list" data-health-list></div>
@@ -272,9 +289,9 @@
 {% block page_scripts %}
 <script src="{{ url_for('static', path='/js/use-logs.js') }}"></script>
 <script src="{{ url_for('static', path='/js/use-result.js') }}?v=20260716-cancel1"></script>
-<script src="{{ url_for('static', path='/js/use-quality.js') }}?v=20260919-m5"></script>
-<script src="{{ url_for('static', path='/js/use-tabs.js') }}?v=20260920-m6"></script>
+<script src="{{ url_for('static', path='/js/use-quality.js') }}?v=20260922-parser"></script>
+<script src="{{ url_for('static', path='/js/use-tabs.js') }}?v=20260922-parser"></script>
 <script src="{{ url_for('static', path='/js/task-center.js') }}?v=20260920-m6"></script>
-<script src="{{ url_for('static', path='/js/health.js') }}?v=20260920-m8"></script>
-<script src="{{ url_for('static', path='/js/use-form.js') }}?v=20260920-m6"></script>
+<script src="{{ url_for('static', path='/js/health.js') }}?v=20260922-parser"></script>
+<script src="{{ url_for('static', path='/js/use-form.js') }}?v=20260922-parser"></script>
 {% endblock %}

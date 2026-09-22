@@ -12,6 +12,7 @@ html2text>=2024.2.26
 crawl4ai==0.7.4
 litellm==1.70.0
 browser-cookie3>=0.19
+cryptography>=42
 playwright>=1.45
 pydantic>=2.7,<3
 Pillow>=10

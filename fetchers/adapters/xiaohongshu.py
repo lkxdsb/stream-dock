@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 import requests
+from fetchers.auth_context import scoped_request
 
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.adapters.common import (
@@ -16,6 +17,7 @@ from fetchers.adapters.common import (
     extract_first_url,
     get_url_host,
     host_matches,
+    should_fallback_to_browser,
 )
 from fetchers.models import MediaFetchResult, MediaStream
 
@@ -47,7 +49,7 @@ class XiaohongshuAdapter(BasePlatformAdapter):
             return ensure_supported_host(candidate, self.supported_hosts, "XiaoHongShu")
         if not host_matches(host, self.short_link_hosts):
             raise ValueError(f"Unsupported XiaoHongShu host: {candidate}")
-        response = requests.get(
+        response = scoped_request('get',
             candidate,
             headers={"User-Agent": USER_AGENT, "Referer": self.download_referer},
             timeout=30,
@@ -57,7 +59,7 @@ class XiaohongshuAdapter(BasePlatformAdapter):
 
     def fetch_media(self, normalized_link: str) -> MediaFetchResult:
         try:
-            response = requests.get(
+            response = scoped_request('get',
                 normalized_link,
                 headers={"User-Agent": USER_AGENT, "Referer": self.download_referer},
                 timeout=30,
@@ -99,7 +101,9 @@ class XiaohongshuAdapter(BasePlatformAdapter):
                     "raw_platform_id": note.get("noteId"),
                 },
             )
-        except Exception:
+        except Exception as exc:
+            if not should_fallback_to_browser(exc):
+                raise
             capture = capture_media_with_browser(normalized_link, user_agent=USER_AGENT)
             return self._build_fallback_result(normalized_link, capture)
 
@@ -296,6 +300,7 @@ class XiaohongshuAdapter(BasePlatformAdapter):
             ),
             metadata={
                 "resolve_method": "playwright-fallback",
+                "browser_runtime": capture.get('browser_runtime'),
                 "raw_platform_id": self._extract_note_id(normalized_link),
             },
         )

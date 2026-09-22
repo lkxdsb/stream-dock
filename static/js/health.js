@@ -27,9 +27,10 @@
     lists.forEach((list) => { list.innerHTML = html || '<div class="system-health-item"><span>暂无检查结果</span></div>'; });
   }
 
-  async function refresh() {
+  async function refresh({ browser = false } = {}) {
     buttons.forEach((button) => { button.disabled = true; button.textContent = '检查中...'; });
     try {
+      if (browser) await fetch('/api/health/browser/refresh', { method: 'POST' });
       const response = await fetch(`/api/health/ready?outputPath=${encodeURIComponent(currentOutputPath())}`);
       const data = await response.json();
       render(data.checks);
@@ -41,6 +42,6 @@
     }
   }
 
-  buttons.forEach((button) => button.addEventListener('click', refresh));
+  buttons.forEach((button) => button.addEventListener('click', () => refresh({ browser: true })));
   refresh();
 })();

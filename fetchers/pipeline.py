@@ -17,6 +17,7 @@ from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.downloader import download_media
 from fetchers.exporters import export_media, is_video_output, validate_output_request
 from fetchers.models import ExportRequest, ImageAsset, MediaFetchResult, MediaStream, ResolvedMediaSelection, SubtitleTrack
+from fetchers.stream_identity import stream_id
 from fetchers.subtitle_asr import asr_available, generate_asr_subtitle_file
 from fetchers.subtitle_ocr import OcrSubtitleCue, cues_to_srt, generate_ocr_subtitle_file, ocr_available
 from runtime_checks import cleanup_partial, commit_partial, partial_output_path, prepare_output_directory, validate_media_output
@@ -28,6 +29,9 @@ MAX_ASSET_DOWNLOAD_BYTES = int(os.getenv('STREAMDOCK_MAX_ASSET_DOWNLOAD_BYTES', 
 
 def detect_platform_adapter(raw_link: str) -> BasePlatformAdapter:
     from fetchers.registry import get_registered_adapters
+    from fetchers.link_normalization import normalize_share_url
+
+    raw_link = normalize_share_url(raw_link)
 
     for adapter in get_registered_adapters():
         if adapter.can_handle(raw_link):
@@ -214,7 +218,13 @@ def generate_metadata_subtitle_file(fetch_result: MediaFetchResult, output_path:
     return output_path if output_path.exists() and output_path.stat().st_size > 0 else None
 
 def probe_media(raw_link: str, adapter: BasePlatformAdapter | None = None) -> MediaFetchResult:
+    from fetchers.link_normalization import normalize_share_url
+    raw_link = normalize_share_url(raw_link)
     selected_adapter = adapter or detect_platform_adapter(raw_link)
+    from fetchers.auth_context import current_auth
+    profile = current_auth()
+    if profile and profile.platform != selected_adapter.platform_name:
+        raise ValueError('平台授权与解析链接不匹配')
     normalized_link = selected_adapter.normalize_link(raw_link)
     return selected_adapter.fetch_media(normalized_link)
 
@@ -342,6 +352,13 @@ def resolve_media_selection(
 
     video_stream = fetch_result.preferred_video
     if is_video_output(output_type) and video_quality:
+        if video_quality.startswith('sid:'):
+            identity_matches = [stream for stream in fetch_result.video_streams if stream_id(stream) == video_quality]
+            if len(identity_matches) != 1:
+                raise ValueError('所选媒体流已失效或无法唯一识别，请重新解析')
+            video_stream = identity_matches[0]
+            return ResolvedMediaSelection(video_stream=video_stream, audio_stream=fetch_result.preferred_audio,
+                                          title=fetch_result.title, output_type=output_type)
         exact_url_match = next(
             (stream for stream in fetch_result.video_streams if stream.url == video_quality),
             None,
@@ -391,7 +408,13 @@ def run_pipeline(
             progress_callback(value, stage)
 
     progress(3, '正在规范化链接')
+    from fetchers.link_normalization import normalize_share_url
+    raw_link = normalize_share_url(raw_link)
     selected_adapter = adapter or detect_platform_adapter(raw_link)
+    from fetchers.auth_context import current_auth
+    profile = current_auth()
+    if profile and profile.platform != selected_adapter.platform_name:
+        raise ValueError('平台授权与解析链接不匹配')
     normalized_link = selected_adapter.normalize_link(raw_link)
     progress(8, '正在识别平台资源')
     fetch_result = selected_adapter.fetch_media(normalized_link)

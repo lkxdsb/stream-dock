@@ -9,6 +9,7 @@ from urllib.parse import urljoin, urlparse
 
 import browser_cookie3
 import requests
+from fetchers.auth_context import current_auth
 
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.adapters.common import ensure_supported_host, get_url_host, host_matches
@@ -83,6 +84,10 @@ def load_manual_cookies_for_bilibili() -> dict[str, str] | None:
         if parsed:
             return parsed
 
+    profile = current_auth()
+    if profile and profile.platform == 'bilibili':
+        return parse_cookie_header(profile.cookie)
+
     raw_cookie = os.environ.get(MANUAL_COOKIE_ENV, "").strip()
     if raw_cookie:
         parsed = parse_cookie_header(raw_cookie)
@@ -133,6 +138,10 @@ def load_bilibili_cookies() -> tuple[Any | None, str | None]:
     manual_cookies = load_manual_cookies_for_bilibili()
     if manual_cookies:
         return manual_cookies, "manual"
+
+    from deployment_security import deployment_security
+    if deployment_security().server:
+        return None, None
 
     browser_loaders = [
         ("chrome", browser_cookie3.chrome),

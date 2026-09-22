@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 import browser_cookie3
 import requests
-from playwright.sync_api import BrowserContext, sync_playwright
+from fetchers.browser_runtime import browser_context, BrowserUnavailableError
+from fetchers.auth_context import current_auth, scoped_request
+
+if TYPE_CHECKING:
+    from playwright.sync_api import BrowserContext
 
 from fetchers.adapters.base import BasePlatformAdapter
 from fetchers.adapters.common import collect_subtitle_tracks_from_payload, extract_balanced_json_after, get_url_host, host_matches
@@ -65,7 +69,7 @@ def resolve_share_link(url: str) -> str:
     minutes before the browser navigation timeout expires.
     """
     try:
-        response = requests.get(
+        response = scoped_request('get',
             url,
             headers={"User-Agent": USER_AGENT},
             timeout=12,
@@ -138,7 +142,7 @@ def fetch_share_page_detail(link: str) -> dict[str, Any]:
     last_error: Exception | None = None
     for url in dict.fromkeys(candidates):
         try:
-            response = requests.get(
+            response = scoped_request('get',
                 url,
                 headers={
                     "User-Agent": MOBILE_USER_AGENT,
@@ -382,20 +386,20 @@ def raise_if_generic_home_capture(capture: dict[str, Any]) -> None:
         )
 
 def capture_media_no_login(link: str, wait_ms: int = PROBE_WAIT_MS) -> dict[str, Any]:
-    with sync_playwright() as p:
-        browser = p.chromium.launch(channel="chrome", headless=True)
-        context = browser.new_context(
-            viewport={"width": 1440, "height": 900},
-            locale="zh-CN",
-            user_agent=USER_AGENT,
-        )
-        try:
-            return _capture_media_from_context(context, link, wait_ms=wait_ms)
-        finally:
-            browser.close()
+    with browser_context(user_agent=USER_AGENT) as (context, runtime, _version):
+        capture = _capture_media_from_context(context, link, wait_ms=wait_ms)
+        capture['browser_runtime'] = runtime
+        return capture
 
 
 def load_chrome_cookies_for_douyin() -> list[dict[str, Any]]:
+    profile = current_auth()
+    if profile and profile.platform == 'douyin':
+        from fetchers.auth_context import browser_cookies
+        return browser_cookies(profile)
+    from deployment_security import deployment_security
+    if deployment_security().server:
+        return []
     cookie_jar = browser_cookie3.chrome(domain_name="douyin.com")
     cookies: list[dict[str, Any]] = []
     for cookie in cookie_jar:
@@ -424,18 +428,11 @@ def capture_media_with_chrome_cookies(link: str, wait_ms: int = PROBE_WAIT_MS) -
     if not cookies:
         raise RuntimeError("No Douyin cookies found in Chrome")
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(channel="chrome", headless=True)
-        context = browser.new_context(
-            viewport={"width": 1440, "height": 900},
-            locale="zh-CN",
-            user_agent=USER_AGENT,
-        )
+    with browser_context(user_agent=USER_AGENT) as (context, runtime, _version):
         context.add_cookies(cookies)
-        try:
-            return _capture_media_from_context(context, link, wait_ms=wait_ms)
-        finally:
-            browser.close()
+        capture = _capture_media_from_context(context, link, wait_ms=wait_ms)
+        capture['browser_runtime'] = runtime
+        return capture
 
 
 class DouyinAdapter(BasePlatformAdapter):
@@ -466,6 +463,8 @@ class DouyinAdapter(BasePlatformAdapter):
                 raise_if_generic_home_capture(capture)
                 strategy = "no-login"
             except Exception as no_login_error:
+                if isinstance(no_login_error, BrowserUnavailableError):
+                    raise
                 try:
                     capture = capture_media_with_chrome_cookies(normalized_link)
                     raise_if_generic_home_capture(capture)
@@ -533,6 +532,7 @@ class DouyinAdapter(BasePlatformAdapter):
             ),
             metadata={
                 "capture_strategy": strategy,
+                "browser_runtime": capture.get('browser_runtime'),
                 "media_kind": capture["media_kind"],
                 "aweme_id": extract_aweme_id(capture.get("final_url") or normalized_link),
                 "image_count": len(image_assets),
