@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fetchers.downloader import download_hls_media, download_media
+from fetchers.adapters.douyin import choose_media_capture
 from fetchers.exporters import OUTPUT_FORMATS as SHARED_OUTPUT_FORMATS
 from fetchers.exporters import export_media as shared_export_media
 from fetchers.exporters import run_ffmpeg
@@ -16,6 +17,19 @@ from douyin_fetch import (
     is_audio_output,
     is_video_output,
 )
+
+
+class BrowserCaptureCoverTests(unittest.TestCase):
+    def test_browser_capture_preserves_cover_and_fallback(self):
+        for field in ('cover', 'origin_cover', 'dynamic_cover'):
+            with self.subTest(field=field):
+                capture = choose_media_capture(
+                    candidate_video_url='https://example.test/video.mp4',
+                    candidate_audio_url=None, dom_video_sources=[],
+                    final_url='https://www.douyin.com/video/123', title='fixture',
+                    aweme_detail={'video': {field: {'url_list': ['https://example.test/cover.jpg']}}},
+                )
+                self.assertEqual(capture['cover_url'], 'https://example.test/cover.jpg')
 
 
 class OutputFormatRegistryTests(unittest.TestCase):

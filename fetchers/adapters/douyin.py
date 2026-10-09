@@ -241,6 +241,13 @@ def choose_media_capture(
 ) -> dict[str, Any]:
     video_url = candidate_video_url
     audio_url = candidate_audio_url
+    video_detail = (aweme_detail or {}).get("video") or {}
+    cover_url = None
+    for field in ("cover", "origin_cover", "dynamic_cover"):
+        cover = video_detail.get(field) or {}
+        cover_url = first_url(cover.get("url_list"))
+        if cover_url:
+            break
 
     if video_url is None:
         for src in dom_video_sources:
@@ -257,6 +264,7 @@ def choose_media_capture(
             "video_url": video_url,
             "audio_url": audio_url,
             "aweme_detail": aweme_detail,
+            "cover_url": cover_url,
         }
     if audio_url:
         return {
@@ -267,6 +275,7 @@ def choose_media_capture(
             "video_url": None,
             "audio_url": audio_url,
             "aweme_detail": aweme_detail,
+            "cover_url": cover_url,
         }
     raise RuntimeError("No media URL captured")
 
