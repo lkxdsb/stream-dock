@@ -5,6 +5,7 @@ import functools
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from concurrent.futures import Future
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
@@ -161,6 +162,19 @@ class ParserRolloutTests(unittest.TestCase):
         result = MediaFetchResult('kuaishou', 'video', 'test', '', '', None, None,
                                   video_streams=[avc, refreshed], preferred_video=avc)
         self.assertEqual(resolve_media_selection(result, output_type='mp4', video_quality=stream_id(hevc)).video_stream, refreshed)
+
+    def test_douyin_identity_survives_signed_path_and_cdn_rotation(self):
+        stream = MediaStream('https://v11-weba.douyinvod.com/' + 'a' * 32 + '/1234abcd/video/tos/cn/asset/media-video-avc1/?sig=old',
+                             'video', 'mp4', 'h264', 1080, 1920, 1500000, None, 'normal_1080_0')
+        refreshed = replace(stream, url='https://v26-web.douyinvod.com/' + 'b' * 32 + '/5678abcd/video/tos/cn/asset/media-video-avc1/?sig=new')
+        self.assertEqual(stream_id(stream), stream_id(refreshed))
+        for changed in (replace(refreshed, codec='h265'), replace(refreshed, height=720),
+                        replace(refreshed, url=refreshed.url.replace('/asset/', '/other-asset/')),
+                        replace(refreshed, url=refreshed.url.replace('douyinvod.com', 'douyinvod.com.evil.invalid'))):
+            self.assertNotEqual(stream_id(stream), stream_id(changed))
+        result = MediaFetchResult('douyin', 'video', 'fixture', '', '', None, None,
+                                  video_streams=[refreshed], preferred_video=refreshed)
+        self.assertEqual(resolve_media_selection(result, output_type='mp4', video_quality=stream_id(stream)).video_stream, refreshed)
 
     def test_error_page_does_not_set_media_size(self):
         response = MagicMock(status_code=403, headers={'content-type': 'text/xml', 'content-length': '393'}, url='https://cdn.example/error')
