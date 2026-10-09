@@ -138,6 +138,7 @@
     activeProbeController = controller;
     const timeoutId = window.setTimeout(() => controller.abort(), 120000);
     let response;
+    let data;
     try {
       response = await fetch('/api/media/probe', {
         method: 'POST',
@@ -148,6 +149,7 @@
           bilibiliCookie: currentCookieKey || null,
         }),
       });
+      data = await response.json();
     } catch (error) {
       if (error?.name === 'AbortError' && sequence !== probeSequence) return null;
       if (error?.name === 'AbortError') throw new Error('清晰度识别超时，请稍后重试');
@@ -155,7 +157,6 @@
     } finally {
       window.clearTimeout(timeoutId);
     }
-    const data = await response.json();
     if (sequence !== probeSequence || inputSnapshot !== String(linkInput?.value || '').trim() || currentCookieKey !== String(bilibiliCookie?.value || '').trim()) return null;
 
     if (!response.ok || !data.success) {

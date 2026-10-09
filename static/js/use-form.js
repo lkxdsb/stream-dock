@@ -541,7 +541,8 @@
         if (confirmedProbeKey !== probeKey) {
           if (links.length === 1 && !pendingBatchSuccess.length) {
             const probeData = await quality.probeQualityOptions(links[0], { silent: true });
-            if (sequence !== workflowSequence || !probeData) return;
+            if (sequence !== workflowSequence) return;
+            if (!probeData) throw new Error('本次识别结果已失效，请重新点击开始解析。');
             payload.videoQuality = String(quality?.selectedQualityLabel?.() || '').trim();
             renderProbePreview(probeData);
             confirmedProbeKey = probeKey;

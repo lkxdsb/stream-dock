@@ -400,8 +400,8 @@ class ParserApiTests(unittest.IsolatedAsyncioTestCase):
         profile = store.put('bilibili', 'SESSDATA=private')
         result = MediaFetchResult('bilibili', 'video', 'fixture', '', '', None, None)
         transport = httpx.ASGITransport(app=app)
-        with patch('app.auth_store', store), patch('app.probe_media', return_value=result), \
-             patch('app.serialize_probe_result', side_effect=lambda _: {
+        with patch('app.auth_store', store), patch('fetchers.probe_worker.probe_with_budget', return_value=result), \
+             patch('app.serialize_probe_result', side_effect=lambda _, **kwargs: {
                  'success': True, 'authProfileId': current_auth().id if current_auth() else None,
              }):
             async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:

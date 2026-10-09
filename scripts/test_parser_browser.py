@@ -51,6 +51,49 @@ def check_share_text_and_stale_edits(browser, origin: str) -> None:
     page.close()
 
 
+def check_stalled_response_body(browser, origin: str) -> None:
+    """Use a real HTTP body that stalls after headers, not a mocked promise."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Event, Thread
+    release = Event()
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', '9999')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(b'{')
+            self.wfile.flush()
+            release.wait(5)
+        def log_message(self, *_args):
+            pass
+    http_server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = Thread(target=http_server.serve_forever, daemon=True)
+    thread.start()
+    page = browser.new_page()
+    try:
+        page.goto(f'{origin}/use')
+        page.evaluate("""url => {
+          const originalFetch = window.fetch.bind(window);
+          const originalTimeout = window.setTimeout.bind(window);
+          window.setTimeout = (callback, delay, ...args) => originalTimeout(callback, delay === 120000 ? 450 : delay, ...args);
+          window.fetch = (urlArg, options = {}) => String(urlArg).endsWith('/api/media/probe')
+            ? originalFetch(url, {signal: options.signal}) : originalFetch(urlArg, options);
+        }""", f'http://127.0.0.1:{http_server.server_port}/stalled-json')
+        page.locator('#link').fill('文案 https://v.douyin.com/stalled/')
+        page.locator('#submitButton').click()
+        page.wait_for_function("document.body.textContent.includes('清晰度识别超时')", timeout=2500)
+        assert not page.locator('#submitButton').is_disabled()
+        assert page.locator('#submitButton').inner_text() == '开始解析'
+    finally:
+        page.close()
+        release.set()
+        http_server.shutdown()
+        http_server.server_close()
+        thread.join(timeout=2)
+
+
 def main() -> None:
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
@@ -168,8 +211,9 @@ def main() -> None:
             page.wait_for_function("document.querySelector('#mediaDiagnosticStatus').textContent.includes('cancelled')", timeout=5000)
             assert page.evaluate('window.__diagCancelled')
             check_share_text_and_stale_edits(browser, f'http://127.0.0.1:{port}')
+            check_stalled_response_body(browser, f'http://127.0.0.1:{port}')
             browser.close()
-        print('REAL_BROWSER_PARSER=passed batch-retry=preserved stream-id=hevc diagnostic-cancel=passed share-text=accepted stale-edit=discarded')
+        print('REAL_BROWSER_PARSER=passed batch-retry=preserved stream-id=hevc diagnostic-cancel=passed share-text=accepted stale-edit=discarded real-stalled-body=timeout-visible')
     finally:
         server.terminate()
         try:

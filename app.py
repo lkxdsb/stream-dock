@@ -4,6 +4,7 @@ import os
 import re
 import asyncio
 import json
+import multiprocessing
 import signal
 import shutil
 import subprocess
@@ -143,6 +144,10 @@ def parse_progress_update(line: str) -> tuple[float | None, str] | None:
 
 def _task_storage_path() -> Path | None:
     """Allow tests and disposable runs to opt out of the user's persistent history."""
+    # Spawned probe workers re-import the entrypoint; only the service may
+    # recover persistent tasks. Child imports must not mark live tasks failed.
+    if multiprocessing.current_process().name != 'MainProcess':
+        return None
     configured = os.getenv('STREAMDOCK_TASK_STORAGE_PATH')
     if configured is not None:
         configured = configured.strip()
@@ -2535,15 +2540,16 @@ def probe(payload: ProbeRequest):
         if deployment_security().server and (payload.bilibiliCookie or payload.bilibiliCookieFile):
             raise ValueError('服务器模式请使用平台授权配置，不接受探测请求中的原始 Cookie 或文件路径')
         profile = media_auth_profile(payload.link, payload.authProfileId)
-        if deployment_security().server:
-            from fetchers.probe_worker import probe_with_budget
-            remaining_ms = int((deadline - monotonic()) * 1000)
-            if remaining_ms <= 0:
-                raise MediaProbeError('network_timeout', 'probe_budget', '媒体解析超过总时间预算', retryable=True)
-            result = probe_with_budget(payload.link, profile, timeout_ms=remaining_ms)
-        else:
-            with use_auth(profile), bilibili_cookie_env(payload.bilibiliCookie, payload.bilibiliCookieFile):
-                result = probe_media(payload.link)
+        # Desktop probes also need a killable total budget. A browser abort
+        # cannot stop an unbounded synchronous parser running in an API thread.
+        from fetchers.probe_worker import probe_with_budget
+        remaining_ms = int((deadline - monotonic()) * 1000)
+        if remaining_ms <= 0:
+            raise MediaProbeError('network_timeout', 'probe_budget', '媒体解析超过总时间预算', retryable=True)
+        result = probe_with_budget(
+            payload.link, profile, timeout_ms=remaining_ms,
+            cookie=payload.bilibiliCookie, cookie_file=payload.bilibiliCookieFile,
+        )
     except Exception as exc:
         error_info = classify_probe_exception(exc)
         trace_id = uuid4().hex
@@ -2562,8 +2568,7 @@ def probe(payload: ProbeRequest):
     # Resource sampling happens during serialization, after the parser's own
     # auth context has ended. Keep the same scoped profile for that request.
     with use_auth(profile):
-        serialized = (serialize_probe_result(result, deadline=deadline) if deployment_security().server
-                      else serialize_probe_result(result))
+        serialized = serialize_probe_result(result, deadline=deadline)
         return JSONResponse(serialized)
 
 
