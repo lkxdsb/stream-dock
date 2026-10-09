@@ -442,7 +442,19 @@ python scripts/test_frontend_m5_browser.py
 python scripts/test_frontend_m6_browser.py
 python scripts/test_frontend_m8_browser.py
 python scripts/test_frontend_m9_browser.py
+python scripts/test_parser_browser.py
 ```
+
+分享文案的真实线上/本机 UI 验收（需要目标桌面服务已运行；使用真实接口，不替换网络请求，不提交下载任务）：
+
+```bash
+python scripts/test_share_text_live.py \
+  --base-url http://127.0.0.1:8002 \
+  --share-text '完整分享文案 https://v.douyin.com/实际短链/ 复制此链接观看' \
+  --expected-title '目标视频标题中的关键文本'
+```
+
+此验收保存标题、视频流数量、等待时长和页面截图，证明分享文案能进入下载确认页；**不等同于完整视频已下载或解码通过**。`test_parser_browser.py` 的固定响应 UI 回归另行覆盖分享文案和异步旧结果丢弃，不能替代这项真实链接验证。
 
 具体内容级断言和降级策略见 [`docs/CONVERSION_QUALITY_VALIDATION.md`](docs/CONVERSION_QUALITY_VALIDATION.md)。
 

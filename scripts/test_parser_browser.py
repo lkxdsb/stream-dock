@@ -15,6 +15,42 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def check_share_text_and_stale_edits(browser, origin: str) -> None:
+    """Deterministic UI regression; API metadata is a fixture, not a live probe."""
+    page = browser.new_page()
+    fixture = {
+        'success': True, 'platform': 'douyin', 'title': '分享文案测试',
+        'contentType': 'video', 'videoStreams': [
+            {'streamId': 'sid:share-text', 'qualityLabel': '高清', 'height': 720, 'codec': 'h264'}
+        ], 'audioStreams': [], 'assetSummary': {'subtitleCount': 0},
+        'recommendations': {'best_quality': {'stream': {
+            'streamId': 'sid:share-text', 'qualityLabel': '高清', 'height': 720, 'codec': 'h264'
+        }}}, 'probeSummary': {'qualityCount': 1},
+    }
+    page.route('**/api/media/probe', lambda route: route.fulfill(json=fixture))
+    page.goto(f'{origin}/use')
+    page.locator('#link').fill('9.94 分享文案 中文😀 https://v.douyin.com/share-fixture/ 复制此链接，打开Dou音观看！')
+    page.locator('#submitButton').click()
+    page.wait_for_function("document.querySelector('#submitButton').textContent.includes('确认并开始下载')", timeout=7000)
+    assert not page.locator('#mediaProbePreview').is_hidden()
+    assert '分享文案测试' in page.locator('#mediaProbeTitle').inner_text()
+    page.goto(f'{origin}/use')
+    page.evaluate("""fixture => {
+      window.fetch = () => new Promise(resolve => {
+        window.__releaseProbe = () => resolve(new Response(JSON.stringify(fixture),
+          {headers: {'Content-Type':'application/json'}}));
+      });
+      document.querySelector('#link').value = '文案 https://v.douyin.com/old/';
+      window.__completed = false;
+      window.StreamDockQuality.probeQualityOptions('https://v.douyin.com/old/', {silent:true})
+        .then(result => { window.__probeResult = result; window.__completed = true; });
+    }""", fixture)
+    page.evaluate("document.querySelector('#link').value = '新文案 https://v.douyin.com/new/'; window.__releaseProbe()")
+    page.wait_for_function('window.__completed')
+    assert page.evaluate('window.__probeResult === null')
+    page.close()
+
+
 def main() -> None:
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
@@ -131,8 +167,9 @@ def main() -> None:
             page.locator('#mediaDiagnosticCancel').click()
             page.wait_for_function("document.querySelector('#mediaDiagnosticStatus').textContent.includes('cancelled')", timeout=5000)
             assert page.evaluate('window.__diagCancelled')
+            check_share_text_and_stale_edits(browser, f'http://127.0.0.1:{port}')
             browser.close()
-        print('REAL_BROWSER_PARSER=passed batch-retry=preserved stream-id=hevc diagnostic-cancel=passed')
+        print('REAL_BROWSER_PARSER=passed batch-retry=preserved stream-id=hevc diagnostic-cancel=passed share-text=accepted stale-edit=discarded')
     finally:
         server.terminate()
         try:

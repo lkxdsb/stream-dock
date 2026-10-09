@@ -102,6 +102,9 @@
       return null;
     }
     const normalizedLink = String(link || '').trim();
+    // The form may pass an extracted URL while the textarea holds share text.
+    // Detect edits against the original input, not against that URL.
+    const inputSnapshot = String(linkInput?.value || '').trim();
     const currentCookieKey = String(bilibiliCookie?.value || '').trim();
     if (!normalizedLink || !isVideoOutputType(outputType.value)) {
       probeSequence += 1;
@@ -153,7 +156,7 @@
       window.clearTimeout(timeoutId);
     }
     const data = await response.json();
-    if (sequence !== probeSequence || normalizedLink !== String(linkInput?.value || '').trim() || currentCookieKey !== String(bilibiliCookie?.value || '').trim()) return null;
+    if (sequence !== probeSequence || inputSnapshot !== String(linkInput?.value || '').trim() || currentCookieKey !== String(bilibiliCookie?.value || '').trim()) return null;
 
     if (!response.ok || !data.success) {
       resetQualityOptions('清晰度识别失败');
