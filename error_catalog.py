@@ -78,8 +78,10 @@ def classify_error(raw_error: str | None, *, fallback: str = '操作失败') -> 
             action='openAdvanced',
             action_label='更换授权信息',
         )
-    if any(marker in lowered for marker in ('cookie', 'login required', 'sign in', 'unauthorized', 'forbidden')) or any(marker in raw for marker in ('需要登录', '登录态', '无权访问', '没有权限')):
+    if any(marker in lowered for marker in ('login required', 'sign in required', 'unauthorized')) or any(marker in raw for marker in ('需要登录', '要求登录', '无权访问', '没有权限')):
         return result('authentication_required', 'authorization', '当前内容需要登录或权限', '请确认浏览器登录态，或在高级选项中补充授权信息后重试。', retryable=True, action='openAdvanced', action_label='打开高级选项')
+    if '媒体解析未取得可用资源' in raw or 'capture failed in all strategies' in lowered:
+        return result('parser_failed', 'provider', '媒体解析未完成', '页面未返回可用媒体资源，请查看阶段诊断后重新识别；不能据此认定需要登录。', retryable=True, action='logs', action_label='查看诊断')
     if 'unsupported platform link' in lowered or '暂不支持该平台' in raw or '不支持当前链接' in raw:
         return result('unsupported_platform', 'input', '暂不支持当前链接', '暂不支持该平台或链接格式，请确认复制的是视频分享链接。', retryable=False, action='capability', action_label='查看支持平台')
     if any(marker in lowered for marker in ('invalid url', 'invalid link', 'malformed url')) or any(marker in raw for marker in ('链接格式错误', '无效链接', '请输入链接')):

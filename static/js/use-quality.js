@@ -165,7 +165,10 @@
       if (!silent) {
         logs?.renderLogs([(data.error || data.detail) ? `probe error:\n${data.error || data.detail}` : 'probe error:\nUnknown error']);
       }
-      throw new Error(data.error || data.detail || '清晰度识别失败');
+      const failure = new Error(data.error || data.detail || '清晰度识别失败');
+      failure.errorInfo = data.errorInfo;
+      failure.traceId = data.traceId;
+      throw failure;
     }
 
     let preferredStrategy = 'best_quality';

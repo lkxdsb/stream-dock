@@ -353,6 +353,13 @@ def _capture_media_from_context(context: BrowserContext, link: str, wait_ms: int
     except Exception as exc:
         raise TimeoutError(f"抖音页面打开超时或被平台拦截：{exc}") from exc
     page.wait_for_timeout(wait_ms)
+    # A fixed six-second wait can miss slower player initialization. Extend
+    # only an empty capture, in this same page, with a bounded six-second wait.
+    # Login/verification pages are still rejected below; no cookie access here.
+    for _ in range(24):
+        if candidate_video_url or candidate_audio_url or aweme_detail:
+            break
+        page.wait_for_timeout(250)
 
     video_sources = page.evaluate(
         """() => [...document.querySelectorAll('video')].map(v => ({
@@ -488,18 +495,30 @@ class DouyinAdapter(BasePlatformAdapter):
                     no_login_error.causes.insert(0, f'share_page: {type(share_error).__name__}: {share_error}')
                     raise
                 if not should_fallback_to_browser(no_login_error) and not isinstance(no_login_error, TimeoutError):
+                    if isinstance(no_login_error, MediaProbeError):
+                        no_login_error.causes = [
+                            f"share-page: {type(share_error).__name__}: {share_error}",
+                            f"no-login: {type(no_login_error).__name__}: {no_login_error}",
+                        ]
                     raise
                 try:
                     capture = capture_media_with_chrome_cookies(normalized_link)
                     raise_if_generic_home_capture(capture)
                     strategy = "chrome-cookies"
                 except Exception as cookie_error:
-                    raise RuntimeError(
-                        "Capture failed in all strategies: "
-                        f"share-page=({share_error}); "
-                        f"no-login=({no_login_error}); "
-                        f"chrome-cookies=({cookie_error})"
-                    )
+                    causes = [
+                        f"share-page: {type(share_error).__name__}: {share_error}",
+                        f"no-login: {type(no_login_error).__name__}: {no_login_error}",
+                        f"auth-fallback: {type(cookie_error).__name__}: {cookie_error}",
+                    ]
+                    if isinstance(cookie_error, MediaProbeError):
+                        cookie_error.causes = causes
+                        raise
+                    raise MediaProbeError(
+                        'network_timeout' if isinstance(no_login_error, TimeoutError) else 'parser_failed',
+                        'browser_capture', '媒体解析未取得可用资源；请查看阶段诊断后重新识别',
+                        platform='douyin', retryable=True, action='logs', causes=causes,
+                    ) from no_login_error
 
         if capture.get("media_kind") != "images":
             capture, strategy = enrich_capture_if_missing_audio(

@@ -33,6 +33,33 @@ from error_catalog import classify_probe_exception
 
 
 class ParserRolloutTests(unittest.TestCase):
+    def test_missing_cookie_does_not_imply_login_required(self):
+        from error_catalog import classify_error
+        from fetchers.adapters.douyin import DouyinAdapter
+        old_error = 'Capture failed in all strategies: no-login=(No media URL captured); chrome-cookies=(No Douyin cookies found in Chrome)'
+        self.assertEqual(classify_error(old_error)['code'], 'parser_failed')
+        with patch('fetchers.adapters.douyin.capture_from_share_page', side_effect=RuntimeError('分享页结构化数据解析失败')), \
+             patch('fetchers.adapters.douyin.capture_media_no_login', side_effect=RuntimeError('No media URL captured')), \
+             patch('fetchers.adapters.douyin.capture_media_with_chrome_cookies', side_effect=RuntimeError('No Douyin cookies found in Chrome')):
+            with self.assertRaises(MediaProbeError) as caught:
+                DouyinAdapter().fetch_media('https://v.douyin.com/fixture/')
+        info = classify_probe_exception(caught.exception)
+        self.assertEqual(info['code'], 'parser_failed')
+        self.assertEqual(info['stage'], 'browser_capture')
+        self.assertEqual(len(info['causes']), 3)
+        self.assertNotEqual(info['action'], 'openAdvanced')
+
+    def test_explicit_login_page_stops_fallback(self):
+        from fetchers.adapters.douyin import DouyinAdapter
+        with patch('fetchers.adapters.douyin.capture_from_share_page', side_effect=RuntimeError('分享页结构化数据解析失败')), \
+             patch('fetchers.adapters.douyin.capture_media_no_login', side_effect=MediaProbeError('authentication_required', 'browser_page', '抖音页面要求登录，请配置平台授权')), \
+             patch('fetchers.adapters.douyin.capture_media_with_chrome_cookies') as cookies:
+            with self.assertRaises(MediaProbeError) as caught:
+                DouyinAdapter().fetch_media('https://v.douyin.com/fixture/')
+        self.assertEqual(caught.exception.code, 'authentication_required')
+        self.assertEqual(len(caught.exception.causes), 2)
+        cookies.assert_not_called()
+
     def test_typed_http_error_does_not_guess_cookie_expiry(self):
         response = requests.Response()
         response.status_code = 403

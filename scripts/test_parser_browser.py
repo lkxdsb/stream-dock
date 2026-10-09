@@ -51,6 +51,27 @@ def check_share_text_and_stale_edits(browser, origin: str) -> None:
     page.close()
 
 
+def check_probe_failure_diagnostics(browser, origin: str) -> None:
+    page = browser.new_page()
+    try:
+        page.route('**/api/media/probe', lambda route: route.fulfill(json={
+            'success': False, 'error': '媒体解析未取得可用资源', 'traceId': 'fixture-trace',
+            'errorInfo': {'code': 'parser_failed', 'stage': 'browser_capture',
+                          'causes': ['share-page: structure missing', 'no-login: No media URL captured']},
+        }))
+        page.goto(f'{origin}/use')
+        page.locator('#link').fill('https://v.douyin.com/diagnostic-fixture/')
+        page.locator('#submitButton').click()
+        page.wait_for_function("document.body.textContent.includes('诊断编号：fixture-trace')")
+        text = page.locator('body').inner_text()
+        assert '失败阶段：browser_capture' in text
+        assert 'no-login: No media URL captured' in text
+        assert '请确认浏览器登录态' not in text
+        assert not page.locator('#submitButton').is_disabled()
+    finally:
+        page.close()
+
+
 def check_stalled_response_body(browser, origin: str) -> None:
     """Use a real HTTP body that stalls after headers, not a mocked promise."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -212,6 +233,7 @@ def main() -> None:
             assert page.evaluate('window.__diagCancelled')
             check_share_text_and_stale_edits(browser, f'http://127.0.0.1:{port}')
             check_stalled_response_body(browser, f'http://127.0.0.1:{port}')
+            check_probe_failure_diagnostics(browser, f'http://127.0.0.1:{port}')
             browser.close()
         print('REAL_BROWSER_PARSER=passed batch-retry=preserved stream-id=hevc diagnostic-cancel=passed share-text=accepted stale-edit=discarded real-stalled-body=timeout-visible')
     finally:

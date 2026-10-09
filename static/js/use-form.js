@@ -619,7 +619,12 @@
       const message = friendlyRequestError(error);
       result?.setStatus('error', message);
       result?.showResult({ error: message });
-      logs?.renderLogs(['任务提交失败', message]);
+      logs?.renderLogs([
+        '任务提交失败', message,
+        ...(error.errorInfo?.stage ? [`失败阶段：${error.errorInfo.stage}`] : []),
+        ...(Array.isArray(error.errorInfo?.causes) ? error.errorInfo.causes : []),
+        ...(error.traceId ? [`诊断编号：${error.traceId}`] : []),
+      ]);
       ui?.showToast(message);
     } finally {
       if (sequence !== workflowSequence) return;

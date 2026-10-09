@@ -25,7 +25,7 @@ class ErrorCatalogTests(unittest.TestCase):
     def test_provider_capture_failure_is_retryable_without_leaking_traceback(self):
         info = classify_error('Traceback (most recent call last):\nRuntimeError: capture failed in all strategies')
 
-        self.assertEqual(info['code'], 'media_unavailable')
+        self.assertEqual(info['code'], 'parser_failed')
         self.assertTrue(info['retryable'])
         self.assertNotIn('Traceback', info['message'])
 
