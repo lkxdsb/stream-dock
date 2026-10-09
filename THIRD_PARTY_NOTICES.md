@@ -12,3 +12,7 @@ The optional PDF parsing environment integrates MinerU as a replaceable local pr
 - Integration boundary: `pdf_engine/providers/mineru.py`
 
 StreamDock's task orchestration, parsing strategy, post-processing, quality checks, and product interface are maintained separately from the provider.
+# OpenCC
+
+Chinese subtitle script conversion uses OpenCC (Apache-2.0).
+Project and license: https://github.com/BYVoid/OpenCC

@@ -5,12 +5,13 @@ import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
 
 from runtime_checks import augmented_path, resolve_tool_path
 from fetchers.subtitle_ocr import OcrSubtitleCue, cues_to_srt
+from subtitles.chinese import normalize_chinese_asr
 
 ASR_MODEL = os.getenv('STREAMDOCK_SUBTITLE_ASR_MODEL', 'base')
 ASR_LANGUAGE = os.getenv('STREAMDOCK_SUBTITLE_ASR_LANG', 'zh')
@@ -78,7 +79,8 @@ def _transcribe_with_faster_whisper(audio_path: Path, *, model_name: str, langua
 
     model = WhisperModel(model_name, device=os.getenv('STREAMDOCK_SUBTITLE_ASR_DEVICE', 'cpu'), compute_type=os.getenv('STREAMDOCK_SUBTITLE_ASR_COMPUTE_TYPE', 'int8'))
     segments, _info = model.transcribe(str(audio_path), language=language or None, vad_filter=True, beam_size=5)
-    return _segments_to_cues(segments)
+    return [replace(cue, text=normalize_chinese_asr(cue.text, getattr(_info, 'language', language)))
+            for cue in _segments_to_cues(segments)]
 
 
 def _transcribe_with_openai_whisper(audio_path: Path, *, model_name: str, language: str | None) -> list[OcrSubtitleCue]:
@@ -86,7 +88,8 @@ def _transcribe_with_openai_whisper(audio_path: Path, *, model_name: str, langua
 
     model = whisper.load_model(model_name)
     result = model.transcribe(str(audio_path), language=language or None, verbose=False)
-    return _segments_to_cues(result.get('segments') or [])
+    return [replace(cue, text=normalize_chinese_asr(cue.text, result.get('language') or language))
+            for cue in _segments_to_cues(result.get('segments') or [])]
 
 
 def _transcribe_with_whisper_cli(audio_path: Path, output_dir: Path, *, model_name: str, language: str | None) -> list[OcrSubtitleCue]:
@@ -172,6 +175,7 @@ def generate_asr_subtitle_file(
             cues = _transcribe_with_whisper_cli(audio_path, tmp_path, model_name=model_name, language=language)
     if len(cues) < ASR_MIN_CUES:
         return None
+    cues = [replace(cue, text=normalize_chinese_asr(cue.text, language)) for cue in cues]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(cues_to_srt(cues), encoding='utf-8')
     return output_path if output_path.exists() and output_path.stat().st_size > 0 else None

@@ -244,6 +244,38 @@
     setDocumentState('已按时间排序', true);
   });
 
+  document.getElementById('subtitleSimplify')?.addEventListener('click', async () => {
+    const button = document.getElementById('subtitleSimplify');
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      syncFromDom();
+      validateClientCues();
+      const startingVersion = documentVersion;
+      const snapshot = JSON.stringify(cues);
+      const response = await fetch('/api/subtitles/simplify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cues }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '简体转换失败');
+      syncFromDom();
+      if (startingVersion !== documentVersion || snapshot !== JSON.stringify(cues)) {
+        toast('字幕已变更，请重新点击简体转换');
+        return;
+      }
+      cues = data.cues.map((cue) => ({ ...cue, id: uid() }));
+      documentVersion += 1;
+      render();
+      setDocumentState('已转为简体中文', true);
+      toast('已转为简体中文，时间轴保持不变；请导出或保存新版本');
+    } catch (error) {
+      toast(error.message || '简体转换失败');
+    } finally {
+      button.disabled = false;
+    }
+  });
+
   function requestClearWorkspace() {
     if (documentDirty && !window.confirm('当前字幕有未导出修改，确定要清空工作区吗？')) return;
     clearWorkspace();

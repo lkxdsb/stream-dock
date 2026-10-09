@@ -163,10 +163,20 @@ def main() -> int:
                 chooser_info.value.set_files(str(subtitle))
                 page.wait_for_function("document.querySelector('#subtitleCount').textContent === '1'")
                 assert '键盘导入' in page.locator('[data-text]').input_value()
+                page.locator('[data-text]').fill('鍵盤導入：考慮過這樣的條件嗎？ 😀 English')
+                before_timing = [page.locator('[data-start]').input_value(), page.locator('[data-end]').input_value()]
+                page.locator('#subtitleSimplify').click()
+                page.wait_for_function("document.querySelector('[data-text]').value.includes('考虑过这样的条件吗')")
+                assert before_timing == [page.locator('[data-start]').input_value(), page.locator('[data-end]').input_value()]
+                with page.expect_download() as download_info:
+                    page.locator('#subtitleExport').click()
+                converted = download_info.value.path()
+                content = Path(converted).read_text(encoding='utf-8', errors='strict')
+                assert '键盘导入：考虑过这样的条件吗？ 😀 English' in content
                 assert page.locator('#toast').get_attribute('aria-live') == 'polite'
                 browser.close()
 
-        print('REAL_BROWSER_M6=passed batch-edit=31 folder-pack=real partial-probe=1/2 history=restored narrow-nav=visible keyboard-import=passed')
+        print('REAL_BROWSER_M6=passed batch-edit=31 folder-pack=real partial-probe=1/2 history=restored narrow-nav=visible keyboard-import=passed simplified-export=real')
         return 0
     finally:
         server.terminate()

@@ -28,3 +28,4 @@ rarfile>=4.2,<5
 pypdf>=4
 yt-dlp>=2026.7.4
 EbookLib>=0.18
+opencc>=1.1.9,<2

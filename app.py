@@ -60,6 +60,7 @@ from tasks.sqlite_store import SQLiteTaskStore, migrate_legacy_json
 from tasks.artifacts import artifact_summary, publish_artifact, remove_task_workspace, resolve_artifact, retain_input, seal_artifact, task_output_dir, task_workspace
 from runtime_checks import augmented_path, cleanup_task_partials, deep_media_quality, ensure_system_proxy_environment, environment_health, network_subprocess_environment, prepare_output_directory, resolve_tool_path, validate_media_output
 from subtitles.service import export_subtitles, normalize_format as normalize_subtitle_format, parse_subtitles
+from subtitles.chinese import to_simplified
 from web_archive.models import ExtractRequest
 from web_archive.pipeline import run_web_archive
 from web_archive.queue import WebArchiveQueue
@@ -1591,6 +1592,17 @@ def subtitle_export(payload: SubtitleExportRequest):
     media_type = 'text/vtt' if target_format == 'vtt' else 'text/plain'
     headers = {'Content-Disposition': f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(download_name, safe='')}"}
     return Response(content.encode('utf-8'), media_type=f'{media_type}; charset=utf-8', headers=headers)
+
+
+@app.post('/api/subtitles/simplify')
+def subtitle_simplify(payload: SubtitleExportRequest):
+    try:
+        from subtitles.service import validate_cues
+        cues = validate_cues([cue.model_dump() for cue in payload.cues])
+        rows = [{'start': cue.start, 'end': cue.end, 'text': to_simplified(cue.text)} for cue in cues]
+    except (OverflowError, TypeError, ValueError) as exc:
+        return JSONResponse({'success': False, 'error': str(exc)}, status_code=400)
+    return JSONResponse({'success': True, 'cues': rows})
 
 
 @app.post('/api/media/tasks/{task_id}/subtitles/regenerate')

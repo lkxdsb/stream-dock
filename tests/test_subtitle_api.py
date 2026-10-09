@@ -8,6 +8,17 @@ from app import app
 
 
 class SubtitleApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_simplify_preserves_timing_multiline_and_emoji(self):
+        transport = httpx.ASGITransport(app=app)
+        rows = [{'start': 5.9, 'end': 8.2, 'text': '他得將就一輩子了\n你沒有考慮過男生吧 😀 English 123'}]
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            response = await client.post('/api/subtitles/simplify', json={'cues': rows})
+            converted = response.json()['cues']
+            exported = await client.post('/api/subtitles/export', json={'format': 'srt', 'cues': converted})
+        self.assertEqual(converted, [{'start': 5.9, 'end': 8.2, 'text': '他得将就一辈子了\n你没有考虑过男生吧 😀 English 123'}])
+        self.assertIn('00:00:05,900 --> 00:00:08,200', exported.text)
+        self.assertIn('你没有考虑过男生吧', exported.text)
+
     async def test_workbench_page_and_assets_are_registered(self):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:

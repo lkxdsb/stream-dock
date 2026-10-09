@@ -80,6 +80,7 @@
     <div class="subtitle-timeline-head">
       <div><strong>字幕轨道</strong><span id="subtitleSelectionSummary">尚未导入字幕</span></div>
       <div class="subtitle-timeline-tools">
+        <button id="subtitleSimplify" type="button">转为简体中文</button>
         <button id="subtitleAdd" type="button"><span>＋</span>添加片段</button>
         <button id="subtitleSort" type="button">按时间排序</button>
       </div>
@@ -98,5 +99,5 @@
 {% endblock %}
 
 {% block page_scripts %}
-<script src="{{ url_for('static', path='/js/subtitles.js') }}?v=20260920-m6"></script>
+<script src="{{ url_for('static', path='/js/subtitles.js') }}?v=20261009-simplified"></script>
 {% endblock %}
