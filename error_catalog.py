@@ -48,8 +48,8 @@ def classify_error(raw_error: str | None, *, fallback: str = '操作失败') -> 
         return result('browser_unavailable', 'environment', '浏览器解析不可用', '请管理员检查浏览器运行环境；纯 HTTP 解析仍可使用。', retryable=False, action='health', action_label='检查环境')
     if 'browser concurrency limit reached' in lowered:
         return result('browser_busy', 'environment', '浏览器解析繁忙', '请稍后再试。', retryable=True, action='retry', action_label='稍后重试')
-    if any(marker in lowered for marker in ('captcha', 'verification required', 'challenge required')) or any(marker in raw for marker in ('验证码', '安全验证', '人机验证')):
-        return result('verification_required', 'provider', '平台要求交互验证', '请先在平台完成验证；自动解析不会绕过验证。', retryable=False, action='auth', action_label='检查平台授权')
+    if any(marker in lowered for marker in ('captcha', 'verification required', 'challenge required')) or any(marker in raw for marker in ('验证码', '安全验证', '人机验证', '交互验证')):
+        return result('verification_required', 'provider', '平台要求交互验证', '请先在平台完成验证；自动解析不会绕过验证。', retryable=False, action='logs', action_label='查看验证诊断')
     if 'unsupported weibo video link variant' in lowered:
         return result('unsupported_link_variant', 'input', '暂不支持的微博视频地址', '该分享地址缺少可识别的视频标识，请提供完整作品链接。', retryable=False, action='reselect', action_label='重新输入链接')
     if '412 client error' in lowered or '403 client error' in lowered:

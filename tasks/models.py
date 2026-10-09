@@ -77,5 +77,6 @@ class TaskItem:
             'updatedAt': self.updated_at,
         }
         if self.error:
-            payload['errorInfo'] = classify_error(self.error)
+            structured = (self.result or {}).get('errorInfo')
+            payload['errorInfo'] = dict(structured) if isinstance(structured, dict) else classify_error(self.error)
         return payload

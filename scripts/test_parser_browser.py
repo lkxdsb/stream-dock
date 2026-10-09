@@ -2,6 +2,7 @@
 """Real UI checks for failed-item retry and same-label stream identity."""
 
 import os
+import json
 import socket
 import subprocess
 import sys
@@ -13,6 +14,39 @@ from playwright.sync_api import sync_playwright
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def check_failed_download_subtitle_status(browser, origin: str) -> None:
+    page = browser.new_page()
+    fixture = {'id': 'failed-media', 'kind': 'media', 'title': 'failed-media',
+               'status': 'failed', 'payload': {'link': 'https://example.test/video'},
+               'logs': [], 'error': '平台要求交互验证',
+               'result': {'outputPath': None, 'subtitleJob': {'status': 'unavailable'}}}
+    try:
+        page.route('**/api/tasks?kind=media', lambda route: route.fulfill(
+            content_type='application/json', body=json.dumps({'success': True, 'tasks': [fixture]})))
+        page.goto(f'{origin}/use#completed')
+        page.get_by_role('button', name='查看详情', exact=True).first.click()
+        dialog = page.get_by_role('dialog')
+        assert '视频文件已经完成' not in dialog.inner_text()
+        assert dialog.locator('.subtitle-job-section').count() == 0
+    finally:
+        page.close()
+
+
+def check_portrait_resolution(browser, origin: str) -> None:
+    page = browser.new_page()
+    try:
+        page.goto(f'{origin}/use#parse')
+        for width, height, expected in (
+            (1080, 1920, '1080P'), (1920, 1080, '1080P'),
+            (720, 1280, '720P'), (1440, 2560, '2K'),
+            (2160, 3840, '4K'), (3840, 2160, '4K'),
+        ):
+            assert page.evaluate('(s) => window.StreamDockQuality.friendlyResolution(s)',
+                                 {'width': width, 'height': height}) == expected
+    finally:
+        page.close()
 
 
 def check_share_text_and_stale_edits(browser, origin: str) -> None:
@@ -28,13 +62,13 @@ def check_share_text_and_stale_edits(browser, origin: str) -> None:
         }}}, 'probeSummary': {'qualityCount': 1},
     }
     page.route('**/api/media/probe', lambda route: route.fulfill(json=fixture))
-    page.goto(f'{origin}/use')
+    page.goto(f'{origin}/use#parse')
     page.locator('#link').fill('9.94 分享文案 中文😀 https://v.douyin.com/share-fixture/ 复制此链接，打开Dou音观看！')
     page.locator('#submitButton').click()
     page.wait_for_function("document.querySelector('#submitButton').textContent.includes('确认并开始下载')", timeout=7000)
     assert not page.locator('#mediaProbePreview').is_hidden()
     assert '分享文案测试' in page.locator('#mediaProbeTitle').inner_text()
-    page.goto(f'{origin}/use')
+    page.goto(f'{origin}/use#parse')
     page.evaluate("""fixture => {
       window.fetch = () => new Promise(resolve => {
         window.__releaseProbe = () => resolve(new Response(JSON.stringify(fixture),
@@ -59,7 +93,7 @@ def check_probe_failure_diagnostics(browser, origin: str) -> None:
             'errorInfo': {'code': 'parser_failed', 'stage': 'browser_capture',
                           'causes': ['share-page: structure missing', 'no-login: No media URL captured']},
         }))
-        page.goto(f'{origin}/use')
+        page.goto(f'{origin}/use#parse')
         page.locator('#link').fill('https://v.douyin.com/diagnostic-fixture/')
         page.locator('#submitButton').click()
         page.wait_for_function("document.body.textContent.includes('诊断编号：fixture-trace')")
@@ -94,7 +128,7 @@ def check_stalled_response_body(browser, origin: str) -> None:
     thread.start()
     page = browser.new_page()
     try:
-        page.goto(f'{origin}/use')
+        page.goto(f'{origin}/use#parse')
         page.evaluate("""url => {
           const originalFetch = window.fetch.bind(window);
           const originalTimeout = window.setTimeout.bind(window);
@@ -134,7 +168,7 @@ def main() -> None:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page()
-            page.goto(f'http://127.0.0.1:{port}/use')
+            page.goto(f'http://127.0.0.1:{port}/use#parse')
             page.evaluate('''() => {
               const original = window.fetch.bind(window);
               window.__sent = null; window.__failedOnce = false;
@@ -180,7 +214,8 @@ def main() -> None:
             page.locator('#submitButton').click()
             page.wait_for_function('window.__sent !== null')
             assert page.evaluate('window.__sent.links') == ['https://example.test/good', 'https://example.test/broken']
-            page.goto(f'http://127.0.0.1:{port}/use')
+            page.wait_for_function("location.hash === '#downloading'")
+            page.goto(f'http://127.0.0.1:{port}/use#parse')
             page.locator('#link').fill('https://example.test/good')
             # Reinstall the probe fixture after navigation.
             page.evaluate('''() => { const original = window.fetch.bind(window); window.__sent = null;
@@ -234,6 +269,8 @@ def main() -> None:
             check_share_text_and_stale_edits(browser, f'http://127.0.0.1:{port}')
             check_stalled_response_body(browser, f'http://127.0.0.1:{port}')
             check_probe_failure_diagnostics(browser, f'http://127.0.0.1:{port}')
+            check_portrait_resolution(browser, f'http://127.0.0.1:{port}')
+            check_failed_download_subtitle_status(browser, f'http://127.0.0.1:{port}')
             browser.close()
         print('REAL_BROWSER_PARSER=passed batch-retry=preserved stream-id=hevc diagnostic-cancel=passed share-text=accepted stale-edit=discarded real-stalled-body=timeout-visible')
     finally:

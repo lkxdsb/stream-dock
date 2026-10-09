@@ -1,10 +1,26 @@
 import unittest
 
-from error_catalog import classify_error
+from error_catalog import classify_error, classify_probe_exception
+from fetchers.errors import MediaProbeError
 from tasks.models import TaskItem, TaskKind
 
 
 class ErrorCatalogTests(unittest.TestCase):
+    def test_real_download_verification_error_is_not_expired_link(self):
+        info = classify_probe_exception(MediaProbeError(
+            'verification_required', 'browser_page',
+            '抖音页面要求交互验证，已停止自动解析'))
+        self.assertEqual(info['code'], 'verification_required')
+        self.assertEqual(info['stage'], 'browser_page')
+        self.assertFalse(info['retryable'])
+        self.assertNotIn('过期', info['message'])
+
+    def test_task_keeps_typed_download_diagnostics(self):
+        info = {'code': 'verification_required', 'stage': 'browser_page',
+                'message': '请先在平台完成验证'}
+        task = TaskItem(id='typed', kind=TaskKind.MEDIA, title='demo', payload={},
+                        error=info['message'], result={'errorInfo': info})
+        self.assertEqual(task.to_dict()['errorInfo'], info)
     def test_upower_preview_has_specific_entitlement_error(self):
         info = classify_error(
             'RuntimeError: Bilibili UP 主专属内容未解锁：当前登录态仅返回 20 秒试看流，无权访问完整资源'

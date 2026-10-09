@@ -162,4 +162,9 @@ class MediaQueue:
                     )
         else:
             error = str(result.get('error') or stderr or stdout or '解析失败')
+            if (result.get('errorInfo') or {}).get('code') == 'verification_required':
+                # Do not turn a single interactive challenge into failures for
+                # every remaining batch item. Leave the rest pending for resume.
+                self.pause()
+                logs.append('平台要求交互验证，媒体队列已暂停；完成验证后可恢复队列')
             self.store.update(task_id, status=TaskStatus.FAILED, logs=logs, result=dict(result), error=error, stage='失败', progress=None)

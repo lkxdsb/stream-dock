@@ -579,8 +579,9 @@ def run_pipeline(
                                 "path": str(generated_subtitle),
                                 "source": "speech-asr",
                                 "quality": "medium",
+                                "needsReview": True,
                                 "language": os.getenv('STREAMDOCK_SUBTITLE_ASR_LANG', 'zh'),
-                                "label": "语音识别字幕",
+                                "label": "语音识别字幕（需校对）",
                             })
                     except Exception:
                         pass

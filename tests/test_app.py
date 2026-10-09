@@ -1347,6 +1347,27 @@ class ProbeCookieIsolationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(cookies['bili_jct'], 'request-csrf')
             self.assertEqual(os.environ['BILIBILI_COOKIE'], original_cookie)
 
+    async def test_fetch_api_preserves_typed_child_error(self):
+        from unittest.mock import patch
+        import json
+        info = {'code': 'verification_required', 'stage': 'browser_page',
+                'message': '请先在平台完成验证；自动解析不会绕过验证。',
+                'retryable': False, 'action': 'logs',
+                'causes': ['share-page: Failed to locate anchor', 'no-login: 页面要求交互验证']}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://testserver') as client:
+            with patch('app.subprocess.run') as process:
+                process.return_value.returncode = 1
+                process.return_value.stdout = '[douyin-fetch] error info: ' + json.dumps(info)
+                process.return_value.stderr = info['message']
+                response = await client.post('/api/fetch', json={
+                    'link': 'https://v.douyin.com/demo/',
+                    'outputPath': '/tmp/out', 'outputType': 'mp4'})
+        data = response.json()
+        self.assertFalse(data['success'])
+        self.assertEqual(data['errorInfo'], info)
+        self.assertEqual(data['errorCode'], 'verification_required')
+
     async def test_fetch_api_returns_platform_field_on_success(self):
         from unittest.mock import patch
 

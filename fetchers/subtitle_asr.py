@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import math
 import os
 import shutil
 import subprocess
@@ -13,10 +14,23 @@ from runtime_checks import augmented_path, resolve_tool_path
 from fetchers.subtitle_ocr import OcrSubtitleCue, cues_to_srt
 from subtitles.chinese import normalize_chinese_asr
 
-ASR_MODEL = os.getenv('STREAMDOCK_SUBTITLE_ASR_MODEL', 'base')
+ASR_MODEL = os.getenv('STREAMDOCK_SUBTITLE_ASR_MODEL', 'small')
 ASR_LANGUAGE = os.getenv('STREAMDOCK_SUBTITLE_ASR_LANG', 'zh')
 ASR_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_SUBTITLE_ASR_TIMEOUT_SECONDS', '900'))
 ASR_MIN_CUES = int(os.getenv('STREAMDOCK_SUBTITLE_ASR_MIN_CUES', '1'))
+
+
+class SubtitleQualityError(ValueError):
+    """Recognized text is damaged; never publish it as a usable subtitle."""
+
+
+def validate_asr_cues(cues: list[OcrSubtitleCue]) -> None:
+    for index, cue in enumerate(cues, start=1):
+        if not (math.isfinite(cue.start) and math.isfinite(cue.end)
+                and 0 <= cue.start < cue.end):
+            raise SubtitleQualityError(f'字幕片段 {index} 的时间轴无效')
+        if '\ufffd' in cue.text or any(ord(c) < 32 and c not in '\n\r\t' for c in cue.text):
+            raise SubtitleQualityError(f'字幕片段 {index} 含有损坏字符，请更换识别模型或使用画面字幕识别')
 
 
 @dataclass(frozen=True)
@@ -114,7 +128,7 @@ def _transcribe_with_whisper_cli(audio_path: Path, output_dir: Path, *, model_na
     srt_path = next(output_dir.glob('*.srt'), None)
     if not srt_path or not srt_path.exists():
         return []
-    return _parse_srt_cues(srt_path.read_text(encoding='utf-8', errors='ignore'))
+    return _parse_srt_cues(srt_path.read_text(encoding='utf-8', errors='strict'))
 
 
 def _parse_srt_time(value: str) -> float:
@@ -176,6 +190,7 @@ def generate_asr_subtitle_file(
     if len(cues) < ASR_MIN_CUES:
         return None
     cues = [replace(cue, text=normalize_chinese_asr(cue.text, language)) for cue in cues]
+    validate_asr_cues(cues)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(cues_to_srt(cues), encoding='utf-8')
     return output_path if output_path.exists() and output_path.stat().st_size > 0 else None

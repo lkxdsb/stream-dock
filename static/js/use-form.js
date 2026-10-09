@@ -311,8 +311,13 @@
     const first = successItems[0]?.data || {};
     const coverCount = successItems.filter((item) => item.data?.coverUrl).length;
     const nativeSubtitleCount = successItems.reduce((sum, item) => sum + Number(item.data?.assetSummary?.subtitleCount ?? item.data?.probeSummary?.subtitleCount ?? 0), 0);
-    const maxHeight = Math.max(...successItems.map((item) => Number(item.data?.recommendations?.best_quality?.stream?.height || item.data?.videoStreams?.[0]?.height || 0)), 0);
-    const maxQuality = maxHeight ? `${maxHeight}P` : '自动最优';
+    const maxHeight = Math.max(...successItems.map((item) => {
+      const stream = item.data?.recommendations?.best_quality?.stream || item.data?.videoStreams?.[0];
+      const width = Number(stream?.width || 0);
+      const height = Number(stream?.height || 0);
+      return width > 0 && height > 0 ? Math.min(width, height) : height;
+    }), 0);
+    const maxQuality = maxHeight ? (quality?.friendlyResolution?.({ height: maxHeight }) || `${maxHeight}P`) : '自动最优';
 
     probePlatform.textContent = 'BATCH';
     probeTitle.textContent = `${successItems.length}/${items.length} 条视频已识别，确认后开始下载`;

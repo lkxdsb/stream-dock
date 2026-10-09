@@ -96,8 +96,10 @@ class SubtitleQueue:
         current_details = list(current_assets.get('subtitleDetails') or [])
         generated_subtitles = [str(path) for path in generated.get('subtitles') or [] if path]
         generated_details = [dict(item) for item in generated.get('subtitleDetails') or [] if isinstance(item, dict)]
-        merged_subtitles = list(dict.fromkeys([*current_subtitles, *generated_subtitles]))
-        merged_details = [*current_details, *generated_details]
+        # Keep previous files recoverable, but open the newly regenerated track
+        # by default instead of silently reopening an older damaged transcript.
+        merged_subtitles = list(dict.fromkeys([*generated_subtitles, *current_subtitles]))
+        merged_details = [*generated_details, *current_details]
         final_status = str(generated.get('status') or ('completed' if generated_subtitles else 'unavailable'))
         final_message = str(generated.get('message') or (
             '字幕识别完成' if final_status == 'completed' else '未生成字幕，视频文件仍可正常使用'

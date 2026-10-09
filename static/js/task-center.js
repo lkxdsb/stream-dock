@@ -448,7 +448,9 @@
   }
 
   function subtitleProgressSection(task) {
-    if (task.kind !== 'media') return '';
+    // A failed download may carry an unavailable subtitleJob too. Never tell
+    // the user that its video is ready merely because that job is present.
+    if (task.kind !== 'media' || task.status !== 'completed' || !task.result?.outputPath) return '';
     const job = subtitleJob(task);
     const label = subtitleJobLabel(task);
     if (!label || ['not_requested', 'skipped'].includes(String(job.status || ''))) return '';

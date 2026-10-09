@@ -38,7 +38,10 @@
   }
 
   function friendlyResolution(stream) {
-    const height = Number(stream?.height || 0);
+    const width = Number(stream?.width || 0);
+    // Resolution tiers must not turn a 1080×1920 portrait video into "2K".
+    const height = width > 0 && Number(stream?.height) > 0
+      ? Math.min(width, Number(stream.height)) : Number(stream?.height || 0);
     if (height >= 2160) return '4K';
     if (height >= 1440) return '2K';
     if (height >= 1080) return '1080P';

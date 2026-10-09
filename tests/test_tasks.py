@@ -466,3 +466,40 @@ def load_tests(loader, tests, pattern):
     for test_function in _TEST_FUNCTIONS:
         suite.addTest(unittest.FunctionTestCase(test_function))
     return suite
+
+
+def test_regenerated_subtitles_are_default_but_old_files_remain_recoverable():
+    store = TaskStore()
+    task = store.create(kind=TaskKind.MEDIA, title='video', payload={})
+    store.update(task.id, status=TaskStatus.COMPLETED, result={
+        'outputPath': '/tmp/video.mp4',
+        'assets': {'subtitles': ['/tmp/old.srt'], 'subtitleDetails': [{'path': '/tmp/old.srt'}]},
+        'subtitleJob': {'status': 'pending'},
+    })
+    queue = SubtitleQueue(store, lambda payload: {
+        'status': 'completed', 'subtitles': ['/tmp/new.srt'],
+        'subtitleDetails': [{'path': '/tmp/new.srt', 'needsReview': True}],
+    })
+    assert queue.submit(task.id, {})
+    assert _wait_until(lambda: store.get(task.id).result['subtitleJob']['status'] == 'completed')
+    result = store.get(task.id).result
+    assert result['assets']['subtitles'] == ['/tmp/new.srt', '/tmp/old.srt']
+    assert result['assets']['subtitleDetails'][0]['path'] == '/tmp/new.srt'
+
+
+def test_media_verification_pauses_batch_without_failing_remaining_items():
+    store = TaskStore()
+    queue = MediaQueue(store, lambda _: {'success': False, 'error': '平台要求交互验证',
+        'errorInfo': {'code': 'verification_required', 'stage': 'browser_page'}}, interval_seconds=0)
+    queue.pause()
+    tasks = queue.submit([{'link': 'https://example.test/1'}, {'link': 'https://example.test/2'}])
+    queue.resume()
+    deadline = time.monotonic() + 3
+    while store.get(tasks[0]['id']).status != TaskStatus.FAILED and time.monotonic() < deadline:
+        time.sleep(.01)
+    assert queue.is_paused()
+    assert store.get(tasks[0]['id']).status == TaskStatus.FAILED
+    assert store.get(tasks[1]['id']).status == TaskStatus.PENDING
+    # Clean up the fixture worker without processing the waiting task.
+    queue.cancel(tasks[1]['id'])
+    queue.resume()

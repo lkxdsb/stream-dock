@@ -45,7 +45,7 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
 
 | 平台 | 设计/代码范围（非本部署验收结论） | 主要能力 |
 | --- | --- | --- |
-| 抖音 | 已实现·部署待验证 | 视频、图文作品、无水印图片集、浏览器登录态 |
+| 抖音 | 本地视频链路已实测；服务器待验收 | 视频、图文作品、无水印图片集、浏览器登录态 |
 | Bilibili | 已实现·部署待验证 | DASH、progressive `durl`、多档画质、音视频合并、可选 Cookie |
 | 快手 | 已实现·部署待验证 | 视频候选源、HLS 下载与合并 |
 | 小红书 | 受限·部署待验证 | 视频、图文识别、浏览器回退 |
@@ -56,6 +56,21 @@ StreamDock 是一个本地优先的媒体解析与文件处理工作台。它将
 | X / Twitter | 实验性 | 推文视频变体与码率选择 |
 
 平台返回结果受登录状态、内容权限、地区限制和页面结构变化影响。工具不会绕过账号本身无权访问的内容。
+
+#### 抖音真实文件验收（2026-10-09）
+
+通过已登录抖音 App 复制 **30 条不同视频分享链接**，在 macOS 本地部署执行 **20 条单项 + 10 条一次性批量提交**，下载后检查真实文件，而非仅以接口成功作为通过依据。
+
+| 检查项 | 最终结果 |
+| --- | --- |
+| MP4 视频与音频 | **30/30**：目标格式、音视频流、完整 FFmpeg 解码、抽帧及音频信号检查通过 |
+| 封面 | **30/30**：文件存在、完整解码且像素非空白 |
+| 字幕文件 | **30/30**：严格 UTF-8、SRT 解析、时间轴范围及简体中文检查通过 |
+| 字幕逐字准确性 | **未全部通过**：抽样发现 ASR 错词，仍需人工校对 |
+
+首轮 23 条成功、7 条失败；复测第 24 条确认遇到验证码。修复后验证了结构化错误、批量队列暂停及待执行任务保留；用户手动完成验证码后恢复 6 个待执行任务并重试第 24 条，最终文件检查全部通过。**该结果包含人工验证与重试，不代表首次成功率 100%、无人值守保证或服务器部署已验收**；图文作品也不在本轮 30 个视频样本范围内。
+
+详见 [抖音真实文件验收摘要](docs/DOUYIN_REAL_FILE_VALIDATION.md)。
 
 ### 文件格式转换
 
@@ -391,7 +406,7 @@ Windows 用户可以通过 WSL 使用该脚本，或自行安装 MinerU 后通�
 | `STREAMDOCK_MAX_ASSET_DOWNLOAD_BYTES` | 字幕、封面和图集单项资源上限，默认 256 MiB |
 | `STREAMDOCK_MAX_COMPARISON_INPUT_BYTES` | 转换前后对比最大读取文件大小，默认 16 MiB |
 | `STREAMDOCK_MINERU_EXECUTABLE` | 指定 MinerU 可执行文件 |
-| `STREAMDOCK_SUBTITLE_ASR_MODEL` | 指定 ASR 模型，默认 `base` |
+| `STREAMDOCK_SUBTITLE_ASR_MODEL` | 指定 ASR 模型，默认 `small`；可选更大模型，需更多内存和处理时间 |
 | `STREAMDOCK_SUBTITLE_ASR_DEVICE` | 指定 ASR 设备，默认 `cpu` |
 | `STREAMDOCK_SUBTITLE_ASR_LANG` | 指定 ASR 语言，默认 `zh` |
 | `STREAMDOCK_SUBTITLE_OCR_LANG` | 指定 Tesseract 语言，默认 `chi_sim+eng` |
@@ -456,6 +471,20 @@ python scripts/test_share_text_live.py \
 ```
 
 此验收保存标题、视频流数量、等待时长和页面截图，证明分享文案能进入下载确认页；**不等同于完整视频已下载或解码通过**。`test_parser_browser.py` 的固定响应 UI 回归另行覆盖分享文案和异步旧结果丢弃，不能替代这项真实链接验证。
+
+30 条抖音实文件验收：从 App 实际复制 30 条不同分享文案，分别保存为测试目录中的 `share-001.txt` 至 `share-030.txt`，启动本地服务后运行：
+
+```bash
+PYTHONPATH=. python scripts/test_douyin_corpus_live.py \
+  --corpus report_figures/douyin-30-live --attempt attempt-1
+# 失败后仅回读已有产物，不重复创建下载任务：
+PYTHONPATH=. python scripts/test_douyin_corpus_live.py \
+  --corpus report_figures/douyin-30-live --attempt attempt-1 --finalize-only
+```
+
+前 20 条单项执行，后 10 条使用一次真实批量提交。脚本下载实际文件，检查 MP4 音视频流、完整 FFmpeg 解码、抽帧、音频信号、封面解码及 SRT 编码和时间轴；失败保留原始记录，不计为通过。遇到平台交互验证时媒体队列暂停，剩余任务保持等待，不自动绕过验证。恢复队列不会自动重试已经失败的单项。
+
+**字幕文件可解析不等于识别准确**：ASR 结果标记为“需校对”，仍须与原声/画面字幕逐项比对；乱码、损坏编码和非法时间轴不得发布为可用字幕。重新生成的字幕优先打开，历史字幕文件保留。分享链接、下载文件及完整测试记录不要提交到 Git。
 
 具体内容级断言和降级策略见 [`docs/CONVERSION_QUALITY_VALIDATION.md`](docs/CONVERSION_QUALITY_VALIDATION.md)。
 

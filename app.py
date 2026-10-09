@@ -1075,6 +1075,15 @@ def run_media_fetch(payload: dict[str, object]) -> dict[str, object]:
     }
     if not success:
         error_info = classify_error(stderr or stdout, fallback='解析失败')
+        for line in stdout.splitlines():
+            prefix = '[douyin-fetch] error info: '
+            if line.startswith(prefix):
+                try:
+                    candidate = json.loads(line[len(prefix):])
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(candidate, dict) and isinstance(candidate.get('code'), str) and isinstance(candidate.get('message'), str):
+                    error_info = candidate
         body['error'] = error_info['message']
         body['errorCode'] = error_info['code']
         body['errorInfo'] = error_info
@@ -1149,8 +1158,9 @@ def run_subtitle_recognition(payload: dict[str, object]) -> dict[str, object]:
                         'path': str(generated),
                         'source': 'speech-asr',
                         'quality': 'medium',
+                        'needsReview': True,
                         'language': str(payload.get('language') or '').strip() or os.getenv('STREAMDOCK_SUBTITLE_ASR_LANG', 'zh'),
-                        'label': '语音识别字幕',
+                        'label': '语音识别字幕（需校对）',
                     })
             except Exception as exc:
                 errors.append(f'语音识别失败：{exc}')
@@ -1210,7 +1220,7 @@ def run_subtitle_recognition(payload: dict[str, object]) -> dict[str, object]:
     if subtitles:
         source = str(details[0].get('source') or '') if details else ''
         message = {
-            'speech-asr': '语音字幕识别完成，字幕文件已保存',
+            'speech-asr': '语音字幕已生成，请校对识别内容；生成完成不代表逐字准确',
             'screen-ocr': '画面字幕识别完成，字幕文件已保存',
             'metadata-text': '未获得可用识别字幕，已保存平台文案兜底',
         }.get(source, '字幕文件已保存')

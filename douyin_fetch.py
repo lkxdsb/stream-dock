@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from contextlib import nullcontext
 from fetchers.auth_context import AuthProfile, use_auth
@@ -140,4 +141,14 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        exit_code = main()
+    except Exception as exc:
+        from error_catalog import classify_probe_exception
+        # Preserve the decisive typed exception, not heuristics over a chained
+        # traceback (whose earlier share-page error can hide the actual cause).
+        info = classify_probe_exception(exc)
+        log('error info: ' + json.dumps(info, ensure_ascii=False))
+        print(info['message'], file=sys.stderr, flush=True)
+        exit_code = 1
+    raise SystemExit(exit_code)
