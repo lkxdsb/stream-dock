@@ -46,7 +46,7 @@ def txt_to_srt(text: str) -> str:
     for index, line in enumerate(chunks, start=1):
         start = index - 1
         end = index
-        out.append(f'{index}\n00:00:{start:02d},000 --> 00:00:{end:02d},000\n{line}\n')
+        out.append(f'{index}\n{_format_srt_time(start * 1000)} --> {_format_srt_time(end * 1000)}\n{line}\n')
     return '\n'.join(out)
 
 

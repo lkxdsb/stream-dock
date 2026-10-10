@@ -122,6 +122,8 @@ def main() -> int:
         log(f"cover url: {result['cover_url']}")
     log(f"subtitle count: {result.get('subtitle_count', 0)}")
     log(f"subtitle pending: {'true' if result.get('subtitle_pending') else 'false'}")
+    if result.get('scope_warning'):
+        log(f"交付范围：{result['scope_warning']}")
     log(f"image count: {result.get('image_count', 0)}")
     if result.get("selected_video_quality"):
         log(f"selected video quality: {result['selected_video_quality']}")

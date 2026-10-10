@@ -31,6 +31,17 @@ def validate_asr_cues(cues: list[OcrSubtitleCue]) -> None:
             raise SubtitleQualityError(f'字幕片段 {index} 的时间轴无效')
         if '\ufffd' in cue.text or any(ord(c) < 32 and c not in '\n\r\t' for c in cue.text):
             raise SubtitleQualityError(f'字幕片段 {index} 含有损坏字符，请更换识别模型或使用画面字幕识别')
+        if index > 1 and cue.start < cues[index - 2].end:
+            raise SubtitleQualityError(f'字幕片段 {index} 时间轴重叠，请重新识别或编辑时间轴')
+
+
+def normalize_asr_boundaries(cues: list[OcrSubtitleCue]) -> list[OcrSubtitleCue]:
+    result = list(cues)
+    for index in range(1, len(result)):
+        previous, current = result[index - 1], result[index]
+        if 0 < previous.end - current.start <= .25 and current.start > previous.start:
+            result[index - 1] = replace(previous, end=current.start)
+    return result
 
 
 @dataclass(frozen=True)
@@ -189,7 +200,7 @@ def generate_asr_subtitle_file(
             cues = _transcribe_with_whisper_cli(audio_path, tmp_path, model_name=model_name, language=language)
     if len(cues) < ASR_MIN_CUES:
         return None
-    cues = [replace(cue, text=normalize_chinese_asr(cue.text, language)) for cue in cues]
+    cues = normalize_asr_boundaries([replace(cue, text=normalize_chinese_asr(cue.text, language)) for cue in cues])
     validate_asr_cues(cues)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(cues_to_srt(cues), encoding='utf-8')

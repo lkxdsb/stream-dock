@@ -94,7 +94,7 @@ def cues_to_srt(cues: list[OcrSubtitleCue]) -> str:
         text = cue.text.strip()
         if not text:
             continue
-        blocks.append(f'{index}\n{_format_srt_time(cue.start)} --> {_format_srt_time(max(cue.end, cue.start + 0.5))}\n{text}\n')
+        blocks.append(f'{index}\n{_format_srt_time(cue.start)} --> {_format_srt_time(max(cue.end, cue.start + 0.001))}\n{text}\n')
     return '\n'.join(blocks).strip() + ('\n' if blocks else '')
 
 

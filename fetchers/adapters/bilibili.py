@@ -337,6 +337,8 @@ class BilibiliAdapter(BasePlatformAdapter):
                 "stream_layout": stream_layout,
                 "bvid": bvid,
                 "cid": cid,
+                "content_scope": 'interactive-node' if ((video_data.get('rights') or {}).get('is_stein_gate') or video_data.get('stein_guide')) else 'selected-page',
+                "scope_warning": '互动视频仅导出当前节点，未包含其他剧情分支' if ((video_data.get('rights') or {}).get('is_stein_gate') or video_data.get('stein_guide')) else ('仅导出当前分 P，未包含其他分 P' if len(pages) > 1 else None),
             },
         )
 

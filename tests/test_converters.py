@@ -11,6 +11,10 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
 
+
+def oversized_conversion_worker(queue, args):
+    queue.put({'success': True, 'outputPath': str(Path(args[4]) / 'sample.json'), 'logs': ['x' * 300_000]})
+
 from converters.adapters.archive import convert_archive
 from converters.adapters.data import dict_to_xml, read_xlsx_rows, xml_to_dict
 from converters.adapters.document_basic import _libreoffice_convert, _text_to_rtf
@@ -313,9 +317,8 @@ class ConverterPipelineTests(unittest.TestCase):
             output = root / 'sample.json'
             source.write_text('name\nAda\n', encoding='utf-8')
             output.write_text('[{"name":"Ada"}]', encoding='utf-8')
-            oversized_logs = ['x' * 300_000]
-            with patch('converters.executor.convert_file', return_value=ConversionResult(True, output_path=output, logs=oversized_logs)):
-                result = convert_file_with_timeout(source, source.name, 'csv', 'json', root, timeout_seconds=3)
+            with patch('converters.executor._convert_worker', oversized_conversion_worker):
+                result = convert_file_with_timeout(source, source.name, 'csv', 'json', root, timeout_seconds=10)
 
         self.assertTrue(result.success, result.error)
         self.assertEqual(len(result.logs[-1]), 300_000)

@@ -360,10 +360,14 @@
 }
 
 .use-fields {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(280px, 1.18fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: 18px;
   align-items: start;
   margin-bottom: 28px;
+}
+
+.use-fields > .field-wide {
+  grid-column: 1 / -1;
 }
 
 .use-field,

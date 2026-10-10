@@ -7,6 +7,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import posixpath
+from urllib.parse import unquote, urlsplit
 from pathlib import Path
 
 LIBREOFFICE_CONVERT_TIMEOUT_SECONDS = int(os.getenv('STREAMDOCK_LIBREOFFICE_TIMEOUT_SECONDS', str(10 * 60)))
@@ -16,10 +18,17 @@ LIBREOFFICE_UTF8_CSV_FILTER = 'csv:Text - txt - csv (StarCalc):44,34,76,1'
 
 
 def _html_to_text(text: str) -> str:
-    text = re.sub(r'<\s*br\s*/?>', '\n', text, flags=re.I)
-    text = re.sub(r'</\s*p\s*>', '\n\n', text, flags=re.I)
-    text = re.sub(r'<[^>]+>', '', text)
-    return html.unescape(text).strip() + '\n'
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(text, 'html.parser')
+    for tag in soup(['script', 'style', 'head']):
+        tag.decompose()
+    for tag in soup.find_all('br'):
+        tag.replace_with('\n')
+    for tag in soup.find_all(['td', 'th']):
+        tag.append('\t')
+    for tag in soup.find_all(['p', 'div', 'tr', 'li', 'h1', 'h2', 'h3', 'h4', 'section']):
+        tag.append('\n')
+    return '\n'.join(line.rstrip() for line in soup.get_text().splitlines()).strip() + '\n'
 
 
 def _html_to_markdown(text: str) -> str:
@@ -27,7 +36,11 @@ def _html_to_markdown(text: str) -> str:
         from markdownify import markdownify  # type: ignore
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError('缺少 markdownify，无法将 HTML 转换为 Markdown') from exc
-    return markdownify(text, heading_style='ATX').strip() + '\n'
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(text, 'html.parser')
+    for tag in soup(['head', 'script', 'style']):
+        tag.decompose()
+    return markdownify(str(soup), heading_style='ATX').strip() + '\n'
 
 
 def _markdown_to_text(text: str) -> str:
@@ -347,9 +360,6 @@ def _libreoffice_convert(input_path: Path, output_dir: Path, target: str) -> Pat
         raise RuntimeError(f'LibreOffice 转换失败：{completed.stderr.strip() or completed.stdout.strip()}')
     produced = output_dir / f'{input_path.stem}.{target.split(":", 1)[0]}'
     if not produced.exists():
-        matches = list(output_dir.glob(f'{input_path.stem}.*'))
-        if matches:
-            return matches[0]
         raise RuntimeError('LibreOffice 未生成输出文件')
     return produced
 
@@ -367,10 +377,14 @@ def _epub_documents(input_path: Path) -> list[str]:
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError('缺少 ebooklib，无法读取 EPUB') from exc
     book = epub.read_epub(str(input_path))
+    resources = {posixpath.normpath(item.get_name()): item for item in book.get_items()}
+    ordered = [book.get_item_with_id(item_id) for item_id, _linear in book.spine]
+    ordered = [item for item in ordered if item is not None]
+    ordered += [item for item in book.get_items() if item not in ordered]
     documents = []
-    for item in book.get_items():
+    for item in ordered:
         if item.get_type() == ebooklib.ITEM_DOCUMENT:
-            content = item.get_content().decode('utf-8', errors='ignore')
+            content = item.get_content().decode('utf-8', errors='strict')
             try:
                 from bs4 import BeautifulSoup  # type: ignore
                 soup = BeautifulSoup(content, 'html.parser')
@@ -384,6 +398,22 @@ def _epub_documents(input_path: Path) -> list[str]:
                         value = str(tag.attrs.get(attribute) or '').strip().lower()
                         if value.startswith(('http:', 'https:', 'file:', 'ftp:', 'javascript:')):
                             del tag.attrs[attribute]
+                for tag in soup.find_all(['img', 'image']):
+                    attribute = 'src' if tag.name == 'img' else ('xlink:href' if tag.has_attr('xlink:href') else 'href')
+                    source = str(tag.get(attribute) or '')
+                    if not source or source.startswith('data:'):
+                        continue
+                    location = urlsplit(source)
+                    if location.scheme or location.netloc:
+                        raise RuntimeError('EPUB 图片必须来自书内资源')
+                    resource_name = posixpath.normpath(posixpath.join(posixpath.dirname(item.get_name()), unquote(location.path)))
+                    resource = resources.get(resource_name)
+                    if resource is None or not str(resource.media_type).startswith('image/'):
+                        raise RuntimeError(f'EPUB 图片资源缺失或类型不正确：{source}')
+                    tag[attribute] = f'data:{resource.media_type};base64,' + base64.b64encode(resource.get_content()).decode('ascii')
+                    if tag.name == 'image':
+                        tag.name = 'img'
+                        tag['src'] = tag.attrs.pop(attribute)
                 content = str(soup)
             except ImportError:  # BeautifulSoup is already a core dependency in the app.
                 content = re.sub(r'<\s*(script|iframe|object|embed)\b.*?</\s*\1\s*>', '', content, flags=re.I | re.S)
@@ -435,11 +465,9 @@ def convert_document_basic(source: str, target: str, input_path: Path, output_pa
         else:
             output_path.write_text(_docx_to_html(input_path), encoding='utf-8')
     elif source == 'docx' and target == 'md':
-        paragraphs = _read_docx_paragraphs(input_path)
-        output_path.write_text('\n\n'.join(p for p in paragraphs if p.strip()) + '\n', encoding='utf-8')
+        output_path.write_text(_html_to_markdown(_docx_to_html(input_path)), encoding='utf-8')
     elif source == 'docx' and target == 'rtf':
-        paragraphs = _read_docx_paragraphs(input_path)
-        output_path.write_text(_text_to_rtf('\n'.join(paragraphs)), encoding='utf-8')
+        _convert_with_libreoffice(input_path, output_path, target)
     elif source in {'docx', 'pptx', 'xlsx'} and target in {'pdf', 'html', 'png'}:
         _convert_with_libreoffice(input_path, output_path, 'pdf' if target == 'png' else target)
     elif source in {'doc', 'odt'} and target in {'docx', 'txt', 'html'}:
@@ -447,7 +475,13 @@ def convert_document_basic(source: str, target: str, input_path: Path, output_pa
     elif source in {'ppt', 'odp'} and target == 'pptx':
         _convert_with_libreoffice(input_path, output_path, target)
     elif source in {'xls', 'ods'} and target in {'xlsx', 'csv'}:
-        _convert_with_libreoffice(input_path, output_path, target)
+        if target == 'csv':
+            from .data import convert_data
+            with tempfile.TemporaryDirectory(prefix='streamdock_sheet_') as directory:
+                intermediate = _libreoffice_convert(input_path, Path(directory), 'xlsx')
+                return convert_data('xlsx', 'csv', intermediate, output_path)
+        else:
+            _convert_with_libreoffice(input_path, output_path, target)
     elif source == 'svg' and target in {'png', 'jpg', 'pdf'}:
         try:
             import cairosvg  # type: ignore

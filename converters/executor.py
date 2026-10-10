@@ -3,6 +3,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import os
 import signal
+import time
 from pathlib import Path
 from queue import Empty
 
@@ -97,8 +98,7 @@ def convert_file_with_timeout(
     media_options: dict | None = None,
     archive_options: dict | None = None,
 ) -> ConversionResult:
-    method = 'fork' if 'fork' in mp.get_all_start_methods() else 'spawn'
-    context = mp.get_context(method)
+    context = mp.get_context('spawn')
     queue = context.Queue(maxsize=1)
     try:
         with conversion_engine_slot(source, target) as (engine, limit):
@@ -111,7 +111,15 @@ def convert_file_with_timeout(
             try:
                 # Drain the IPC payload before join. Joining first can deadlock
                 # when multiprocessing's feeder thread is flushing a large result.
-                data = queue.get(timeout=max(0, timeout_seconds))
+                deadline = time.monotonic() + max(0, timeout_seconds)
+                data = None
+                while time.monotonic() < deadline:
+                    try:
+                        data = queue.get(timeout=min(.2, max(.001, deadline - time.monotonic())))
+                        break
+                    except Empty:
+                        if not process.is_alive():
+                            break
             except Empty:
                 data = None
             if data is None and process.is_alive():
@@ -122,7 +130,7 @@ def convert_file_with_timeout(
                 _terminate_process_tree(process)
             if data is None:
                 if process.exitcode and process.exitcode < 0:
-                    return ConversionResult(False, error=f'{engine} 转换子进程被系统终止，可能超出 CPU、内存或输出大小配额')
+                    return ConversionResult(False, error=f'{engine} 转换子进程异常退出（信号 {-process.exitcode}）；请检查原生引擎日志及资源限制')
                 return ConversionResult(False, error='转换子进程未返回结果')
             data.setdefault('logs', [])
             data['logs'] = [f'引擎并发槽：{engine} {limit}', *list(data['logs'])]

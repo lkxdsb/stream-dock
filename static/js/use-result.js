@@ -145,7 +145,7 @@
     }
   }
 
-  function showResult({ path = '', platform = '', error = '', validation = null, coverUrl = '', title = '', subtitleCount = null, subtitleJob = null } = {}) {
+  function showResult({ path = '', platform = '', error = '', validation = null, coverUrl = '', title = '', subtitleCount = null, subtitleJob = null, scopeWarning = '' } = {}) {
     if (!resultBox || !resultPath || !resultPlatform || !resultError || !resultErrorRow) {
       return;
     }
@@ -176,7 +176,7 @@
       resultQuality.textContent = qualityParts.join(' · ') || '-';
       resultQualityRow.hidden = qualityParts.length === 0;
     }
-    const warnings = Array.isArray(validation?.warnings) ? validation.warnings : [];
+    const warnings = [...(Array.isArray(validation?.warnings) ? validation.warnings : []), ...(scopeWarning ? [scopeWarning] : [])];
     if (resultWarning && resultWarningRow) {
       resultWarning.textContent = warnings.join('；') || '-';
       resultWarningRow.hidden = warnings.length === 0;

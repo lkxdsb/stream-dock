@@ -48,7 +48,7 @@ def read_delimited(path: Path, delimiter: str) -> list[dict[str, str]]:
 
 
 def write_delimited(rows: list[dict[str, Any]], path: Path, delimiter: str) -> None:
-    fields = sorted({key for row in rows for key in row.keys()})
+    fields = list(dict.fromkeys(key for row in rows for key in row))
     with path.open('w', encoding='utf-8', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fields, delimiter=delimiter)
         writer.writeheader()
@@ -77,7 +77,7 @@ def read_ndjson_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def read_xlsx_rows(path: Path) -> list[dict[str, Any]]:
+def _read_xlsx_values(path: Path) -> list[tuple[Any, ...]]:
     openpyxl = _require_openpyxl()
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     formula_wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
@@ -85,9 +85,7 @@ def read_xlsx_rows(path: Path) -> list[dict[str, Any]]:
     for sheet in formula_wb.worksheets:
         # Valid workbooks may omit worksheet dimensions. In openpyxl's
         # read-only mode that is represented as None rather than zero/one.
-        max_row = sheet.max_row or 0
-        max_column = sheet.max_column or 0
-        if max_row > 1 or max_column > 1 or sheet.cell(1, 1).value is not None:
+        if any(value is not None for row in sheet.iter_rows(values_only=True) for value in row):
             non_empty_sheets.append(sheet.title)
     if len(non_empty_sheets) > 1:
         wb.close(); formula_wb.close()
@@ -95,23 +93,31 @@ def read_xlsx_rows(path: Path) -> list[dict[str, Any]]:
             'XLSX 含多个非空工作表，CSV/JSON/TSV 无法保留多工作表结构；'
             '请改用 XLSX 或 HTML/PDF 输出'
         )
-    ws = wb[wb.sheetnames[0]]
-    formula_ws = formula_wb[formula_wb.sheetnames[0]]
+    sheet_name = non_empty_sheets[0] if non_empty_sheets else wb.sheetnames[0]
+    ws = wb[sheet_name]
+    formula_ws = formula_wb[sheet_name]
     rows = list(ws.iter_rows(values_only=True))
     # CSV/JSON have no formula language: this path intentionally exports
     # calculated values only.  Reject formula cells with no cached result so
     # they cannot silently become blank cells in the output.
     for value_row, formula_row in zip(rows, formula_ws.iter_rows(values_only=False)):
         for value, formula_cell in zip(value_row, formula_row):
-            if isinstance(formula_cell.value, str) and formula_cell.value.startswith('=') and value is None:
+            if formula_cell.data_type == 'f' and value is None:
                 wb.close()
                 formula_wb.close()
                 raise RuntimeError('XLSX 含未计算公式，CSV/JSON 仅导出计算值；请先用 Excel 或 LibreOffice 重新计算并保存')
     formula_wb.close()
     wb.close()
+    return rows
+
+
+def read_xlsx_rows(path: Path) -> list[dict[str, Any]]:
+    rows = _read_xlsx_values(path)
     if not rows:
         return []
     headers = [str(cell if cell is not None else f'column_{index + 1}') for index, cell in enumerate(rows[0])]
+    if len(set(headers)) != len(headers):
+        raise RuntimeError('XLSX 表头重复，JSON 对象无法保留重复字段；请改用 CSV/TSV 输出以保留所有列')
     result = []
     for row in rows[1:]:
         result.append({headers[index]: value for index, value in enumerate(row) if index < len(headers)})
@@ -121,7 +127,7 @@ def read_xlsx_rows(path: Path) -> list[dict[str, Any]]:
 def inspect_xlsx_downgrades(path: Path) -> list[str]:
     openpyxl = _require_openpyxl()
     wb = openpyxl.load_workbook(path, read_only=False, data_only=False)
-    ws = wb[wb.sheetnames[0]]
+    ws = next((sheet for sheet in wb.worksheets if any(cell.value is not None for row in sheet for cell in row)), wb.worksheets[0])
     notes: list[str] = []
     if ws.merged_cells.ranges:
         notes.append('降级说明：合并单元格仅导出左上角值')
@@ -141,17 +147,22 @@ def write_xlsx(rows: list[dict[str, Any]], path: Path) -> None:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = 'Sheet1'
-    fields = sorted({key for row in rows for key in row.keys()}) or ['value']
+    fields = list(dict.fromkeys(key for row in rows for key in row)) or ['value']
     ws.append(fields)
     for row in rows:
         ws.append([row.get(field) for field in fields])
+    for row in ws:
+        for cell in row:
+            if isinstance(cell.value, str):
+                cell.data_type = 's'
     wb.save(path)
 
 
 def xml_to_dict(element: ET.Element) -> dict[str, Any]:
+    name = element.get('key', element.tag) if element.tag == 'entry' else element.tag
     children = list(element)
     if not children:
-        return {element.tag: element.text or ''}
+        return {name: element.text or ''}
     result: dict[str, Any] = {}
     if element.text and element.text.strip():
         result['#text'] = element.text.strip()
@@ -164,11 +175,12 @@ def xml_to_dict(element: ET.Element) -> dict[str, Any]:
             result[key].append(value)
         else:
             result[key] = value
-    return {element.tag: result}
+    return {name: result}
 
 
 def dict_to_xml(name: str, value: Any) -> ET.Element:
-    element = ET.Element(name)
+    import re
+    element = ET.Element(name) if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]*', name) else ET.Element('entry', {'key': name})
     if isinstance(value, dict):
         for key, child_value in value.items():
             if key == '#text':
@@ -235,6 +247,11 @@ def convert_data(source: str, target: str, input_path: Path, output_path: Path) 
         root = dict_to_xml('root', data)
         ET.ElementTree(root).write(output_path, encoding='utf-8', xml_declaration=True)
         return logs + ['JSON 已转换为 XML']
+    if source == 'xlsx' and target in {'csv', 'tsv'}:
+        values = _read_xlsx_values(input_path)
+        with output_path.open('w', encoding='utf-8', newline='') as stream:
+            csv.writer(stream, delimiter=',' if target == 'csv' else '\t').writerows(values)
+        return logs + inspect_xlsx_downgrades(input_path) + [f'已按原始单元格位置导出 {len(values)} 行']
     if source in {'csv', 'tsv', 'json', 'ndjson', 'xlsx', 'txt'}:
         rows = read_rows(source, input_path)
         logs.append(f'读取到 {len(rows)} 行')

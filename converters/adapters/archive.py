@@ -126,7 +126,8 @@ def _folder_to_targz(input_path: Path, output_path: Path) -> list[str]:
         raise RuntimeError('打包目录包含符号链接，已拒绝处理')
     _validate_archive_limits([(str(path.relative_to(input_path)), path.stat().st_size) for path in files])
     with tarfile.open(output_path, 'w:gz') as tf:
-        tf.add(input_path, arcname=input_path.name)
+        for path in sorted(input_path.iterdir()):
+            tf.add(path, arcname=path.name)
     return ['文件夹已打包为 TAR.GZ']
 
 
@@ -302,22 +303,17 @@ def convert_archive(source: str, target: str, input_path: Path, output_path: Pat
             logs = _extract_rar(input_path, extracted, password=password) if source == 'rar' else _extract_with_libarchive(input_path, extracted, source)
             return logs + _folder_to_zip(extracted, output_path)
     if source == 'zip' and target == 'tar':
-        tmp = output_path.with_suffix('')
-        shutil.rmtree(tmp, ignore_errors=True)
-        try:
+        with tempfile.TemporaryDirectory(prefix='streamdock_zip_to_tar_') as directory:
+            tmp = Path(directory) / 'content'
             logs = _zip_to_folder(input_path, tmp, password=password)
             with tarfile.open(output_path, 'w') as tf:
-                tf.add(tmp, arcname=tmp.name)
+                for path in sorted(tmp.iterdir()):
+                    tf.add(path, arcname=path.name)
             return logs + ['ZIP 已转换为 TAR']
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
     if source in {'tar', 'tar.gz'} and target == 'zip':
         mode = 'r:gz' if source == 'tar.gz' else 'r'
-        tmp = output_path.with_suffix('')
-        shutil.rmtree(tmp, ignore_errors=True)
-        try:
+        with tempfile.TemporaryDirectory(prefix='streamdock_tar_to_zip_') as directory:
+            tmp = Path(directory) / 'content'
             _safe_extract_tar(input_path, tmp, mode)
             return [f'{source.upper()} 已解压'] + _folder_to_zip(tmp, output_path)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
     raise RuntimeError(f'暂不支持压缩包转换 {source} → {target}')

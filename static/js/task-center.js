@@ -551,6 +551,7 @@
           ${detailRow('平台', result.platform || payload.platform || '')}
           ${detailRow('作者', result.author || '')}
           ${detailRow('清晰度', payload.videoQuality || '')}
+          ${detailRow('交付范围', result.scopeWarning || '')}
           ${detailRow('创建时间', dateLabel(task.createdAt))}
           ${detailRow('更新时间', dateLabel(task.updatedAt))}
           ${detailRow('任务编号', task.id, true)}
@@ -827,6 +828,7 @@
               title: latestResult.title || '',
               subtitleCount: latestResult.subtitleCount || 0,
               subtitleJob: latestResult.subtitleJob || null,
+              scopeWarning: latestResult.scopeWarning || '',
             });
           } else {
             window.StreamDockResult?.setStatus?.('error', latest.error || '解析失败');

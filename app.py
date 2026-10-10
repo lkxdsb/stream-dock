@@ -528,7 +528,7 @@ def safe_metadata(metadata: dict[str, object]) -> dict[str, object]:
         'capture_strategy', 'resolve_method', 'media_kind', 'cookie_source',
         'browser_runtime',
         'stream_layout', 'bvid', 'cid', 'raw_platform_id', 'aweme_id', 'note_id', 'photo_id', 'short_url',
-        'image_count',
+        'image_count', 'content_scope', 'scope_warning',
     }
     safe: dict[str, object] = {}
     for key, value in (metadata or {}).items():
@@ -1062,7 +1062,9 @@ def run_media_fetch(payload: dict[str, object]) -> dict[str, object]:
         'coverUrl': cover_url,
         'mediaKind': media_kind,
         'imageCount': image_count,
-        'subtitleCount': subtitle_count,
+        'subtitleCount': len(subtitle_files),
+        'availableSubtitleCount': subtitle_count,
+        'scopeWarning': extract_first_match(stdout, re.compile(_MEDIA_RESULT_PREFIX + r'交付范围[：:]\s*(.+)$')),
         'subtitleJob': subtitle_job,
         'assets': {
             'cover': cover_file,
@@ -1560,7 +1562,8 @@ def web_archive_page(request: Request):
 def decode_subtitle_bytes(content: bytes) -> str:
     if len(content) > MAX_SUBTITLE_FILE_BYTES:
         raise ValueError('字幕文件不能超过 5MB')
-    for encoding in ('utf-8-sig', 'utf-16', 'gb18030'):
+    encodings = ('utf-16',) if content.startswith((b'\xff\xfe', b'\xfe\xff')) else ('utf-8-sig', 'gb18030')
+    for encoding in encodings:
         try:
             return content.decode(encoding)
         except UnicodeDecodeError:
@@ -2430,7 +2433,10 @@ def retry_task(task_id: str):
         if bool(task.payload.get('archiveEncrypted')):
             return JSONResponse({'success': False, 'error': '为安全起见未保存压缩包密码，请重新选择文件并输入密码'}, status_code=409)
         filename = str(task.payload.get('filename') or 'input')
-        stored_candidates = list((task_workspace(task.id) / 'input').glob(f'[0-9][0-9][0-9][0-9]_{Path(filename).name}'))
+        input_dir = task_workspace(task.id) / 'input'
+        stored_candidates = [p for p in input_dir.iterdir()
+                             if p.is_file() and re.fullmatch(r'\d{4}_', p.name[:5])
+                             and p.name[5:] == Path(filename).name] if input_dir.is_dir() else []
         stored = stored_candidates[0] if stored_candidates else None
         if stored is None or not stored.is_file():
             return JSONResponse({'success': False, 'error': '原始上传文件已被清理，请重新选择文件后执行'}, status_code=409)

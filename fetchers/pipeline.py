@@ -630,6 +630,7 @@ def run_pipeline(
         "normalized_link": normalized_link,
         "title": fetch_result.title,
         "capture_strategy": fetch_result.metadata.get("capture_strategy"),
+        "scope_warning": fetch_result.metadata.get("scope_warning"),
         "media_kind": fetch_result.content_type,
         "final_url": fetch_result.final_url,
         "cover_url": fetch_result.cover_url,

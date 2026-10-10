@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import codecs
 import json
 import tarfile
 import zipfile
@@ -105,7 +106,7 @@ def sniff_file_format(path: Path) -> str | None:
         pass
 
     try:
-        text = header.decode('utf-8-sig').strip()
+        text = codecs.getincrementaldecoder('utf-8-sig')().decode(header, final=False).strip()
     except UnicodeDecodeError:
         return None
     if not text:
