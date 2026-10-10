@@ -5,7 +5,7 @@ import json
 import os
 import re
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import browser_cookie3
 import requests
@@ -24,6 +24,9 @@ USER_AGENT = (
 )
 PLAYURL_ENDPOINT = "https://api.bilibili.com/x/player/playurl"
 PLAYER_V2_ENDPOINT = "https://api.bilibili.com/x/player/v2"
+VIEW_ENDPOINT = "https://api.bilibili.com/x/web-interface/view"
+BVID_PATTERN = re.compile(r"^/video/(BV[0-9A-Za-z]{10})/?$")
+AID_PATTERN = re.compile(r"^/video/av([0-9]+)/?$", re.I)
 
 MANUAL_COOKIE_ENV = "BILIBILI_COOKIE"
 MANUAL_COOKIE_FILE_ENV = "BILIBILI_COOKIE_FILE"
@@ -217,17 +220,52 @@ class BilibiliAdapter(BasePlatformAdapter):
     def fetch_media(self, normalized_link: str) -> MediaFetchResult:
         ensure_supported_host(normalized_link, ("bilibili.com",), "Bilibili")
         cookies, cookie_source = load_bilibili_cookies()
-        page_response = _get_page_with_scoped_cookies(normalized_link, cookies)
-        page_response.raise_for_status()
-        final_url = page_response.url
-        ensure_supported_host(final_url, ("bilibili.com",), "Bilibili redirect")
-        initial_state = self._extract_initial_state(page_response.text)
-        video_data = initial_state.get("videoData") or {}
+        capture_strategy = "web-playurl-cookie" if cookies else "web-playurl"
+        page_failure = None
+        final_url = normalized_link
+        # Only metadata acquisition falls back. Playurl, entitlement checks,
+        # stream selection and downloading must retain their existing failures.
+        try:
+            page_response = _get_page_with_scoped_cookies(normalized_link, cookies)
+            page_response.raise_for_status()
+            final_url = page_response.url
+            ensure_supported_host(final_url, ("bilibili.com",), "Bilibili redirect")
+            initial_state = self._extract_initial_state(page_response.text)
+            if not isinstance(initial_state, dict):
+                raise RuntimeError("Invalid Bilibili initial state JSON")
+            video_data = initial_state.get("videoData") or {}
+            if not isinstance(video_data, dict) or not video_data.get("bvid") or not (
+                video_data.get("cid") or video_data.get("pages")
+            ):
+                raise RuntimeError("Failed to extract Bilibili bvid/cid from page state")
+        except (requests.RequestException, RuntimeError, json.JSONDecodeError) as page_error:
+            # Do not mask unsupported input or unsafe redirects with an API call.
+            path = urlparse(normalized_link).path
+            if not (BVID_PATTERN.fullmatch(path) or AID_PATTERN.fullmatch(path)):
+                raise
+            page_failure = str(page_error)
+            try:
+                video_data = self._fetch_via_view_api(normalized_link, cookies=cookies)
+            except (requests.RequestException, RuntimeError, json.JSONDecodeError) as api_error:
+                raise RuntimeError(
+                    f"Bilibili metadata acquisition failed: web-page: {page_error}; "
+                    f"api-view-fallback: {api_error}"
+                ) from api_error
+            capture_strategy = "api-view-fallback"
 
         bvid = video_data.get("bvid")
         cid = video_data.get("cid")
-        if cid is None:
-            pages = video_data.get("pages") or []
+        pages = video_data.get("pages") or []
+        requested_page = parse_qs(urlparse(normalized_link).query).get("p")
+        if requested_page:
+            try:
+                page_number = int(requested_page[0])
+            except (TypeError, ValueError):
+                raise ValueError("Bilibili 分 P 参数 p 必须为正整数") from None
+            if page_number < 1 or page_number > len(pages):
+                raise ValueError("Bilibili 分 P 参数 p 超出视频分集范围")
+            cid = pages[page_number - 1].get("cid")
+        elif cid is None:
             if pages:
                 cid = pages[0].get("cid")
         if not bvid or cid is None:
@@ -292,7 +330,8 @@ class BilibiliAdapter(BasePlatformAdapter):
             preferred_audio=preferred_audio,
             subtitle_tracks=subtitle_tracks,
             metadata={
-                "capture_strategy": "web-playurl-cookie" if cookies else "web-playurl",
+                "capture_strategy": capture_strategy,
+                "metadata_fallback_reason": page_failure,
                 "cookie_source": cookie_source,
                 "media_kind": "video",
                 "stream_layout": stream_layout,
@@ -306,6 +345,45 @@ class BilibiliAdapter(BasePlatformAdapter):
         if not match:
             raise RuntimeError("Failed to locate Bilibili initial state JSON")
         return json.loads(match.group(1))
+
+    def _fetch_via_view_api(self, normalized_link: str, *, cookies=None) -> dict[str, Any]:
+        """Fetch video metadata only; reuse the existing playurl/download path."""
+        ensure_supported_host(normalized_link, ("bilibili.com",), "Bilibili")
+        path = urlparse(normalized_link).path
+        bv_match = BVID_PATTERN.fullmatch(path)
+        av_match = AID_PATTERN.fullmatch(path)
+        if bv_match:
+            params = {"bvid": bv_match.group(1)}
+        elif av_match:
+            params = {"aid": av_match.group(1)}
+        else:
+            raise ValueError("Unsupported Bilibili video identifier")
+        response = requests.get(
+            VIEW_ENDPOINT,
+            params=params,
+            headers={"User-Agent": USER_AGENT, "Referer": normalized_link},
+            cookies=cookies,
+            timeout=30,
+            allow_redirects=False,
+        )
+        response.raise_for_status()
+        if 300 <= response.status_code < 400:
+            raise RuntimeError("Bilibili view API returned an unexpected redirect")
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("code") != 0:
+            message = (payload.get("message") or payload.get("code")) if isinstance(payload, dict) else "invalid response"
+            raise RuntimeError(f"Bilibili view API failed: {message}")
+        data = payload.get("data")
+        if not isinstance(data, dict) or not data.get("bvid"):
+            raise RuntimeError("Bilibili view API returned invalid video metadata")
+        if bv_match and data["bvid"] != bv_match.group(1):
+            raise RuntimeError("Bilibili view API returned a different bvid")
+        pages = data.get("pages") or []
+        if not isinstance(pages, list) or any(not isinstance(page, dict) for page in pages):
+            raise RuntimeError("Bilibili view API returned invalid pages")
+        if not data.get("cid") and not any(page.get("cid") for page in pages):
+            raise RuntimeError("Bilibili view API returned no cid")
+        return data
 
     def _fetch_playurl(self, *, bvid: str, cid: int, referer: str, cookies=None) -> dict[str, Any]:
         response = requests.get(
